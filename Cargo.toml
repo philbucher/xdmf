@@ -9,8 +9,9 @@ hdf5 = ["dep:hdf5"]
 mpi = ["dep:mpi", "hdf5/mpio"]
 
 [dependencies]
+hdf5 = { package = "hdf5-metno", version = "0.10.1", optional = true }
 mpi = { version = "0.8.0", features = [
     "user-operations",
     "derive",
 ], optional = true }
-hdf5 = { package = "hdf5-metno", version = "0.10.1", optional = true }
+quick-xml = "0.37.5"
