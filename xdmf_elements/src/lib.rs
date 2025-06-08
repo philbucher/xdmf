@@ -8,7 +8,7 @@ pub mod geometry;
 pub mod grid;
 pub mod topology;
 
-use data_item::{DataItem, Format, NumberType};
+use data_item::{DataItem, NumberType};
 use dimensions::Dimensions;
 use geometry::{Geometry, GeometryType};
 use grid::Grid;
@@ -22,6 +22,15 @@ pub struct Xdmf {
 
     #[serde(rename = "Domain")]
     pub domains: Vec<Domain>,
+}
+
+impl Xdmf {
+    pub fn new(domain: Domain) -> Self {
+        Xdmf {
+            version: "3.0".to_string(),
+            domains: vec![domain],
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

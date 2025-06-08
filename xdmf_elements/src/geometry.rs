@@ -22,6 +22,7 @@ impl Default for GeometryType {
         GeometryType::XYZ
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

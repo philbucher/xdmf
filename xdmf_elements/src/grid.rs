@@ -13,11 +13,11 @@ pub struct Grid {
     #[serde(rename = "@GridType")]
     pub grid_type: GridType,
 
-    #[serde(rename = "Topology", skip_serializing_if = "Option::is_none")]
-    pub topology: Option<Topology>,
-
     #[serde(rename = "Geometry", skip_serializing_if = "Option::is_none")]
     pub geometry: Option<Geometry>,
+
+    #[serde(rename = "Topology", skip_serializing_if = "Option::is_none")]
+    pub topology: Option<Topology>,
 
     #[serde(rename = "Grid", skip_serializing_if = "Option::is_none")]
     pub grids: Option<Vec<Grid>>,
