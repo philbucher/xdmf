@@ -22,7 +22,7 @@ pub struct Grid {
     #[serde(rename = "Grid", skip_serializing_if = "Option::is_none")]
     pub grids: Option<Vec<Grid>>,
 
-    #[serde(rename = "CollectionType", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "@CollectionType", skip_serializing_if = "Option::is_none")]
     pub collection_type: Option<CollectionType>,
 
     #[serde(rename = "Section", skip_serializing_if = "Option::is_none")]
@@ -48,8 +48,8 @@ impl Grid {
 
     pub fn new_collection(
         name: impl ToString,
-        grids: Vec<Grid>,
         collection_type: CollectionType,
+        grids: Vec<Grid>,
     ) -> Self {
         Grid {
             name: name.to_string(),

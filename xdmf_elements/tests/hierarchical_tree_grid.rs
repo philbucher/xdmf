@@ -7,7 +7,7 @@ use xdmf_elements::grid::Grid;
 use xdmf_elements::topology::{Topology, TopologyType};
 use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
-// this can only be opened with the default XDMF reader in Paraview, not the Xdm3 readers (reason unknown)
+// this can only be opened with the "XDMF Reader" in Paraview, not the "Xdmf3ReaderS" and "Xdmf3ReaderT" readers (reason unknown)
 
 #[test]
 fn hierarchical_tree_grid() {
