@@ -17,7 +17,7 @@ pub struct Attribute {
     pub data_item: DataItem,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub enum AttributeType {
     Scalar,
     Vector,
@@ -32,7 +32,7 @@ impl Default for AttributeType {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub enum Center {
     Node,
     Edge,
@@ -45,5 +45,46 @@ pub enum Center {
 impl Default for Center {
     fn default() -> Self {
         Center::Node
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quick_xml::se::to_string;
+
+    #[test]
+    fn test_attribute_default() {
+        let attribute = Attribute::default();
+        assert_eq!(attribute.name, "");
+        assert_eq!(attribute.attribute_type, AttributeType::Scalar);
+        assert_eq!(attribute.center, Center::Node);
+    }
+
+    #[test]
+    fn test_attribute_serialization() {
+        let attribute = Attribute {
+            name: String::from("Temperature"),
+            attribute_type: AttributeType::Scalar,
+            center: Center::Cell,
+            data_item: DataItem::default(),
+        };
+
+        assert_eq!(
+            to_string(&attribute).unwrap(),
+            "<Attribute Name=\"Temperature\" AttributeType=\"Scalar\" Center=\"Cell\"><DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/></Attribute>"
+        );
+    }
+
+    #[test]
+    fn test_attribute_type_default() {
+        let attribute_type = AttributeType::default();
+        assert_eq!(attribute_type, AttributeType::Scalar);
+    }
+
+    #[test]
+    fn test_center_default() {
+        let center = Center::default();
+        assert_eq!(center, Center::Node);
     }
 }

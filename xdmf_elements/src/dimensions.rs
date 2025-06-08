@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Dimensions(pub Vec<usize>);
 
 impl Serialize for Dimensions {
@@ -15,5 +15,28 @@ impl Serialize for Dimensions {
             .collect::<Vec<_>>()
             .join(" ");
         serializer.serialize_str(&s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quick_xml::se::to_string;
+
+    #[test]
+    fn test_dimensions_serialize() {
+        #[derive(Serialize)]
+        pub(crate) struct XmlRoot<T>
+        where
+            T: Serialize,
+        {
+            #[serde(rename = "$value")]
+            pub(crate) content: T,
+        }
+
+        let dimensions = XmlRoot {
+            content: Dimensions(vec![2, 3, 4]),
+        };
+        assert_eq!(to_string(&dimensions).unwrap(), "<XmlRoot>2 3 4</XmlRoot>");
     }
 }

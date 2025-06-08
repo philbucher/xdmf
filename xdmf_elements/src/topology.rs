@@ -14,7 +14,7 @@ pub struct Topology {
     pub data_item: DataItem,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub enum TopologyType {
     Mixed,
     Triangle,
@@ -36,4 +36,24 @@ pub enum TopologyType {
     // 48 - HEXAHEDRON_20
     // 49 - HEXAHEDRON_24
     // 50 - HEXAHEDRON_27
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quick_xml::se::to_string;
+
+    #[test]
+    fn test_topology_serialization() {
+        let topology = Topology {
+            topology_type: TopologyType::Triangle,
+            number_of_elements: "3".to_string(),
+            data_item: DataItem::default(),
+        };
+
+        assert_eq!(
+            to_string(&topology).unwrap(),
+            "<Topology TopologyType=\"Triangle\" NumberOfElements=\"3\"><DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/></Topology>"
+        );
+    }
 }
