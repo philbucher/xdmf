@@ -11,84 +11,82 @@ use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
 #[test]
 fn hierarchical_tree_grid() {
-    let xdmf = Xdmf::new(Domain {
-        grid: Grid::new_tree(
-            "hierarchical_tree_grid",
-            vec![
-                Grid::new_tree(
-                    "grid_level_1",
-                    vec![
-                        Grid::new_uniform(
-                            "sub_grid_1",
-                            Geometry {
-                                geometry_type: GeometryType::XYZ,
-                                data_item: DataItem {
-                                    dimensions: Dimensions(vec![5, 3]),
-                                    data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
-                                    number_type: NumberType::Float,
-                                    ..Default::default()
-                                },
+    let xdmf = Xdmf::new(Domain::new(Grid::new_tree(
+        "hierarchical_tree_grid",
+        vec![
+            Grid::new_tree(
+                "grid_level_1",
+                vec![
+                    Grid::new_uniform(
+                        "sub_grid_1",
+                        Geometry {
+                            geometry_type: GeometryType::XYZ,
+                            data_item: DataItem {
+                                dimensions: Dimensions(vec![5, 3]),
+                                data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
+                                number_type: NumberType::Float,
+                                ..Default::default()
                             },
-                            Topology {
-                                topology_type: TopologyType::Triangle,
-                                number_of_elements: "2".into(),
-                                data_item: DataItem {
-                                    dimensions: Dimensions(vec![6]),
-                                    number_type: NumberType::Int,
-                                    data: "0 1 2 2 3 4".into(),
-                                    ..Default::default()
-                                },
-                            },
-                        ),
-                        Grid::new_uniform(
-                            "sub_grid_2",
-                            Geometry {
-                                geometry_type: GeometryType::XYZ,
-                                data_item: DataItem {
-                                    dimensions: Dimensions(vec![6, 3]),
-                                    data: "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".into(),
-                                    number_type: NumberType::Float,
-                                    ..Default::default()
-                                },
-                            },
-                            Topology {
-                                topology_type: TopologyType::Quadrilateral,
-                                number_of_elements: "2".into(),
-                                data_item: DataItem {
-                                    dimensions: Dimensions(vec![8]),
-                                    number_type: NumberType::Int,
-                                    data: "0 1 4 3 1 2 5 4".into(),
-                                    ..Default::default()
-                                },
-                            },
-                        ),
-                    ],
-                ),
-                Grid::new_uniform(
-                    "Grid_1",
-                    Geometry {
-                        geometry_type: GeometryType::XYZ,
-                        data_item: DataItem {
-                            dimensions: Dimensions(vec![5, 3]),
-                            data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
-                            number_type: NumberType::Float,
-                            ..Default::default()
                         },
-                    },
-                    Topology {
-                        topology_type: TopologyType::Mixed,
-                        number_of_elements: "2".into(),
-                        data_item: DataItem {
-                            dimensions: Dimensions(vec![9]),
-                            number_type: NumberType::Int,
-                            data: "5 0 1 2 3 4 1 2 4".into(),
-                            ..Default::default()
+                        Topology {
+                            topology_type: TopologyType::Triangle,
+                            number_of_elements: "2".into(),
+                            data_item: DataItem {
+                                dimensions: Dimensions(vec![6]),
+                                number_type: NumberType::Int,
+                                data: "0 1 2 2 3 4".into(),
+                                ..Default::default()
+                            },
                         },
+                    ),
+                    Grid::new_uniform(
+                        "sub_grid_2",
+                        Geometry {
+                            geometry_type: GeometryType::XYZ,
+                            data_item: DataItem {
+                                dimensions: Dimensions(vec![6, 3]),
+                                data: "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".into(),
+                                number_type: NumberType::Float,
+                                ..Default::default()
+                            },
+                        },
+                        Topology {
+                            topology_type: TopologyType::Quadrilateral,
+                            number_of_elements: "2".into(),
+                            data_item: DataItem {
+                                dimensions: Dimensions(vec![8]),
+                                number_type: NumberType::Int,
+                                data: "0 1 4 3 1 2 5 4".into(),
+                                ..Default::default()
+                            },
+                        },
+                    ),
+                ],
+            ),
+            Grid::new_uniform(
+                "Grid_1",
+                Geometry {
+                    geometry_type: GeometryType::XYZ,
+                    data_item: DataItem {
+                        dimensions: Dimensions(vec![5, 3]),
+                        data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
+                        number_type: NumberType::Float,
+                        ..Default::default()
                     },
-                ),
-            ],
-        ),
-    });
+                },
+                Topology {
+                    topology_type: TopologyType::Mixed,
+                    number_of_elements: "2".into(),
+                    data_item: DataItem {
+                        dimensions: Dimensions(vec![9]),
+                        number_type: NumberType::Int,
+                        data: "5 0 1 2 3 4 1 2 4".into(),
+                        ..Default::default()
+                    },
+                },
+            ),
+        ],
+    )));
 
     // Create an in-memory buffer to serialize to
     let mut buffer = Vec::new();

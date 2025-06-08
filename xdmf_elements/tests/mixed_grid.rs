@@ -9,30 +9,28 @@ use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
 #[test]
 fn mixed_grid() {
-    let xdmf = Xdmf::new(Domain {
-        grid: Grid::new_uniform(
-            "Grid_1",
-            Geometry {
-                geometry_type: GeometryType::XYZ,
-                data_item: DataItem {
-                    dimensions: Dimensions(vec![5, 3]),
-                    data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
-                    number_type: NumberType::Float,
-                    ..Default::default()
-                },
+    let xdmf = Xdmf::new(Domain::new(Grid::new_uniform(
+        "Grid_1",
+        Geometry {
+            geometry_type: GeometryType::XYZ,
+            data_item: DataItem {
+                dimensions: Dimensions(vec![5, 3]),
+                data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
+                number_type: NumberType::Float,
+                ..Default::default()
             },
-            Topology {
-                topology_type: TopologyType::Mixed,
-                number_of_elements: "2".into(),
-                data_item: DataItem {
-                    dimensions: Dimensions(vec![9]),
-                    number_type: NumberType::Int,
-                    data: "5 0 1 2 3 4 1 2 4".into(),
-                    ..Default::default()
-                },
+        },
+        Topology {
+            topology_type: TopologyType::Mixed,
+            number_of_elements: "2".into(),
+            data_item: DataItem {
+                dimensions: Dimensions(vec![9]),
+                number_type: NumberType::Int,
+                data: "5 0 1 2 3 4 1 2 4".into(),
+                ..Default::default()
             },
-        ),
-    });
+        },
+    )));
 
     // Create an in-memory buffer to serialize to
     let mut buffer = Vec::new();

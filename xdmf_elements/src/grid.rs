@@ -34,7 +34,7 @@ pub struct Grid {
 
 impl Grid {
     pub fn new_uniform(name: impl ToString, geometry: Geometry, topology: Topology) -> Self {
-        Grid {
+        Self {
             name: name.to_string(),
             grid_type: GridType::Uniform,
             topology: Some(topology),
@@ -48,7 +48,7 @@ impl Grid {
         collection_type: CollectionType,
         grids: Vec<Grid>,
     ) -> Self {
-        Grid {
+        Self {
             name: name.to_string(),
             grid_type: GridType::Collection,
             grids: Some(grids),
@@ -58,7 +58,7 @@ impl Grid {
     }
 
     pub fn new_tree(name: impl ToString, grids: Vec<Grid>) -> Self {
-        Grid {
+        Self {
             name: name.to_string(),
             grid_type: GridType::Tree,
             grids: Some(grids),

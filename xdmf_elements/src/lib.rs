@@ -22,7 +22,7 @@ pub struct Xdmf {
 
 impl Xdmf {
     pub fn new(domain: Domain) -> Self {
-        Xdmf {
+        Self {
             version: "3.0".to_string(),
             domains: vec![domain],
         }
@@ -32,5 +32,11 @@ impl Xdmf {
 #[derive(Debug, Serialize)]
 pub struct Domain {
     #[serde(rename = "Grid")]
-    pub grid: Grid,
+    pub grids: Vec<Grid>,
+}
+
+impl Domain {
+    pub fn new(grid: Grid) -> Self {
+        Self { grids: vec![grid] }
+    }
 }
