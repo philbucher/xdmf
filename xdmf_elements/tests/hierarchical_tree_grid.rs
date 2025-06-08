@@ -7,8 +7,10 @@ use xdmf_elements::grid::Grid;
 use xdmf_elements::topology::{Topology, TopologyType};
 use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
+// this can only be opened with the default XDMF reader in Paraview, not the Xdm3 readers (reason unknown)
+
 #[test]
-fn basic_grid() {
+fn hierarchical_tree_grid() {
     let xdmf = Xdmf::new(Domain {
         grid: Grid::new_tree(
             "hierarchical_tree_grid",

@@ -8,7 +8,7 @@ use xdmf_elements::topology::{Topology, TopologyType};
 use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
 #[test]
-fn basic_grid() {
+fn mixed_grid() {
     let xdmf = Xdmf::new(Domain {
         grid: Grid::new_uniform(
             "Grid_1",
