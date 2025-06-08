@@ -18,6 +18,7 @@ pub struct Topology {
 pub enum TopologyType {
     Mixed,
     Triangle,
+    Quadrilateral,
     //     4 - TRIANGLE
     // 5 - QUADRILATERAL
     // 6 - TETRAHEDRON
