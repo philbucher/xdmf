@@ -59,7 +59,7 @@ fn basic_grid() {
     assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
 
     // write to file
-    let mut file_writer =
-        Writer::new_with_indent(std::fs::File::create("mixed_grid.xdmf").unwrap(), b' ', 4);
-    file_writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
+    // let mut file_writer =
+    //     Writer::new_with_indent(std::fs::File::create("mixed_grid.xdmf").unwrap(), b' ', 4);
+    // file_writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
 }
