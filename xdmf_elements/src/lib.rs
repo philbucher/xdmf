@@ -14,8 +14,9 @@ use geometry::{Geometry, GeometryType};
 use grid::Grid;
 use topology::{Topology, TopologyType};
 
+pub const XDMF_TAG: &str = "Xdmf";
+
 #[derive(Debug, Serialize)]
-#[serde(rename = "Xdmf")]
 pub struct Xdmf {
     #[serde(rename = "@Version")]
     pub version: String,
