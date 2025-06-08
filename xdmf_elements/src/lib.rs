@@ -49,16 +49,6 @@ fn main2222() -> Result<(), Box<dyn std::error::Error>> {
                 vec![
                     Grid::new_uniform(
                         "Grid_1",
-                        Topology {
-                            topology_type: TopologyType::Triangle,
-                            number_of_elements: "1".into(),
-                            data_item: DataItem {
-                                dimensions: Dimensions(vec![3]),
-                                number_type: NumberType::Int,
-                                data: "0 1 2".into(),
-                                ..Default::default()
-                            },
-                        },
                         Geometry {
                             geometry_type: GeometryType::XY,
                             data_item: DataItem {
@@ -68,9 +58,6 @@ fn main2222() -> Result<(), Box<dyn std::error::Error>> {
                                 ..Default::default()
                             },
                         },
-                    ),
-                    Grid::new_uniform(
-                        "Grid_2",
                         Topology {
                             topology_type: TopologyType::Triangle,
                             number_of_elements: "1".into(),
@@ -81,6 +68,9 @@ fn main2222() -> Result<(), Box<dyn std::error::Error>> {
                                 ..Default::default()
                             },
                         },
+                    ),
+                    Grid::new_uniform(
+                        "Grid_2",
                         Geometry {
                             geometry_type: GeometryType::XY,
                             data_item: DataItem {
@@ -90,22 +80,22 @@ fn main2222() -> Result<(), Box<dyn std::error::Error>> {
                                 ..Default::default()
                             },
                         },
+                        Topology {
+                            topology_type: TopologyType::Triangle,
+                            number_of_elements: "1".into(),
+                            data_item: DataItem {
+                                dimensions: Dimensions(vec![3]),
+                                number_type: NumberType::Int,
+                                data: "0 1 2".into(),
+                                ..Default::default()
+                            },
+                        },
                     ),
                     Grid::new_tree(
                         "Grid_Tree2",
                         vec![
                             Grid::new_uniform(
                                 "Grid_21",
-                                Topology {
-                                    topology_type: TopologyType::Triangle,
-                                    number_of_elements: "1".into(),
-                                    data_item: DataItem {
-                                        dimensions: Dimensions(vec![3]),
-                                        number_type: NumberType::Int,
-                                        data: "0 1 2".into(),
-                                        ..Default::default()
-                                    },
-                                },
                                 Geometry {
                                     geometry_type: GeometryType::XY,
                                     data_item: DataItem {
@@ -115,9 +105,6 @@ fn main2222() -> Result<(), Box<dyn std::error::Error>> {
                                         ..Default::default()
                                     },
                                 },
-                            ),
-                            Grid::new_uniform(
-                                "Grid_22",
                                 Topology {
                                     topology_type: TopologyType::Triangle,
                                     number_of_elements: "1".into(),
@@ -128,12 +115,25 @@ fn main2222() -> Result<(), Box<dyn std::error::Error>> {
                                         ..Default::default()
                                     },
                                 },
+                            ),
+                            Grid::new_uniform(
+                                "Grid_22",
                                 Geometry {
                                     geometry_type: GeometryType::XY,
                                     data_item: DataItem {
                                         dimensions: Dimensions(vec![3, 2]),
                                         data: "4 4 4 5 5 5".into(),
                                         number_type: NumberType::Float,
+                                        ..Default::default()
+                                    },
+                                },
+                                Topology {
+                                    topology_type: TopologyType::Triangle,
+                                    number_of_elements: "1".into(),
+                                    data_item: DataItem {
+                                        dimensions: Dimensions(vec![3]),
+                                        number_type: NumberType::Int,
+                                        data: "0 1 2".into(),
                                         ..Default::default()
                                     },
                                 },

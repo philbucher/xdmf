@@ -36,7 +36,7 @@ pub struct Grid {
 }
 
 impl Grid {
-    pub fn new_uniform(name: impl ToString, topology: Topology, geometry: Geometry) -> Self {
+    pub fn new_uniform(name: impl ToString, geometry: Geometry, topology: Topology) -> Self {
         Grid {
             name: name.to_string(),
             grid_type: GridType::Uniform,

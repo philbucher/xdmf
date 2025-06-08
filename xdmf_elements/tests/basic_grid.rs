@@ -12,6 +12,15 @@ fn basic_grid() {
     let xdmf = Xdmf::new(Domain {
         grid: Grid::new_uniform(
             "Grid_1",
+            Geometry {
+                geometry_type: GeometryType::XYZ,
+                data_item: DataItem {
+                    dimensions: Dimensions(vec![4, 3]),
+                    data: "0 0 0 0 1 0 1 1 0 1 0 0.5".into(),
+                    number_type: NumberType::Float,
+                    ..Default::default()
+                },
+            },
             Topology {
                 topology_type: TopologyType::Triangle,
                 number_of_elements: "2".into(),
@@ -19,15 +28,6 @@ fn basic_grid() {
                     dimensions: Dimensions(vec![6]),
                     number_type: NumberType::Int,
                     data: "0 1 2 0 2 3".into(),
-                    ..Default::default()
-                },
-            },
-            Geometry {
-                geometry_type: GeometryType::XYZ,
-                data_item: DataItem {
-                    dimensions: Dimensions(vec![4, 3]),
-                    data: "0 0 0 0 1 0 1 1 0 1 0 0.5".into(),
-                    number_type: NumberType::Float,
                     ..Default::default()
                 },
             },
