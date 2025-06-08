@@ -14,4 +14,5 @@ mpi = { version = "0.8.0", features = [
     "user-operations",
     "derive",
 ], optional = true }
-quick-xml = "0.37.5"
+serde = { version = "1.0", features = ["derive"] }
+quick-xml = { version = "0.37.5", features = ["serialize"] }
