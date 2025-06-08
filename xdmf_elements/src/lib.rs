@@ -16,21 +16,21 @@ use topology::{Topology, TopologyType};
 
 #[derive(Debug, Serialize)]
 #[serde(rename = "Xdmf")]
-struct Xdmf {
+pub struct Xdmf {
     #[serde(rename = "@Version")]
-    version: String,
+    pub version: String,
 
     #[serde(rename = "Domain")]
-    domains: Vec<Domain>,
+    pub domains: Vec<Domain>,
 }
 
 #[derive(Debug, Serialize)]
-struct Domain {
+pub struct Domain {
     #[serde(rename = "Grid")]
-    grid: Grid,
+    pub grid: Grid,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main2222() -> Result<(), Box<dyn std::error::Error>> {
     let xdmf = Xdmf {
         version: "3.0".into(),
         domains: vec![Domain {
@@ -142,14 +142,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut writer = Writer::new_with_indent(out_file, b' ', 4);
 
     writer.write_serializable("Xdmf", &xdmf)?;
-
-    // let mut xdmf_mesh = XdmfMesh::new(points, cells);
-
-    // xdmf_mesh.add_subset(...);
-
-    // xdmf_mesh.add_results("results", time)?;
-
-    // xdmf_mesh.write_to_file("output.xdmf")?;
 
     Ok(())
 }
