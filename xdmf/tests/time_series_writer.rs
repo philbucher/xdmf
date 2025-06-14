@@ -16,7 +16,7 @@ fn test_write_xdmf() {
         .unwrap();
 
     let f_data = vec![1.0, 2.0, 3.0];
-    let mut data = xdmf::Value::Float64(&f_data);
+    let mut data = xdmf::Values::Float64(&f_data);
 
     let mut data_map = HashMap::new();
     data_map.insert("data1".to_string(), data);

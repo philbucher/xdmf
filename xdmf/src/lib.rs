@@ -46,10 +46,7 @@ impl TimeSeriesWriter {
         Self::new_with_options(file_name, TimeSeriesWriter::options())
     }
 
-    pub fn new_with_options(
-        file_name: &impl AsRef<Path>,
-        options: TimeSeriesWriterOptions,
-    ) -> Self {
+    pub fn new_with_options(file_name: impl AsRef<Path>, options: TimeSeriesWriterOptions) -> Self {
         // TODO create folder if it does not exist?
         // probably write Mesh right away so it does not need to be stored
 
@@ -80,32 +77,50 @@ pub struct TimeSeriesDataWriter {
     flushed: bool, // Indicates if the data has been flushed to the file
 }
 
-pub enum Value<'a> {
+pub enum Values<'a> {
+    Int8(&'a [i8]),
+    Int16(&'a [i16]),
     Int32(&'a [i32]),
+    Int64(&'a [i64]),
+    Unt8(&'a [u8]),
+    Unt16(&'a [u16]),
     Unt32(&'a [u32]),
+    Unt64(&'a [u64]),
     Float32(&'a [f32]),
     Float64(&'a [f64]),
-    StrSlice(&'a [&'a str]),
+    // StrSlice(&'a [&'a str]),
 }
 
-impl Value<'_> {
+impl Values<'_> {
     fn precision(&self) -> u8 {
         match self {
-            Value::Int32(_) => 4,
-            Value::Unt32(_) => 4,
-            Value::Float32(_) => 4,
-            Value::Float64(_) => 8,
-            Value::StrSlice(_) => 1, // Assuming string precision is 1 for simplicity
+            Values::Int8(_) => 1,
+            Values::Int16(_) => 2,
+            Values::Int32(_) => 4,
+            Values::Int64(_) => 8,
+            Values::Unt8(_) => 1,
+            Values::Unt16(_) => 2,
+            Values::Unt32(_) => 4,
+            Values::Unt64(_) => 8,
+            Values::Float32(_) => 4,
+            Values::Float64(_) => 8,
+            // Value::StrSlice(_) => 1, // Assuming string precision is 1 for simplicity
         }
     }
 
     fn number_type(&self) -> NumberType {
         match self {
-            Value::Int32(_) => NumberType::Int,
-            Value::Unt32(_) => NumberType::UInt,
-            Value::Float32(_) => NumberType::Float,
-            Value::Float64(_) => NumberType::Float,
-            Value::StrSlice(_) => NumberType::Char, // Assuming string is treated as char
+            Values::Int8(_) => NumberType::Int,
+            Values::Int16(_) => NumberType::Int,
+            Values::Int32(_) => NumberType::Int,
+            Values::Int64(_) => NumberType::Int,
+            Values::Unt8(_) => NumberType::UInt,
+            Values::Unt16(_) => NumberType::UInt,
+            Values::Unt32(_) => NumberType::UInt,
+            Values::Unt64(_) => NumberType::UInt,
+            Values::Float32(_) => NumberType::Float,
+            Values::Float64(_) => NumberType::Float,
+            // Value::StrSlice(_) => NumberType::Char, // Assuming string is treated as char
         }
     }
 }
@@ -116,8 +131,8 @@ impl TimeSeriesDataWriter {
     pub fn add_data(
         &mut self,
         time: &str,
-        point_data: &HashMap<String, Value>,
-        cell_data: &HashMap<String, Value>,
+        point_data: &HashMap<String, Values>,
+        cell_data: &HashMap<String, Values>,
     ) -> std::io::Result<()> {
         // TODO check if time already exists???
         // Maybe this function should right away write the data to the file?
