@@ -1,7 +1,6 @@
 use serde::Serialize;
 
 use crate::attribute::Attribute;
-use crate::data_item::DataItem;
 use crate::geometry::Geometry;
 use crate::topology::Topology;
 
