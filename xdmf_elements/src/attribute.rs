@@ -17,8 +17,9 @@ pub struct Attribute {
     pub data_item: DataItem,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum AttributeType {
+    #[default]
     Scalar,
     Vector,
     Tensor,
@@ -26,26 +27,15 @@ pub enum AttributeType {
     Matrix,
 }
 
-impl Default for AttributeType {
-    fn default() -> Self {
-        AttributeType::Scalar
-    }
-}
-
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum Center {
+    #[default]
     Node,
     Edge,
     Face,
     Cell,
     Grid,
     Other,
-}
-
-impl Default for Center {
-    fn default() -> Self {
-        Center::Node
-    }
 }
 
 #[cfg(test)]

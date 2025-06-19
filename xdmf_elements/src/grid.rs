@@ -66,28 +66,18 @@ impl Grid {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum GridType {
+    #[default]
     Uniform,
     Collection,
     Tree,
     SubSet,
 }
 
-impl Default for GridType {
-    fn default() -> Self {
-        GridType::Uniform
-    }
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum CollectionType {
+    #[default]
     Spatial,
     Temporal,
-}
-
-impl Default for CollectionType {
-    fn default() -> Self {
-        CollectionType::Spatial
-    }
 }

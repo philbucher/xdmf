@@ -32,8 +32,9 @@ impl Default for DataItem {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum NumberType {
+    #[default]
     Float,
     Int,
     UInt,
@@ -41,23 +42,12 @@ pub enum NumberType {
     UChar,
 }
 
-impl Default for NumberType {
-    fn default() -> Self {
-        NumberType::Float
-    }
-}
-
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum Format {
+    #[default]
     XML,
     HDF,
     Binary,
-}
-
-impl Default for Format {
-    fn default() -> Self {
-        Format::XML
-    }
 }
 
 #[cfg(test)]

@@ -11,16 +11,11 @@ pub struct Geometry {
     pub data_item: DataItem,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum GeometryType {
+    #[default]
     XYZ,
     XY,
-}
-
-impl Default for GeometryType {
-    fn default() -> Self {
-        GeometryType::XYZ
-    }
 }
 
 #[cfg(test)]
