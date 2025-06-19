@@ -4,7 +4,6 @@ use xdmf_elements::data_item::NumberType;
 use xdmf_elements::dimensions::Dimensions;
 
 pub enum Values<'a> {
-    // f64 variants
     View1Df64(ArrayView1<'a, f64>),
     View2Df64(ArrayView2<'a, f64>),
     ViewDynf64(ArrayViewD<'a, f64>),
@@ -65,7 +64,7 @@ mod tests {
         assert_eq!(view_f64.shape(), &[6]);
         assert_eq!(view_f64.len(), data_f64.len());
 
-        let values: Values = view_f64.into();
+        let values = view_f64.into();
         matches!(values, Values::View1Df64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
@@ -80,7 +79,7 @@ mod tests {
         assert_eq!(view_f64.shape(), &[2, 3]);
         assert_eq!(view_f64.len(), data_f64.len());
 
-        let values: Values = view_f64.into();
+        let values = view_f64.into();
         matches!(values, Values::View2Df64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
@@ -95,7 +94,7 @@ mod tests {
         assert_eq!(view_f64.shape(), &[3, 2]);
         assert_eq!(view_f64.len(), data_f64.len());
 
-        let values: Values = view_f64.into();
+        let values = view_f64.into();
         matches!(values, Values::View2Df64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
