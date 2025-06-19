@@ -10,6 +10,7 @@ mpi = ["dep:mpi", "hdf5/mpio"]
 
 [dependencies]
 xdmf_elements = { path = "../xdmf_elements" }
+ndarray = { version = "0.16.1", default-features = false }
 hdf5 = { package = "hdf5-metno", version = "0.10.1", optional = true }
 mpi = { version = "0.8.0", features = [
     "user-operations",
