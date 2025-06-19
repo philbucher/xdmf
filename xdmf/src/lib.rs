@@ -4,8 +4,11 @@ use std::path::{Path, PathBuf};
 use xdmf_elements::Xdmf;
 
 pub use xdmf_elements::data_item::Format;
-use xdmf_elements::data_item::NumberType;
 pub use xdmf_elements::topology::TopologyType;
+
+pub mod values;
+
+pub use values::Values;
 
 pub struct TimeSeriesWriterOptions {
     format: Format,
@@ -77,54 +80,6 @@ pub struct TimeSeriesDataWriter {
     flushed: bool, // Indicates if the data has been flushed to the file
 }
 
-pub enum Values<'a> {
-    Int8(&'a [i8]),
-    Int16(&'a [i16]),
-    Int32(&'a [i32]),
-    Int64(&'a [i64]),
-    Unt8(&'a [u8]),
-    Unt16(&'a [u16]),
-    Unt32(&'a [u32]),
-    Unt64(&'a [u64]),
-    Float32(&'a [f32]),
-    Float64(&'a [f64]),
-    // StrSlice(&'a [&'a str]),
-}
-
-impl Values<'_> {
-    fn precision(&self) -> u8 {
-        match self {
-            Values::Int8(_) => 1,
-            Values::Int16(_) => 2,
-            Values::Int32(_) => 4,
-            Values::Int64(_) => 8,
-            Values::Unt8(_) => 1,
-            Values::Unt16(_) => 2,
-            Values::Unt32(_) => 4,
-            Values::Unt64(_) => 8,
-            Values::Float32(_) => 4,
-            Values::Float64(_) => 8,
-            // Value::StrSlice(_) => 1, // Assuming string precision is 1 for simplicity
-        }
-    }
-
-    fn number_type(&self) -> NumberType {
-        match self {
-            Values::Int8(_) => NumberType::Int,
-            Values::Int16(_) => NumberType::Int,
-            Values::Int32(_) => NumberType::Int,
-            Values::Int64(_) => NumberType::Int,
-            Values::Unt8(_) => NumberType::UInt,
-            Values::Unt16(_) => NumberType::UInt,
-            Values::Unt32(_) => NumberType::UInt,
-            Values::Unt64(_) => NumberType::UInt,
-            Values::Float32(_) => NumberType::Float,
-            Values::Float64(_) => NumberType::Float,
-            // Value::StrSlice(_) => NumberType::Char, // Assuming string is treated as char
-        }
-    }
-}
-
 impl TimeSeriesDataWriter {
     /// Add data
     /// Depending on the format, data will either be written directly (hdf), or buffered (xml)
@@ -134,6 +89,16 @@ impl TimeSeriesDataWriter {
         point_data: &HashMap<String, Values>,
         cell_data: &HashMap<String, Values>,
     ) -> std::io::Result<()> {
+        for (name, data) in point_data {
+            let data_item = xdmf_elements::data_item::DataItem {
+                dimensions: data.dimensions(),
+                number_type: data.number_type(),
+                format: self.format,
+                precision: data.precision(),
+                data: "asdf".to_string(), // This should be replaced with actual data
+            };
+        }
+
         // TODO check if time already exists???
         // Maybe this function should right away write the data to the file?
         self.flushed = false;
@@ -164,8 +129,6 @@ impl Drop for TimeSeriesDataWriter {
 
 fn write_data<T: std::fmt::Debug>(
     format: Format,
-    time: &str,
-    name: &str,
     data: &[T],
     hdf_file: Option<&std::fs::File>,
 ) -> std::io::Result<String> {

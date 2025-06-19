@@ -39,4 +39,14 @@ mod tests {
         };
         assert_eq!(to_string(&dimensions).unwrap(), "<XmlRoot>2 3 4</XmlRoot>");
     }
+
+    #[test]
+    fn test_dimensions_compare() {
+        let dimensions1 = Dimensions(vec![2, 3, 4]);
+        let dimensions2 = Dimensions(vec![2, 3, 4]);
+        let dimensions3 = Dimensions(vec![1, 2, 3]);
+
+        assert_eq!(dimensions1, dimensions2);
+        assert_ne!(dimensions1, dimensions3);
+    }
 }
