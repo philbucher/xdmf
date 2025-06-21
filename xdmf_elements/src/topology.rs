@@ -14,7 +14,7 @@ pub struct Topology {
     pub data_item: DataItem,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum TopologyType {
     Mixed,
     Triangle,

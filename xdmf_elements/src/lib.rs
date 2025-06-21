@@ -27,6 +27,13 @@ impl Xdmf {
             domains: vec![domain],
         }
     }
+
+    pub fn write_to(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        let mut file_writer = quick_xml::Writer::new_with_indent(writer, b' ', 4);
+        file_writer
+            .write_serializable(XDMF_TAG, self)
+            .map_err(|e| std::io::Error::other(e))
+    }
 }
 
 impl Default for Xdmf {
