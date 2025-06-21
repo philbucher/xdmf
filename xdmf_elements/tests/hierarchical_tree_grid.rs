@@ -13,10 +13,10 @@ use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 fn hierarchical_tree_grid() {
     let xdmf = Xdmf::new(Domain::new(Grid::new_tree(
         "hierarchical_tree_grid",
-        vec![
+        Some(vec![
             Grid::new_tree(
                 "grid_level_1",
-                vec![
+                Some(vec![
                     Grid::new_uniform(
                         "sub_grid_1",
                         Geometry {
@@ -61,7 +61,7 @@ fn hierarchical_tree_grid() {
                             },
                         },
                     ),
-                ],
+                ]),
             ),
             Grid::new_uniform(
                 "Grid_1",
@@ -85,7 +85,7 @@ fn hierarchical_tree_grid() {
                     },
                 },
             ),
-        ],
+        ]),
     )));
 
     // Create an in-memory buffer to serialize to

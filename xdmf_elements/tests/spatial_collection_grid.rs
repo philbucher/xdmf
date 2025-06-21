@@ -14,7 +14,7 @@ fn spatial_collection_grid() {
     let xdmf = Xdmf::new(Domain::new(Grid::new_collection(
         "spatial_collection_grid",
         CollectionType::Spatial,
-        vec![
+        Some(vec![
             Grid::new_uniform(
                 "sub_grid_1",
                 Geometry {
@@ -81,7 +81,7 @@ fn spatial_collection_grid() {
                     },
                 },
             ),
-        ],
+        ]),
     )));
 
     // Create an in-memory buffer to serialize to

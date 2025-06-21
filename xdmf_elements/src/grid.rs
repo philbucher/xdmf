@@ -1,68 +1,87 @@
 use serde::Serialize;
 
-use crate::attribute::Attribute;
 use crate::geometry::Geometry;
 use crate::topology::Topology;
 
-#[derive(Debug, Default, Serialize)]
-pub struct Grid {
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum Grid {
+    Uniform(Uniform),
+    Tree(Tree),
+    Collection(Collection),
+}
+
+#[derive(Debug, Serialize)]
+pub struct Uniform {
     #[serde(rename = "@Name")]
     pub name: String,
 
     #[serde(rename = "@GridType")]
     pub grid_type: GridType,
 
-    #[serde(rename = "Geometry", skip_serializing_if = "Option::is_none")]
-    pub geometry: Option<Geometry>,
+    #[serde(rename = "Geometry")]
+    pub geometry: Geometry,
 
-    #[serde(rename = "Topology", skip_serializing_if = "Option::is_none")]
-    pub topology: Option<Topology>,
+    #[serde(rename = "Topology")]
+    pub topology: Topology,
+}
 
-    #[serde(rename = "Grid", skip_serializing_if = "Option::is_none")]
-    pub grids: Option<Vec<Grid>>,
+#[derive(Debug, Serialize)]
+pub struct Tree {
+    #[serde(rename = "@Name")]
+    pub name: String,
 
-    #[serde(rename = "@CollectionType", skip_serializing_if = "Option::is_none")]
-    pub collection_type: Option<CollectionType>,
+    #[serde(rename = "@GridType")]
+    pub grid_type: GridType,
 
-    #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
-    pub time: Option<String>,
+    #[serde(rename = "Grid")]
+    pub grids: Vec<Grid>,
+}
 
-    #[serde(rename = "Attribute", skip_serializing_if = "Option::is_none")]
-    pub attributes: Option<Attribute>,
+#[derive(Debug, Serialize)]
+pub struct Collection {
+    #[serde(rename = "@Name")]
+    pub name: String,
+
+    #[serde(rename = "@GridType")]
+    pub grid_type: GridType,
+
+    #[serde(rename = "Grid")]
+    pub grids: Vec<Grid>,
+
+    #[serde(rename = "@CollectionType")]
+    pub collection_type: CollectionType,
 }
 
 impl Grid {
     pub fn new_uniform(name: impl ToString, geometry: Geometry, topology: Topology) -> Self {
-        Self {
+        Grid::Uniform(Uniform {
             name: name.to_string(),
             grid_type: GridType::Uniform,
-            topology: Some(topology),
-            geometry: Some(geometry),
-            ..Default::default()
-        }
+            topology: topology,
+            geometry: geometry,
+        })
     }
 
     pub fn new_collection(
         name: impl ToString,
         collection_type: CollectionType,
-        grids: Vec<Grid>,
+        grids: Option<Vec<Grid>>,
     ) -> Self {
-        Self {
+        Grid::Collection(Collection {
             name: name.to_string(),
             grid_type: GridType::Collection,
-            grids: Some(grids),
-            collection_type: Some(collection_type),
-            ..Default::default()
-        }
+            collection_type,
+            grids: grids.unwrap_or_default(),
+        })
     }
 
-    pub fn new_tree(name: impl ToString, grids: Vec<Grid>) -> Self {
-        Self {
+    pub fn new_tree(name: impl ToString, grids: Option<Vec<Grid>>) -> Self {
+        Grid::Tree(Tree {
             name: name.to_string(),
             grid_type: GridType::Tree,
-            grids: Some(grids),
-            ..Default::default()
-        }
+            grids: grids.unwrap_or_default(),
+        })
     }
 }
 
