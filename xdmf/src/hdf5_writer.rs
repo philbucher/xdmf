@@ -2,6 +2,7 @@ use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
 
 use hdf5::File as H5File;
+use ndarray::{ArrayView1, ArrayView2};
 
 use crate::DataWriter;
 use xdmf_elements::data_item::Format;
@@ -25,8 +26,8 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_mesh(
         &mut self,
-        points: &[f64; 3],
-        cells: std::collections::HashMap<xdmf_elements::topology::TopologyType, Vec<usize>>,
+        points: &ArrayView2<f64>,
+        cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
         // Implementation for writing mesh data to a single HDF5 file
         unimplemented!()
@@ -40,12 +41,6 @@ impl DataWriter for SingleFileHdf5Writer {
     fn flush(&mut self) -> IoResult<()> {
         // Flush the HDF5 file
         self.h5_file.flush().map_err(|e| std::io::Error::other(e))
-    }
-
-    fn close(self) -> IoResult<()> {
-        // Close the HDF5 file
-        self.h5_file.close()?;
-        Ok(())
     }
 }
 
@@ -67,8 +62,8 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
     fn write_mesh(
         &mut self,
-        points: &[f64; 3],
-        cells: std::collections::HashMap<xdmf_elements::topology::TopologyType, Vec<usize>>,
+        points: &ArrayView2<f64>,
+        cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
         // Implementation for writing mesh data to multiple HDF5 files
         unimplemented!()
@@ -81,11 +76,6 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
     fn flush(&mut self) -> IoResult<()> {
         // Flush the HDF5 files
-        Ok(())
-    }
-
-    fn close(self) -> IoResult<()> {
-        // do nothing since since each file is only opened once and closed after writing
         Ok(())
     }
 }

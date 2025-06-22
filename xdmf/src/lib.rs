@@ -1,18 +1,21 @@
-use std::collections::HashMap;
 use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
+
+use itertools::Itertools;
+use ndarray::{Array1, ArrayView1, ArrayView2, Axis, concatenate};
 
 use xdmf_elements::{
     Xdmf, attribute,
     data_item::{DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
-    grid::{Grid, TimeSeriesGrid, Uniform},
+    grid::{Grid, GridType, TimeSeriesGrid, Uniform},
     topology::Topology,
 };
 
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
+mod xml_writer;
 
 mod values;
 
@@ -25,57 +28,14 @@ pub(crate) trait DataWriter {
     fn format(&self) -> Format;
     fn write_mesh(
         &mut self,
-        points: &[f64; 3],
-        cells: HashMap<TopologyType, Vec<usize>>,
+        points: &ArrayView2<f64>,
+        cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)>;
+
     fn write_data(&mut self, time: &str, data: &Values) -> IoResult<String>;
+
     fn flush(&mut self) -> IoResult<()> {
         // flush the writer, if applicable
-        Ok(())
-    }
-    fn close(self) -> IoResult<()>;
-}
-
-struct XmlWriter {}
-
-impl XmlWriter {
-    pub fn new() -> Self {
-        XmlWriter {}
-    }
-
-    fn data_to_string(&self, data: &Values) -> String {
-        // using default implementation for now
-        // maybe use custom formatting later
-        match data {
-            Values::View1Df64(view) => view.to_string(),
-            Values::View2Df64(view) => view.to_string(),
-            Values::ViewDynf64(view) => view.to_string(),
-        }
-    }
-}
-
-impl DataWriter for XmlWriter {
-    fn format(&self) -> Format {
-        Format::XML
-    }
-    fn write_mesh(
-        &mut self,
-        _points: &[f64; 3],
-        _cells: HashMap<TopologyType, Vec<usize>>,
-    ) -> IoResult<(String, String)> {
-        // Implementation for writing mesh data to XML
-        Ok((
-            "<DataItem Dimensions=\"4 3\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\">0 0 0 0 1 0 1 1 0 1 0 0.5</DataItem>".to_string(),
-            "<DataItem Dimensions=\"6\" NumberType=\"Int\" Format=\"XML\" Precision=\"4\">0 1 2 0 2 3</DataItem>".to_string(),
-        ))
-    }
-
-    fn write_data(&mut self, _time: &str, data: &Values) -> IoResult<String> {
-        Ok(self.data_to_string(data))
-    }
-
-    fn close(self) -> Result<(), std::io::Error> {
-        // nothing to do here since XML writer does not hold any resources
         Ok(())
     }
 }
@@ -98,7 +58,7 @@ impl TimeSeriesWriterOptions {
 
     fn create_writer(&self, file_name: &Path) -> Box<dyn DataWriter> {
         match self.format {
-            Format::XML => Box::new(XmlWriter::new()),
+            Format::XML => Box::new(xml_writer::XmlWriter::new()),
 
             Format::HDF => {
                 #[cfg(feature = "hdf5")]
@@ -163,33 +123,62 @@ impl TimeSeriesWriter {
         }
     }
 
-    pub fn add_mesh(
+    pub fn add_mesh<'a, M>(
         mut self,
-        points: &[f64; 3],
-        cells: HashMap<TopologyType, Vec<usize>>,
-    ) -> IoResult<TimeSeriesDataWriter> {
-        let (points_data, cells_data) = self.writer.write_mesh(points, cells)?;
+        points: &ArrayView2<f64>,
+        cells: &'a M,
+    ) -> IoResult<TimeSeriesDataWriter>
+    where
+        &'a M: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+    {
+        let geom_type = match points.shape()[1] {
+            2 => GeometryType::XY,
+            3 => GeometryType::XYZ,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Points must have 2 or 3 dimensions",
+                ));
+            }
+        };
+
+        let dim_points = points.shape()[1];
+        if dim_points != 2 && dim_points != 3 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Points must have 2 or 3 dimensions",
+            ));
+        }
+
+        let num_cells = cells.into_iter().map(|(_, v)| v.shape()[0]).sum::<usize>();
+
+        // Concatenate all arrays along axis 0
+        let cells_flat = concatenate_cells(cells);
+
+        let (points_data, cells_data) = self.writer.write_mesh(points, &cells_flat.view())?;
 
         let mesh_grid = Uniform {
             name: "mesh".to_string(),
-            grid_type: xdmf_elements::grid::GridType::Uniform,
+            grid_type: GridType::Uniform,
             geometry: Geometry {
-                geometry_type: GeometryType::XYZ,
+                geometry_type: geom_type,
                 data_item: DataItem {
-                    dimensions: Dimensions(vec![4, 3]),
+                    dimensions: Dimensions(points.shape().into()),
                     data: points_data,
                     number_type: NumberType::Float,
-                    ..Default::default()
+                    precision: 8, // Default precision for f64
+                    format: self.writer.format(),
                 },
             },
             topology: Topology {
                 topology_type: TopologyType::Triangle,
-                number_of_elements: "2".into(),
+                number_of_elements: num_cells.to_string(),
                 data_item: DataItem {
-                    dimensions: Dimensions(vec![6]),
-                    number_type: NumberType::Int,
+                    dimensions: Dimensions(cells_flat.shape().into()),
+                    number_type: NumberType::UInt,
                     data: cells_data,
-                    ..Default::default()
+                    format: self.writer.format(),
+                    precision: 8,
                 },
             },
         };
@@ -212,11 +201,27 @@ impl TimeSeriesWriter {
     }
 }
 
+fn concatenate_cells<'a, M>(cells: &'a M) -> Array1<usize>
+where
+    &'a M: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+{
+    let views: Vec<ArrayView2<'a, usize>> = cells
+        .into_iter()
+        .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
+        .map(|(_, v)| *v) // <-- just copy the ArrayView2 here
+        .collect();
+
+    concatenate(Axis(0), &views)
+        .expect("Concatenation failed")
+        .flatten()
+        .to_owned()
+}
+
 pub struct TimeSeriesDataWriter {
     xdmf_file_name: PathBuf,
     xdmf: Xdmf,
     writer: Box<dyn DataWriter>,
-    flushed: bool, // Indicates if the data has been flushed to the file
+    flushed: bool, // Indicates if the data has been flushed to the file(s)
 }
 
 impl TimeSeriesDataWriter {
@@ -234,12 +239,15 @@ impl TimeSeriesDataWriter {
 
     /// Add data
     /// Depending on the format, data will either be written directly (hdf), or buffered (xml)
-    pub fn add_data(
+    pub fn add_data<'a, M>(
         &mut self,
         time: &str,
-        point_data: &HashMap<String, Values>,
-        cell_data: &HashMap<String, Values>,
-    ) -> IoResult<()> {
+        point_data: &'a M,
+        cell_data: &'a M,
+    ) -> IoResult<()>
+    where
+        &'a M: IntoIterator<Item = (&'a String, &'a Values<'a>)>,
+    {
         let format = self.writer.format();
         let mut new_attributes = Vec::new();
 

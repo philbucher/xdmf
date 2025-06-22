@@ -5,12 +5,23 @@ use xdmf::TimeSeriesWriter;
 
 #[test]
 fn test_write_xdmf() {
-    let mut xdmf_writer = TimeSeriesWriter::new("test_output");
+    let mut xdmf_writer = TimeSeriesWriter::new_with_options(
+        "test_output",
+        &TimeSeriesWriter::options().format(xdmf::Format::XML),
+    );
 
     let mut cells = HashMap::new();
-    cells.insert(xdmf::TopologyType::Triangle, vec![0, 1, 2]);
+    cells.insert(
+        xdmf::TopologyType::Triangle,
+        ArrayView2::from_shape((3, 1), &[0, 1, 2]).unwrap(),
+    );
 
-    let mut xdmf_writer = xdmf_writer.add_mesh(&[0.0, 0.0, 0.0], cells).unwrap();
+    let mut xdmf_writer = xdmf_writer
+        .add_mesh(
+            &ArrayView2::from_shape((2, 3), &[1., 2., 3., 4., 5., 6.]).unwrap(),
+            &cells,
+        )
+        .unwrap();
 
     let data = vec![1., 2., 3., 4., 5., 6.];
 
@@ -25,8 +36,8 @@ fn test_write_xdmf() {
 
     let mut data_map = HashMap::new();
 
-    let v_data_2d = xdmf::Values::View2Df64(view2);
-    data_map.insert("data_arr".to_string(), v_data_2d);
+    // let v_data_2d = xdmf::Values::View2Df64(view2);
+    data_map.insert("data_arr".to_string(), view2.into());
 
     xdmf_writer
         .add_data("time2", &data_map, &HashMap::new())
