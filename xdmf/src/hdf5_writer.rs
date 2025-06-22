@@ -29,12 +29,10 @@ impl DataWriter for SingleFileHdf5Writer {
         _points: &ArrayView2<f64>,
         _cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
-        // Implementation for writing mesh data to a single HDF5 file
         unimplemented!()
     }
 
     fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
-        // Implementation for writing data to a single HDF5 file
         unimplemented!()
     }
 
@@ -50,6 +48,7 @@ pub(crate) struct MultipleFilesHdf5Writer {
 
 impl MultipleFilesHdf5Writer {
     pub(crate) fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
+        // TODO since multiple h5 files will be created, write them in a folder => TODO create this folder
         let base_file_name = base_file_name.as_ref().to_path_buf();
         Ok(Self { base_file_name })
     }
@@ -65,17 +64,10 @@ impl DataWriter for MultipleFilesHdf5Writer {
         _points: &ArrayView2<f64>,
         _cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
-        // Implementation for writing mesh data to multiple HDF5 files
         unimplemented!()
     }
 
     fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
-        // Implementation for writing data to multiple HDF5 files
         unimplemented!()
-    }
-
-    fn flush(&mut self) -> IoResult<()> {
-        // Flush the HDF5 files
-        Ok(())
     }
 }

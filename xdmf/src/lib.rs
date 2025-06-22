@@ -34,8 +34,8 @@ pub(crate) trait DataWriter {
 
     fn write_data(&mut self, time: &str, data: &Values) -> IoResult<String>;
 
+    // flush the writer, if applicable
     fn flush(&mut self) -> IoResult<()> {
-        // flush the writer, if applicable
         Ok(())
     }
 }
@@ -63,14 +63,8 @@ impl TimeSeriesWriterOptions {
             Format::HDF => {
                 #[cfg(feature = "hdf5")]
                 match self.multiple_files {
-                    true => {
-                        // Create HDF5 writer for multiple files
-                        Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name).unwrap())
-                    }
-                    false => {
-                        // Create HDF5 writer for a single file
-                        Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name).unwrap())
-                    }
+                    true => Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name).unwrap()),
+                    false => Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name).unwrap()),
                 }
 
                 #[cfg(not(feature = "hdf5"))]
@@ -86,7 +80,7 @@ impl Default for TimeSeriesWriterOptions {
         let default_format = if cfg!(feature = "hdf5") {
             Format::HDF
         } else {
-            Format::XML // Default to XML if no feature is enabled
+            Format::XML
         };
         Self {
             format: default_format,
@@ -114,7 +108,6 @@ impl TimeSeriesWriter {
         options: &TimeSeriesWriterOptions,
     ) -> Self {
         // TODO create folder if it does not exist
-        // probably write Mesh right away so it does not need to be stored
 
         Self {
             xdmf_file_name: file_name.as_ref().to_path_buf().with_extension("xdmf"),
@@ -187,7 +180,6 @@ impl TimeSeriesWriter {
             .grids
             .push(Grid::new_time_series("time_series", mesh_grid));
 
-        // For now, we just return self
         let mut ts_writer = TimeSeriesDataWriter {
             xdmf_file_name: self.xdmf_file_name,
             xdmf: self.xdmf,
@@ -207,7 +199,7 @@ where
     let views: Vec<ArrayView2<'a, usize>> = cells
         .into_iter()
         .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
-        .map(|(_, v)| *v) // <-- just copy the ArrayView2 here
+        .map(|(_, v)| *v)
         .collect();
 
     concatenate(Axis(0), &views)
@@ -235,8 +227,6 @@ impl TimeSeriesDataWriter {
         }
     }
 
-    /// Add data
-    /// Depending on the format, data will either be written directly (hdf), or buffered (xml)
     pub fn add_data<'a, M>(
         &mut self,
         time: &str,
@@ -293,8 +283,6 @@ impl TimeSeriesDataWriter {
 
     fn write(&mut self) -> IoResult<()> {
         self.writer.flush()?;
-
-        // after it was written, drop it from the map (and only keep metadata?)
 
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
 
