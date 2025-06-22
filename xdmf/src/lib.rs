@@ -316,7 +316,10 @@ impl Drop for TimeSeriesDataWriter {
     fn drop(&mut self) {
         if !self.flushed {
             // If the data was not flushed, we should flush it before dropping
-            self.write();
+            let write_res = self.write();
+            if let Err(e) = write_res {
+                eprintln!("Error writing XDMF data: {}", e);
+            }
         }
     }
 }

@@ -5,7 +5,7 @@ use xdmf::TimeSeriesWriter;
 
 #[test]
 fn test_write_xdmf() {
-    let mut xdmf_writer = TimeSeriesWriter::new_with_options(
+    let xdmf_writer = TimeSeriesWriter::new_with_options(
         "test_output",
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
     );
@@ -26,13 +26,13 @@ fn test_write_xdmf() {
     let data = vec![1., 2., 3., 4., 5., 6.];
 
     // Create 1D view
-    let view1 = ArrayView1::from(&data[..3]);
+    let _view1 = ArrayView1::from(&data[..3]);
     // Create 2D view (2x3)
     let view2 = ArrayView2::from_shape((2, 3), &data[..]).unwrap();
     // Create 3D view (1x2x3)
-    let view3 = ArrayView3::from_shape((1, 2, 3), &data[..]).unwrap();
+    let _view3 = ArrayView3::from_shape((1, 2, 3), &data[..]).unwrap();
     // Create dynamic view (2x3)
-    let view_dyn = ArrayViewD::from_shape(ndarray::IxDyn(&[2, 3]), &data[..]).unwrap();
+    let _view_dyn = ArrayViewD::from_shape(ndarray::IxDyn(&[2, 3]), &data[..]).unwrap();
 
     let mut data_map = HashMap::new();
 

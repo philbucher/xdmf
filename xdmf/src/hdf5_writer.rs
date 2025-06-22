@@ -26,14 +26,14 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_mesh(
         &mut self,
-        points: &ArrayView2<f64>,
-        cells: &ArrayView1<usize>,
+        _points: &ArrayView2<f64>,
+        _cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
         // Implementation for writing mesh data to a single HDF5 file
         unimplemented!()
     }
 
-    fn write_data(&mut self, time: &str, data: &crate::Values) -> IoResult<String> {
+    fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
         // Implementation for writing data to a single HDF5 file
         unimplemented!()
     }
@@ -62,14 +62,14 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
     fn write_mesh(
         &mut self,
-        points: &ArrayView2<f64>,
-        cells: &ArrayView1<usize>,
+        _points: &ArrayView2<f64>,
+        _cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
         // Implementation for writing mesh data to multiple HDF5 files
         unimplemented!()
     }
 
-    fn write_data(&mut self, time: &str, data: &crate::Values) -> IoResult<String> {
+    fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
         // Implementation for writing data to multiple HDF5 files
         unimplemented!()
     }
