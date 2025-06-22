@@ -42,7 +42,4 @@ fn test_write_xdmf() {
     xdmf_writer
         .add_data("time2", &data_map, &HashMap::new())
         .unwrap();
-
-    // This should create a file named "test_output.xdmf"
-    assert!(xdmf_writer.write().is_ok());
 }

@@ -192,7 +192,6 @@ impl TimeSeriesWriter {
             xdmf_file_name: self.xdmf_file_name,
             xdmf: self.xdmf,
             writer: self.writer,
-            flushed: false,
         };
 
         ts_writer.write()?;
@@ -221,7 +220,6 @@ pub struct TimeSeriesDataWriter {
     xdmf_file_name: PathBuf,
     xdmf: Xdmf,
     writer: Box<dyn DataWriter>,
-    flushed: bool, // Indicates if the data has been flushed to the file(s)
 }
 
 impl TimeSeriesDataWriter {
@@ -290,13 +288,10 @@ impl TimeSeriesDataWriter {
         let time_grid = self.temporal_grid().create_new_time(time);
         time_grid.attributes.extend(new_attributes);
 
-        // TODO check if time already exists???
-        // Maybe this function should right away write the data to the file?
-        self.flushed = false;
-        Ok(())
+        self.write()
     }
 
-    pub fn write(&mut self) -> IoResult<()> {
+    fn write(&mut self) -> IoResult<()> {
         self.writer.flush()?;
 
         // after it was written, drop it from the map (and only keep metadata?)
@@ -306,20 +301,6 @@ impl TimeSeriesDataWriter {
         self.xdmf
             .write_to(&mut std::fs::File::create(&temp_xdmf_file_name)?)?;
 
-        std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)?;
-        self.flushed = true;
-        Ok(())
-    }
-}
-
-impl Drop for TimeSeriesDataWriter {
-    fn drop(&mut self) {
-        if !self.flushed {
-            // If the data was not flushed, we should flush it before dropping
-            let write_res = self.write();
-            if let Err(e) = write_res {
-                eprintln!("Error writing XDMF data: {}", e);
-            }
-        }
+        std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
 }
