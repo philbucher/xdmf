@@ -17,4 +17,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Run tests
-      run: cargo test --no-default-features
+      run: |
+        sudo apt-get install libhdf5-dev
+        cargo test
