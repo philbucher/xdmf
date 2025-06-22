@@ -116,7 +116,7 @@ impl TimeSeriesWriter {
         }
     }
 
-    pub fn add_mesh<'a, M>(
+    pub fn write_mesh<'a, M>(
         mut self,
         points: &ArrayView2<f64>,
         cells: &'a M,
@@ -227,7 +227,7 @@ impl TimeSeriesDataWriter {
         }
     }
 
-    pub fn add_data<'a, M>(
+    pub fn write_data<'a, M>(
         &mut self,
         time: &str,
         point_data: &'a M,

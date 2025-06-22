@@ -17,7 +17,7 @@ fn test_write_xdmf() {
     );
 
     let mut xdmf_writer = xdmf_writer
-        .add_mesh(
+        .write_mesh(
             &ArrayView2::from_shape((2, 3), &[1., 2., 3., 4., 5., 6.]).unwrap(),
             &cells,
         )
@@ -40,6 +40,6 @@ fn test_write_xdmf() {
     data_map.insert("data_arr".to_string(), view2.into());
 
     xdmf_writer
-        .add_data("time2", &data_map, &HashMap::new())
+        .write_data("time2", &data_map, &HashMap::new())
         .unwrap();
 }
