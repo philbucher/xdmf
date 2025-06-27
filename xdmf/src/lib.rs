@@ -21,6 +21,7 @@ mod values;
 
 // Re-export types used in the public API
 pub use values::Values;
+pub use xdmf_elements::attribute::Center;
 pub use xdmf_elements::data_item::Format;
 pub use xdmf_elements::topology::TopologyType;
 
@@ -116,13 +117,13 @@ impl TimeSeriesWriter {
         }
     }
 
-    pub fn write_mesh<'a, M>(
+    pub fn write_mesh<'a, C>(
         mut self,
         points: &ArrayView2<f64>,
-        cells: &'a M,
+        cells: &'a C,
     ) -> IoResult<TimeSeriesDataWriter>
     where
-        &'a M: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+        &'a C: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
     {
         let geom_type = match points.shape()[1] {
             2 => GeometryType::XY,
@@ -190,6 +191,21 @@ impl TimeSeriesWriter {
 
         Ok(ts_writer)
     }
+
+    pub fn write_mesh_and_submeshes<'a, C, M, S, I>(
+        mut self,
+        points: &ArrayView2<f64>,
+        cells: &'a C,
+        submeshes: &M,
+    ) -> IoResult<TimeSeriesDataWriter>
+    where
+        &'a C: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+        M: IntoIterator<Item = (S, I, I)>,
+        S: AsRef<str>,
+        I: IntoIterator<Item = usize>,
+    {
+        unimplemented!("Submeshes are not yet implemented");
+    }
 }
 
 fn concatenate_cells<'a, M>(cells: &'a M) -> Array1<usize>
@@ -214,6 +230,33 @@ pub struct TimeSeriesDataWriter {
     writer: Box<dyn DataWriter>,
 }
 
+enum Data<'a> {
+    PointData(PointData<'a>),
+    CellData(CellData<'a>),
+}
+
+pub struct PointData<'a> {
+    name: String,
+    attribute_type: attribute::AttributeType,
+    values: Values<'a>,
+}
+
+impl<'a> PointData<'a> {
+    pub fn new(name: String, attribute_type: attribute::AttributeType, values: Values<'a>) -> Self {
+        // check shape agains attribute type
+        Self {
+            name,
+            attribute_type,
+            values,
+        }
+    }
+}
+pub struct CellData<'a> {
+    name: String,
+    attribute_type: attribute::AttributeType,
+    values: Values<'a>,
+}
+
 impl TimeSeriesDataWriter {
     fn temporal_grid(&mut self) -> &mut TimeSeriesGrid {
         let temp_grid = self.xdmf.domains[0]
@@ -227,19 +270,14 @@ impl TimeSeriesDataWriter {
         }
     }
 
-    pub fn write_data<'a, M>(
-        &mut self,
-        time: &str,
-        point_data: &'a M,
-        cell_data: &'a M,
-    ) -> IoResult<()>
+    pub fn write_data<'a, M>(&mut self, time: &str, data: &'a M) -> IoResult<()>
     where
-        &'a M: IntoIterator<Item = (&'a String, &'a Values<'a>)>,
+        &'a M: IntoIterator<Item = ((&'a String, attribute::AttributeType), &'a Values<'a>)>,
     {
         let format = self.writer.format();
         let mut new_attributes = Vec::new();
 
-        for (name, data) in point_data {
+        for (name, data) in data {
             let data_item = DataItem {
                 dimensions: data.dimensions(),
                 number_type: data.number_type(),
@@ -249,27 +287,9 @@ impl TimeSeriesDataWriter {
             };
 
             let attribute = attribute::Attribute {
-                name: name.to_string(),
-                attribute_type: attribute::AttributeType::Scalar,
+                name: name.0.to_string(),
+                attribute_type: name.1,
                 center: attribute::Center::Node,
-                data_item: data_item,
-            };
-            new_attributes.push(attribute);
-        }
-
-        for (name, data) in cell_data {
-            let data_item = DataItem {
-                dimensions: data.dimensions(),
-                number_type: data.number_type(),
-                format: format,
-                precision: data.precision(),
-                data: self.writer.write_data(time, data)?,
-            };
-
-            let attribute = attribute::Attribute {
-                name: name.to_string(),
-                attribute_type: attribute::AttributeType::Scalar,
-                center: attribute::Center::Cell,
                 data_item: data_item,
             };
             new_attributes.push(attribute);
