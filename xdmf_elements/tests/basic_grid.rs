@@ -14,9 +14,9 @@ fn basic_grid() {
         Geometry {
             geometry_type: GeometryType::XYZ,
             data_item: DataItem {
-                dimensions: Dimensions(vec![4, 3]),
+                dimensions: Some(Dimensions(vec![4, 3])),
                 data: "0 0 0 0 1 0 1 1 0 1 0 0.5".into(),
-                number_type: NumberType::Float,
+                number_type: Some(NumberType::Float),
                 ..Default::default()
             },
         },
@@ -24,8 +24,8 @@ fn basic_grid() {
             topology_type: TopologyType::Triangle,
             number_of_elements: "2".into(),
             data_item: DataItem {
-                dimensions: Dimensions(vec![6]),
-                number_type: NumberType::Int,
+                dimensions: Some(Dimensions(vec![6])),
+                number_type: Some(NumberType::Int),
                 data: "0 1 2 0 2 3".into(),
                 ..Default::default()
             },

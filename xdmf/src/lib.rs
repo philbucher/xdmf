@@ -146,42 +146,58 @@ impl TimeSeriesWriter {
             ));
         }
 
-        let num_cells = cells.into_iter().map(|(_, v)| v.shape()[1]).sum::<usize>();
+        let num_cells = cells.into_iter().map(|(_, v)| v.shape()[0]).sum::<usize>();
 
         // Concatenate all arrays along axis 0
         let cells_flat = concatenate_cells(cells);
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &cells_flat.view())?;
 
+        let data_item_coords = DataItem {
+            name: Some("coords".to_string()),
+            dimensions: Some(Dimensions(points.shape().into())),
+            data: points_data,
+            number_type: Some(NumberType::Float),
+            precision: Some(8), // Default precision for f64
+            format: Some(self.writer.format()),
+            reference: None,
+        };
+
+        let data_item_connectivity = DataItem {
+            name: Some("connectivity".to_string()),
+            dimensions: Some(Dimensions(cells_flat.shape().into())),
+            number_type: Some(NumberType::UInt),
+            data: cells_data,
+            format: Some(self.writer.format()),
+            precision: Some(8),
+            reference: None,
+        };
+
+        let data_item_coords_ref =
+            DataItem::new_reference(&data_item_coords, "/Xdmf/Domain/DataItem".to_string());
+        let data_item_connectivity_ref =
+            DataItem::new_reference(&data_item_connectivity, "/Xdmf/Domain/DataItem".to_string());
+
         let mesh_grid = Uniform {
             name: "mesh".to_string(),
             grid_type: GridType::Uniform,
             geometry: Geometry {
                 geometry_type: geom_type,
-                data_item: DataItem {
-                    dimensions: Dimensions(points.shape().into()),
-                    data: points_data,
-                    number_type: NumberType::Float,
-                    precision: 8, // Default precision for f64
-                    format: self.writer.format(),
-                },
+                data_item: data_item_coords_ref,
             },
             topology: Topology {
                 topology_type: TopologyType::Triangle,
                 number_of_elements: num_cells.to_string(),
-                data_item: DataItem {
-                    dimensions: Dimensions(cells_flat.shape().into()),
-                    number_type: NumberType::UInt,
-                    data: cells_data,
-                    format: self.writer.format(),
-                    precision: 8,
-                },
+                data_item: data_item_connectivity_ref,
             },
         };
 
         self.xdmf.domains[0]
             .grids
             .push(Grid::new_time_series("time_series", mesh_grid));
+
+        self.xdmf.domains[0].data_items.push(data_item_coords);
+        self.xdmf.domains[0].data_items.push(data_item_connectivity);
 
         let mut ts_writer = TimeSeriesDataWriter {
             xdmf_file_name: self.xdmf_file_name,
@@ -258,24 +274,25 @@ impl TimeSeriesDataWriter {
         for d in data {
             let v = d.values();
             let data_item = DataItem {
-                dimensions: v.dimensions(),
-                number_type: v.number_type(),
-                format,
-                precision: v.precision(),
+                dimensions: Some(v.dimensions()),
+                number_type: Some(v.number_type()),
+                format: Some(format),
+                precision: Some(v.precision()),
                 data: self.writer.write_data(time, d.values())?,
+                name: Some(d.name().to_string()),
+                reference: None,
             };
 
             let attribute = attribute::Attribute {
                 name: d.name(),
                 attribute_type: d.attribute_type(),
                 center: d.center(),
-                data_item: vec![data_item],
+                data_items: vec![data_item],
             };
             new_attributes.push(attribute);
         }
 
-        let time_grid = self.temporal_grid().create_new_time(time);
-        time_grid.attributes.extend(new_attributes);
+        self.temporal_grid().create_new_time(time, new_attributes);
 
         self.write()
     }

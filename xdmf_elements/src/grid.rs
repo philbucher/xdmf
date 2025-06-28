@@ -58,8 +58,14 @@ pub struct Collection {
 
 #[derive(Debug, Serialize)]
 pub struct Reference {
-    #[serde(skip_serializing)]
-    pub mesh_grid_name: String,
+    #[serde(rename = "@Name")]
+    pub name: String,
+
+    #[serde(rename = "Geometry")]
+    pub geometry: Geometry,
+
+    #[serde(rename = "Topology")]
+    pub topology: Topology,
 
     #[serde(rename = "Time")]
     pub time: Time,
@@ -86,9 +92,6 @@ impl Time {
 pub struct TimeSeriesGrid {
     #[serde(rename = "@Name")]
     pub name: String,
-
-    #[serde(skip_serializing)]
-    pub mesh_grid_name: String,
 
     #[serde(rename = "@GridType")]
     pub grid_type: GridType,
@@ -134,7 +137,6 @@ impl Grid {
     pub fn new_time_series(name: impl ToString, mesh_grid: Uniform) -> Self {
         Grid::TimeSeriesGrid(TimeSeriesGrid {
             name: name.to_string(),
-            mesh_grid_name: mesh_grid.name.clone(),
             grid_type: GridType::Collection,
             collection_type: CollectionType::Temporal,
             grids: vec![Grid::Uniform(mesh_grid)],
@@ -143,18 +145,37 @@ impl Grid {
 }
 
 impl TimeSeriesGrid {
-    pub fn create_new_time(&mut self, time: impl ToString) -> &mut Reference {
+    pub fn create_new_time(&mut self, time: impl ToString, attributes: Vec<Attribute>) {
+        let first_grid = self
+            .grids
+            .first()
+            .expect("Time series grid must have at least one grid");
+
+        let (geom, topo) = match first_grid {
+            Grid::Uniform(grid) => (grid.geometry.clone(), grid.topology.clone()),
+            Grid::Reference(grid) => (grid.geometry.clone(), grid.topology.clone()),
+            _ => panic!("First grid in time series must be a Uniform or Reference grid"),
+        };
+
         let ref_time = Reference {
-            mesh_grid_name: self.mesh_grid_name.clone(),
+            name: format!("{}-t{}", self.name, time.to_string()),
+            geometry: geom,
+            topology: topo,
             time: Time::new(time),
-            attributes: vec![],
+            attributes,
         };
 
         self.grids.push(Grid::Reference(ref_time));
 
-        match self.grids.last_mut() {
-            Some(Grid::Reference(ref_grid)) => ref_grid,
-            _ => unreachable!("Last grid is not a Reference type"),
+        // if first grid is a Uniform grid, then remove it
+        // this happens the first time a time is created
+        // TODO change this once collection grids are supported (aka for submeshes support)
+        let first_grid = self
+            .grids
+            .first()
+            .expect("Time series grid must have at least one grid");
+        if let Grid::Uniform(_) = first_grid {
+            self.grids.remove(0);
         }
     }
 }

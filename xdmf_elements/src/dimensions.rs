@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Dimensions(pub Vec<usize>);
 
 impl Serialize for Dimensions {

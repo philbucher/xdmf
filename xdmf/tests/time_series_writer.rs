@@ -13,7 +13,7 @@ fn test_write_xdmf() {
     let mut cells = HashMap::new();
     cells.insert(
         xdmf::TopologyType::Triangle,
-        ArrayView2::from_shape((3, 1), &[0, 1, 2]).unwrap(),
+        ArrayView2::from_shape((1, 3), &[0, 1, 2]).unwrap(),
     );
 
     let mut xdmf_writer = xdmf_writer
@@ -50,4 +50,6 @@ fn test_write_xdmf() {
     ];
 
     xdmf_writer.write_data("1.0", &data).unwrap();
+    xdmf_writer.write_data("2.0", &data).unwrap();
+    xdmf_writer.write_data("3.5", &data).unwrap();
 }

@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::data_item::DataItem;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Topology {
     #[serde(rename = "@TopologyType")]
     pub topology_type: TopologyType,

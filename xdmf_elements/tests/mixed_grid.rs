@@ -14,9 +14,9 @@ fn mixed_grid() {
         Geometry {
             geometry_type: GeometryType::XYZ,
             data_item: DataItem {
-                dimensions: Dimensions(vec![5, 3]),
+                dimensions: Some(Dimensions(vec![5, 3])),
                 data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
-                number_type: NumberType::Float,
+                number_type: Some(NumberType::Float),
                 ..Default::default()
             },
         },
@@ -24,8 +24,8 @@ fn mixed_grid() {
             topology_type: TopologyType::Mixed,
             number_of_elements: "2".into(),
             data_item: DataItem {
-                dimensions: Dimensions(vec![9]),
-                number_type: NumberType::Int,
+                dimensions: Some(Dimensions(vec![9])),
+                number_type: Some(NumberType::Int),
                 data: "5 0 1 2 3 4 1 2 4".into(),
                 ..Default::default()
             },

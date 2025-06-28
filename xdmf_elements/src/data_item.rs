@@ -2,32 +2,58 @@ use serde::Serialize;
 
 use crate::dimensions::Dimensions;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DataItem {
-    #[serde(rename = "@Dimensions")]
-    pub dimensions: Dimensions,
+    #[serde(rename = "@Name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 
-    #[serde(rename = "@NumberType")]
-    pub number_type: NumberType,
+    #[serde(rename = "@Dimensions", skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<Dimensions>,
 
-    #[serde(rename = "@Format")]
-    pub format: Format,
+    #[serde(rename = "@NumberType", skip_serializing_if = "Option::is_none")]
+    pub number_type: Option<NumberType>,
 
-    #[serde(rename = "@Precision")]
-    pub precision: u8,
+    #[serde(rename = "@Format", skip_serializing_if = "Option::is_none")]
+    pub format: Option<Format>,
+
+    #[serde(rename = "@Precision", skip_serializing_if = "Option::is_none")]
+    pub precision: Option<u8>,
 
     #[serde(rename = "$value")]
     pub data: String,
+
+    #[serde(rename = "@Reference", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 impl Default for DataItem {
     fn default() -> Self {
         DataItem {
-            dimensions: Dimensions(vec![1]),
-            number_type: NumberType::default(),
-            format: Format::default(),
-            precision: 4,
+            name: None,
+            dimensions: Some(Dimensions(vec![1])),
+            number_type: Some(NumberType::default()),
+            format: Some(Format::default()),
+            precision: Some(4),
             data: String::new(),
+            reference: None,
+        }
+    }
+}
+
+impl DataItem {
+    pub fn new_reference(source: &DataItem, source_path: String) -> Self {
+        DataItem {
+            name: None,
+            dimensions: None,
+            number_type: None,
+            format: None,
+            precision: None,
+            data: format!(
+                "{}[@Name=\"{}\"]",
+                source_path,
+                source.name.clone().unwrap_or("MISSING".to_string())
+            ),
+            reference: Some("XML".to_string()),
         }
     }
 }
@@ -58,11 +84,13 @@ mod tests {
     #[test]
     fn test_data_item_default() {
         let default_item = DataItem::default();
-        assert_eq!(default_item.dimensions, Dimensions(vec![1]));
-        assert_eq!(default_item.number_type, NumberType::Float);
-        assert_eq!(default_item.format, Format::XML);
-        assert_eq!(default_item.precision, 4);
+        assert!(default_item.name.is_none());
+        assert_eq!(default_item.dimensions, Some(Dimensions(vec![1])));
+        assert_eq!(default_item.number_type, Some(NumberType::Float));
+        assert_eq!(default_item.format, Some(Format::XML));
+        assert_eq!(default_item.precision, Some(4));
         assert_eq!(default_item.data, String::new());
+        assert!(default_item.reference.is_none());
     }
 
     #[test]
@@ -78,32 +106,72 @@ mod tests {
     #[test]
     fn test_data_item_custom() {
         let custom_item = DataItem {
-            dimensions: Dimensions(vec![2, 3]),
-            number_type: NumberType::Int,
-            format: Format::HDF,
-            precision: 8,
+            name: Some("custom_data_item".to_string()),
+            dimensions: Some(Dimensions(vec![2, 3])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::HDF),
+            precision: Some(8),
             data: "custom_data".to_string(),
+            reference: None,
         };
-        assert_eq!(custom_item.dimensions, Dimensions(vec![2, 3]));
-        assert_eq!(custom_item.number_type, NumberType::Int);
-        assert_eq!(custom_item.format, Format::HDF);
-        assert_eq!(custom_item.precision, 8);
+        assert_eq!(custom_item.name, Some("custom_data_item".to_string()));
+        assert_eq!(custom_item.dimensions, Some(Dimensions(vec![2, 3])));
+        assert_eq!(custom_item.number_type, Some(NumberType::Int));
+        assert_eq!(custom_item.format, Some(Format::HDF));
+        assert_eq!(custom_item.precision, Some(8));
         assert_eq!(custom_item.data, "custom_data");
+        assert!(custom_item.reference.is_none());
+    }
+
+    #[test]
+    fn test_data_item_reference() {
+        let mut source_data_item = DataItem::default();
+        source_data_item.name = Some("source_data_item".to_string());
+
+        let ref_item =
+            DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());
+
+        assert!(ref_item.name.is_none());
+        assert!(ref_item.dimensions.is_none());
+        assert!(ref_item.number_type.is_none());
+        assert!(ref_item.format.is_none());
+        assert!(ref_item.precision.is_none());
+        assert_eq!(
+            ref_item.data,
+            "/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]"
+        );
+        assert_eq!(ref_item.reference, Some("XML".to_string()));
     }
 
     #[test]
     fn test_data_item_serialize() {
         let data_item = DataItem {
-            dimensions: Dimensions(vec![2, 3]),
-            number_type: NumberType::Int,
-            format: Format::HDF,
-            precision: 8,
+            name: Some("custom_data_item".to_string()),
+            dimensions: Some(Dimensions(vec![2, 3])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::HDF),
+            precision: Some(8),
             data: "custom_data".to_string(),
+            reference: None,
         };
 
         assert_eq!(
             to_string(&data_item).unwrap(),
-            "<DataItem Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>"
+            "<DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>"
+        );
+    }
+
+    #[test]
+    fn test_data_item_reference_serialize() {
+        let mut source_data_item = DataItem::default();
+        source_data_item.name = Some("source_data_item".to_string());
+
+        let ref_item =
+            DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());
+
+        assert_eq!(
+            to_string(&ref_item).unwrap(),
+            "<DataItem Reference=\"XML\">/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]</DataItem>"
         );
     }
 }

@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::data_item::DataItem;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Geometry {
     #[serde(rename = "@GeometryType")]
     pub geometry_type: GeometryType,
