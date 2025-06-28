@@ -105,8 +105,8 @@ impl Grid {
         Grid::Uniform(Uniform {
             name: name.to_string(),
             grid_type: GridType::Uniform,
-            topology: topology,
-            geometry: geometry,
+            topology,
+            geometry,
         })
     }
 

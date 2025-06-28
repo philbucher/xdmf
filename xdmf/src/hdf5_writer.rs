@@ -14,7 +14,7 @@ pub(crate) struct SingleFileHdf5Writer {
 impl SingleFileHdf5Writer {
     pub(crate) fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
         let h5_file = H5File::create(file_name.as_ref().to_path_buf().with_extension("h5"))
-            .map_err(|e| std::io::Error::other(e))?;
+            .map_err(std::io::Error::other)?;
         Ok(Self { h5_file })
     }
 }
@@ -38,7 +38,7 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn flush(&mut self) -> IoResult<()> {
         // Flush the HDF5 file
-        self.h5_file.flush().map_err(|e| std::io::Error::other(e))
+        self.h5_file.flush().map_err(std::io::Error::other)
     }
 }
 

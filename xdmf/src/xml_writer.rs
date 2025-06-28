@@ -16,9 +16,9 @@ impl XmlWriter {
 
     fn values_to_string(&self, data: &Values) -> String {
         match data {
-            Values::View1Df64(view) => array_to_string_fmt(&view),
-            Values::View2Df64(view) => array_to_string_fmt(&view),
-            Values::ViewDynf64(view) => array_to_string_fmt(&view),
+            Values::View1Df64(view) => array_to_string_fmt(view),
+            Values::View2Df64(view) => array_to_string_fmt(view),
+            Values::ViewDynf64(view) => array_to_string_fmt(view),
         }
     }
 }
@@ -33,7 +33,7 @@ impl DataWriter for XmlWriter {
         points: &ArrayView2<f64>,
         cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
-        Ok((array_to_string_fmt(&points), array_to_string_fmt(&cells)))
+        Ok((array_to_string_fmt(points), array_to_string_fmt(cells)))
     }
 
     fn write_data(&mut self, _time: &str, data: &Values) -> IoResult<String> {

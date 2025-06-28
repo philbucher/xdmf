@@ -17,11 +17,13 @@ use xdmf_elements::{
 mod hdf5_writer;
 mod xml_writer;
 
+mod data;
 mod values;
 
 // Re-export types used in the public API
+pub use data::Data;
 pub use values::Values;
-pub use xdmf_elements::attribute::Center;
+pub use xdmf_elements::attribute::AttributeType;
 pub use xdmf_elements::data_item::Format;
 pub use xdmf_elements::topology::TopologyType;
 
@@ -194,14 +196,14 @@ impl TimeSeriesWriter {
 
     pub fn write_mesh_and_submeshes<'a, C, M, S, I>(
         mut self,
-        points: &ArrayView2<f64>,
-        cells: &'a C,
-        submeshes: &M,
+        _points: &ArrayView2<f64>,
+        _cells: &'a C,
+        _submeshes: &M,
     ) -> IoResult<TimeSeriesDataWriter>
     where
         &'a C: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
         M: IntoIterator<Item = (S, I, I)>,
-        S: AsRef<str>,
+        S: ToString,
         I: IntoIterator<Item = usize>,
     {
         unimplemented!("Submeshes are not yet implemented");
@@ -230,33 +232,6 @@ pub struct TimeSeriesDataWriter {
     writer: Box<dyn DataWriter>,
 }
 
-enum Data<'a> {
-    PointData(PointData<'a>),
-    CellData(CellData<'a>),
-}
-
-pub struct PointData<'a> {
-    name: String,
-    attribute_type: attribute::AttributeType,
-    values: Values<'a>,
-}
-
-impl<'a> PointData<'a> {
-    pub fn new(name: String, attribute_type: attribute::AttributeType, values: Values<'a>) -> Self {
-        // check shape agains attribute type
-        Self {
-            name,
-            attribute_type,
-            values,
-        }
-    }
-}
-pub struct CellData<'a> {
-    name: String,
-    attribute_type: attribute::AttributeType,
-    values: Values<'a>,
-}
-
 impl TimeSeriesDataWriter {
     fn temporal_grid(&mut self) -> &mut TimeSeriesGrid {
         let temp_grid = self.xdmf.domains[0]
@@ -270,27 +245,28 @@ impl TimeSeriesDataWriter {
         }
     }
 
-    pub fn write_data<'a, M>(&mut self, time: &str, data: &'a M) -> IoResult<()>
+    pub fn write_data<'a, D>(&mut self, time: &str, data: &'a D) -> IoResult<()>
     where
-        &'a M: IntoIterator<Item = ((&'a String, attribute::AttributeType), &'a Values<'a>)>,
+        &'a D: IntoIterator<Item = &'a Data<'a>>,
     {
         let format = self.writer.format();
         let mut new_attributes = Vec::new();
 
-        for (name, data) in data {
+        for d in data {
+            let v = d.values();
             let data_item = DataItem {
-                dimensions: data.dimensions(),
-                number_type: data.number_type(),
-                format: format,
-                precision: data.precision(),
-                data: self.writer.write_data(time, data)?,
+                dimensions: v.dimensions(),
+                number_type: v.number_type(),
+                format,
+                precision: v.precision(),
+                data: self.writer.write_data(time, d.values())?,
             };
 
             let attribute = attribute::Attribute {
-                name: name.0.to_string(),
-                attribute_type: name.1,
-                center: attribute::Center::Node,
-                data_item: data_item,
+                name: d.name(),
+                attribute_type: d.attribute_type(),
+                center: d.center(),
+                data_item: vec![data_item],
             };
             new_attributes.push(attribute);
         }
