@@ -146,7 +146,7 @@ impl TimeSeriesWriter {
             ));
         }
 
-        let num_cells = cells.into_iter().map(|(_, v)| v.shape()[0]).sum::<usize>();
+        let num_cells = cells.into_iter().map(|(_, v)| v.shape()[1]).sum::<usize>();
 
         // Concatenate all arrays along axis 0
         let cells_flat = concatenate_cells(cells);
