@@ -252,6 +252,9 @@ impl TimeSeriesDataWriter {
         let format = self.writer.format();
         let mut new_attributes = Vec::new();
 
+        // TODO make sure that names for data location (aka Center) are unique
+        // Paraview just ignores duplicate names
+
         for d in data {
             let v = d.values();
             let data_item = DataItem {
