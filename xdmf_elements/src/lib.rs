@@ -7,6 +7,7 @@ pub mod geometry;
 pub mod grid;
 pub mod topology;
 
+use data_item::DataItem;
 use grid::Grid;
 
 pub const XDMF_TAG: &str = "Xdmf";
@@ -46,11 +47,17 @@ impl Default for Xdmf {
 pub struct Domain {
     #[serde(rename = "Grid")]
     pub grids: Vec<Grid>,
+
+    #[serde(rename = "DataItem", skip_serializing_if = "Vec::is_empty")]
+    pub data_items: Vec<DataItem>,
 }
 
 impl Domain {
     pub fn new(grid: Grid) -> Self {
-        Self { grids: vec![grid] }
+        Self {
+            grids: vec![grid],
+            data_items: Vec::new(),
+        }
     }
 }
 
@@ -82,9 +89,9 @@ mod tests {
             geometry::Geometry {
                 geometry_type: geometry::GeometryType::XYZ,
                 data_item: data_item::DataItem {
-                    dimensions: dimensions::Dimensions(vec![3]),
+                    dimensions: Some(dimensions::Dimensions(vec![3])),
                     data: "1.0 2.0 3.0".to_string(),
-                    number_type: data_item::NumberType::Float,
+                    number_type: Some(data_item::NumberType::Float),
                     ..Default::default()
                 },
             },
@@ -92,8 +99,8 @@ mod tests {
                 topology_type: topology::TopologyType::Triangle,
                 number_of_elements: "1".to_string(),
                 data_item: data_item::DataItem {
-                    dimensions: dimensions::Dimensions(vec![3]),
-                    number_type: data_item::NumberType::Int,
+                    dimensions: Some(dimensions::Dimensions(vec![3])),
+                    number_type: Some(data_item::NumberType::Int),
                     data: "0 1 2".to_string(),
                     ..Default::default()
                 },
@@ -102,11 +109,16 @@ mod tests {
         let domain = Domain::new(grid);
 
         assert_eq!(domain.grids.len(), 1);
+        assert!(domain.data_items.is_empty());
     }
 
     #[test]
     fn test_domain_default() {
-        let domain = Domain::default();
+        let mut domain = Domain::default();
         assert!(domain.grids.is_empty());
+        assert!(domain.data_items.is_empty());
+
+        domain.data_items.push(DataItem::default());
+        assert_eq!(domain.data_items.len(), 1);
     }
 }

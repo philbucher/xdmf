@@ -14,7 +14,7 @@ pub struct Attribute {
     pub center: Center,
 
     #[serde(rename = "DataItem")]
-    pub data_item: Vec<DataItem>,
+    pub data_items: Vec<DataItem>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
@@ -57,7 +57,7 @@ mod tests {
             name: String::from("Temperature"),
             attribute_type: AttributeType::Scalar,
             center: Center::Cell,
-            data_item: vec![DataItem::default(), DataItem::default()],
+            data_items: vec![DataItem::default(), DataItem::default()],
         };
 
         assert_eq!(
