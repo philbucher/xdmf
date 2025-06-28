@@ -14,7 +14,7 @@ pub struct Attribute {
     pub center: Center,
 
     #[serde(rename = "DataItem")]
-    pub data_item: DataItem,
+    pub data_item: Vec<DataItem>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
@@ -57,12 +57,15 @@ mod tests {
             name: String::from("Temperature"),
             attribute_type: AttributeType::Scalar,
             center: Center::Cell,
-            data_item: DataItem::default(),
+            data_item: vec![DataItem::default(), DataItem::default()],
         };
 
         assert_eq!(
             to_string(&attribute).unwrap(),
-            "<Attribute Name=\"Temperature\" AttributeType=\"Scalar\" Center=\"Cell\"><DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/></Attribute>"
+            "<Attribute Name=\"Temperature\" AttributeType=\"Scalar\" Center=\"Cell\">\
+                <DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/>\
+                <DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/>\
+            </Attribute>"
         );
     }
 
