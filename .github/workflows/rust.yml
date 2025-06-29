@@ -20,3 +20,6 @@ jobs:
       run: |
         sudo apt-get install libhdf5-dev
         cargo test
+    - name: Run tests 2
+      run: |
+        cargo test
