@@ -7,6 +7,10 @@ fn test_write_xdmf() {
         "test_output",
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
     );
+    let xdmf_writer_submeshes = TimeSeriesWriter::new_with_options(
+        "test_output-with-submeshes",
+        &TimeSeriesWriter::options().format(xdmf::Format::XML),
+    );
 
     let cells = vec![(
         xdmf::TopologyType::Triangle,
@@ -18,6 +22,18 @@ fn test_write_xdmf() {
             &ArrayView2::from_shape((4, 3), &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.])
                 .unwrap(),
             &cells,
+        )
+        .unwrap();
+
+    let mut xdmf_writer_submeshes = xdmf_writer_submeshes
+        .write_mesh_and_submeshes(
+            &ArrayView2::from_shape((4, 3), &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.])
+                .unwrap(),
+            &cells,
+            &[
+                ("submesh1".to_string(), 0..2, 0..2),
+                ("submesh2".to_string(), 1..3, 1..3),
+            ],
         )
         .unwrap();
 
@@ -44,5 +60,8 @@ fn test_write_xdmf() {
             ),
         ];
         xdmf_writer.write_data(&i.to_string(), &data).unwrap();
+        xdmf_writer_submeshes
+            .write_data(&i.to_string(), &data)
+            .unwrap();
     }
 }

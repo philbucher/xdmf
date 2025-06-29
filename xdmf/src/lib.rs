@@ -119,6 +119,7 @@ impl TimeSeriesWriter {
         }
     }
 
+    // TODO check bounds of connectivity indices
     pub fn write_mesh<'a, C>(
         mut self,
         points: &ArrayView2<f64>,
@@ -210,10 +211,12 @@ impl TimeSeriesWriter {
         Ok(ts_writer)
     }
 
+    // TODO check if indices are within bounds of points and cells
+    // TODO check if submesh names are unique
     pub fn write_mesh_and_submeshes<'a, C, M, S, I>(
         self,
-        _points: &ArrayView2<f64>,
-        _cells: &'a C,
+        points: &ArrayView2<f64>,
+        cells: &'a C,
         _submeshes: &M,
     ) -> IoResult<TimeSeriesDataWriter>
     where
@@ -222,7 +225,7 @@ impl TimeSeriesWriter {
         S: ToString,
         I: IntoIterator<Item = usize>,
     {
-        unimplemented!("Submeshes are not yet implemented");
+        self.write_mesh(points, cells)
     }
 }
 
