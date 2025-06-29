@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ndarray::prelude::*;
 use xdmf::TimeSeriesWriter;
 
@@ -10,11 +8,10 @@ fn test_write_xdmf() {
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
     );
 
-    let mut cells = HashMap::new();
-    cells.insert(
+    let cells = vec![(
         xdmf::TopologyType::Triangle,
         ArrayView2::from_shape((2, 3), &[0, 1, 2, 0, 2, 3]).unwrap(),
-    );
+    )];
 
     let mut xdmf_writer = xdmf_writer
         .write_mesh(

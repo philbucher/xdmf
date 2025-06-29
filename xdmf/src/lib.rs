@@ -2,7 +2,7 @@ use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
 
 use itertools::Itertools;
-use ndarray::{Array1, ArrayView1, ArrayView2, Axis, concatenate};
+use ndarray::{Array1, ArrayView1, ArrayView2};
 
 use xdmf_elements::{
     Xdmf, attribute,
@@ -125,7 +125,7 @@ impl TimeSeriesWriter {
         cells: &'a C,
     ) -> IoResult<TimeSeriesDataWriter>
     where
-        &'a C: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+        &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
     {
         let geom_type = match points.shape()[1] {
             2 => GeometryType::XY,
@@ -217,7 +217,7 @@ impl TimeSeriesWriter {
         _submeshes: &M,
     ) -> IoResult<TimeSeriesDataWriter>
     where
-        &'a C: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+        &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
         M: IntoIterator<Item = (S, I, I)>,
         S: ToString,
         I: IntoIterator<Item = usize>,
@@ -226,20 +226,16 @@ impl TimeSeriesWriter {
     }
 }
 
-fn concatenate_cells<'a, M>(cells: &'a M) -> Array1<usize>
+fn concatenate_cells<'a, C>(cells: &'a C) -> Array1<usize>
 where
-    &'a M: IntoIterator<Item = (&'a TopologyType, &'a ArrayView2<'a, usize>)>,
+    &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
 {
-    let views: Vec<ArrayView2<'a, usize>> = cells
+    let concatenated_iter = cells
         .into_iter()
         .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
-        .map(|(_, v)| *v)
-        .collect();
+        .flat_map(|(_, view)| view.iter().copied());
 
-    concatenate(Axis(0), &views)
-        .expect("Concatenation failed")
-        .flatten()
-        .to_owned()
+    Array1::from_iter(concatenated_iter)
 }
 
 pub struct TimeSeriesDataWriter {
