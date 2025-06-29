@@ -10,7 +10,7 @@ use xdmf_elements::grid::{CollectionType, Grid, Reference, Time};
 use xdmf_elements::topology::{Topology, TopologyType};
 use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
-// this can only be opened with the "Xdmf3ReaderT" and "XDMF Reader" in Paraview, not the "Xdmf3ReaderS" reader (reason unknown)
+// this can only be opened with the "XDMF Reader" in Paraview, not the "Xdmf3ReaderS" and "Xdmf3ReaderT" readers (reason unknown)
 
 #[test]
 fn temporal_collection_grid() {
