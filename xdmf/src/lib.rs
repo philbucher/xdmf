@@ -261,15 +261,17 @@ impl TimeSeriesDataWriter {
         }
     }
 
+    /// Write data for a specific time step.
+    // TODOs:
+    // - make sure that names for data location (aka Center) are unique (Paraview just ignores duplicate names)
+    // - check for unique time steps
+    // - assert dimensions of points and cells match
     pub fn write_data<'a, D>(&mut self, time: &str, data: &'a D) -> IoResult<()>
     where
         &'a D: IntoIterator<Item = &'a Data<'a>>,
     {
         let format = self.writer.format();
         let mut new_attributes = Vec::new();
-
-        // TODO make sure that names for data location (aka Center) are unique
-        // Paraview just ignores duplicate names
 
         for d in data {
             let v = d.values();
