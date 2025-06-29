@@ -16,10 +16,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Run tests
+    - name: Run clippy
       run: |
         sudo apt-get install libhdf5-dev
-        cargo test
-    - name: Run tests 2
-      run: |
-        cargo test
+        cargo clippy --all-targets -- -D warnings
+    - name: Run tests
+      run: cargo test
