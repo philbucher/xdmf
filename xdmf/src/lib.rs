@@ -211,7 +211,7 @@ impl TimeSeriesWriter {
     }
 
     pub fn write_mesh_and_submeshes<'a, C, M, S, I>(
-        mut self,
+        self,
         _points: &ArrayView2<f64>,
         _cells: &'a C,
         _submeshes: &M,

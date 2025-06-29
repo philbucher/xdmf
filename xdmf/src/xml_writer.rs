@@ -100,7 +100,7 @@ mod tests {
         let points = &ArrayView2::from_shape((2, 3), &[1., 2., 3., 4., 5., 6.]).unwrap();
         let cells = ArrayView1::from(&[0, 1, 2, 0, 2, 3]);
 
-        let result = writer.write_mesh(&points, &cells).unwrap();
+        let result = writer.write_mesh(points, &cells).unwrap();
         assert_eq!(
             result,
             (

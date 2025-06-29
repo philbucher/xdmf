@@ -173,7 +173,7 @@ fn temporal_collection_grid() {
                 }),
             ]),
         )],
-        data_items: data_items,
+        data_items,
     });
 
     // Create an in-memory buffer to serialize to

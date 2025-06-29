@@ -125,8 +125,10 @@ mod tests {
 
     #[test]
     fn test_data_item_reference() {
-        let mut source_data_item = DataItem::default();
-        source_data_item.name = Some("source_data_item".to_string());
+        let source_data_item = DataItem {
+            name: Some("source_data_item".to_string()),
+            ..Default::default()
+        };
 
         let ref_item =
             DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());
@@ -163,8 +165,10 @@ mod tests {
 
     #[test]
     fn test_data_item_reference_serialize() {
-        let mut source_data_item = DataItem::default();
-        source_data_item.name = Some("source_data_item".to_string());
+        let source_data_item = DataItem {
+            name: Some("source_data_item".to_string()),
+            ..Default::default()
+        };
 
         let ref_item =
             DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());

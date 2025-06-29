@@ -43,6 +43,7 @@ impl DataWriter for SingleFileHdf5Writer {
 }
 
 pub(crate) struct MultipleFilesHdf5Writer {
+    #[allow(dead_code)] // remove this, only temp to silence clippy
     base_file_name: PathBuf,
 }
 
