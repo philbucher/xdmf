@@ -36,6 +36,10 @@ impl DataWriter for XmlWriter {
         Ok((array_to_string_fmt(points), array_to_string_fmt(cells)))
     }
 
+    fn write_submesh(&mut self, _name: &str, indices: &ArrayView1<usize>) -> IoResult<String> {
+        Ok(array_to_string_fmt(indices))
+    }
+
     fn write_data(&mut self, _time: &str, data: &Values) -> IoResult<String> {
         Ok(self.values_to_string(data))
     }

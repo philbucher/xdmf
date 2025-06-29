@@ -29,11 +29,14 @@ pub use xdmf_elements::topology::TopologyType;
 
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;
+
     fn write_mesh(
         &mut self,
         points: &ArrayView2<f64>,
         cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)>;
+
+    fn write_submesh(&mut self, name: &str, indices: &ArrayView1<usize>) -> IoResult<String>;
 
     fn write_data(&mut self, time: &str, data: &Values) -> IoResult<String>;
 
@@ -213,20 +216,55 @@ impl TimeSeriesWriter {
 
     // TODO check if indices are within bounds of points and cells
     // TODO check if submesh names are unique
-    pub fn write_mesh_and_submeshes<'a, C, M, S, I>(
+    pub fn write_mesh_and_submeshes<'a, C, M>(
         self,
         points: &ArrayView2<f64>,
         cells: &'a C,
-        _submeshes: &M,
+        submeshes: &'a M,
     ) -> IoResult<TimeSeriesDataWriter>
     where
         &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
-        M: IntoIterator<Item = (S, I, I)>,
-        S: ToString,
-        I: IntoIterator<Item = usize>,
+        &'a M: IntoIterator<Item = &'a SubMesh<'a>>,
     {
-        self.write_mesh(points, cells)
+        let mut ts = self.write_mesh(points, cells)?;
+
+        for submesh in submeshes {
+            let name_points = format!("{}_points", submesh.name);
+            let name_cells = format!("{}_cells", submesh.name);
+
+            ts.xdmf.domains[0].data_items.push(DataItem {
+                data: ts
+                    .writer
+                    .write_submesh(&name_points, &submesh.point_indices)?,
+                name: Some(name_points),
+                dimensions: Some(Dimensions(submesh.point_indices.shape().into())),
+                number_type: Some(NumberType::UInt),
+                format: Some(ts.writer.format()),
+                precision: Some(8),
+                reference: None,
+            });
+
+            ts.xdmf.domains[0].data_items.push(DataItem {
+                data: ts
+                    .writer
+                    .write_submesh(&name_cells, &submesh.cell_indices)?,
+                name: Some(name_cells),
+                dimensions: Some(Dimensions(submesh.cell_indices.shape().into())),
+                number_type: Some(NumberType::UInt),
+                format: Some(ts.writer.format()),
+                precision: Some(8),
+                reference: None,
+            });
+        }
+
+        Ok(ts)
     }
+}
+
+pub struct SubMesh<'a> {
+    pub name: String,
+    pub point_indices: ArrayView1<'a, usize>,
+    pub cell_indices: ArrayView1<'a, usize>,
 }
 
 fn concatenate_cells<'a, C>(cells: &'a C) -> Array1<usize>

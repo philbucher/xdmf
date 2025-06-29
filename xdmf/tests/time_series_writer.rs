@@ -25,15 +25,19 @@ fn test_write_xdmf() {
         )
         .unwrap();
 
+    let point_indx = vec![0, 1, 2];
+    let cell_indx = vec![0];
+
     let mut xdmf_writer_submeshes = xdmf_writer_submeshes
         .write_mesh_and_submeshes(
             &ArrayView2::from_shape((4, 3), &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.])
                 .unwrap(),
             &cells,
-            &[
-                ("submesh1".to_string(), 0..2, 0..2),
-                ("submesh2".to_string(), 1..3, 1..3),
-            ],
+            &[xdmf::SubMesh {
+                name: "submesh1".to_string(),
+                point_indices: ArrayView1::from(&point_indx),
+                cell_indices: ArrayView1::from(&cell_indx),
+            }],
         )
         .unwrap();
 

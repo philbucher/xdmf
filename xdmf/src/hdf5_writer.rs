@@ -32,6 +32,10 @@ impl DataWriter for SingleFileHdf5Writer {
         unimplemented!()
     }
 
+    fn write_submesh(&mut self, _name: &str, _indices: &ArrayView1<usize>) -> IoResult<String> {
+        unimplemented!()
+    }
+
     fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
         unimplemented!()
     }
@@ -65,6 +69,10 @@ impl DataWriter for MultipleFilesHdf5Writer {
         _points: &ArrayView2<f64>,
         _cells: &ArrayView1<usize>,
     ) -> IoResult<(String, String)> {
+        unimplemented!()
+    }
+
+    fn write_submesh(&mut self, _name: &str, _indices: &ArrayView1<usize>) -> IoResult<String> {
         unimplemented!()
     }
 
