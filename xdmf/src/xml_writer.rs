@@ -25,7 +25,7 @@ impl DataWriter for XmlWriter {
         Format::XML
     }
 
-    fn write_mesh(&mut self, points: &Vec<f64>, cells: &Vec<u64>) -> IoResult<(String, String)> {
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
         Ok((array_to_string_fmt(points), array_to_string_fmt(cells)))
     }
 
@@ -33,8 +33,8 @@ impl DataWriter for XmlWriter {
         &mut self,
         _name: &str,
 
-        point_indices: &Vec<u64>,
-        cell_indices: &Vec<u64>,
+        point_indices: &[u64],
+        cell_indices: &[u64],
     ) -> IoResult<(String, String)> {
         Ok((
             array_to_string_fmt(point_indices),
@@ -77,7 +77,7 @@ impl_format_number!(u64, "{}");
 impl_format_number!(usize, "{}");
 
 /// Generic formatter for ndarray arrays of either f64 or i32
-pub fn array_to_string_fmt<T>(vec: &Vec<T>) -> String
+pub fn array_to_string_fmt<T>(vec: &[T]) -> String
 where
     T: FormatNumber,
 {

@@ -61,6 +61,52 @@ impl Domain {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(u8)]
+pub enum CellType {
+    Triangle = 4,
+    Quadrilateral = 5,
+    Tetrahedron = 6,
+    Pyramid = 7,
+    Wedge = 8,
+    Hexahedron = 9,
+    Edge3 = 34,
+    Quadrilateral9 = 35,
+    Triangle6 = 36,
+    Quadrilateral8 = 37,
+    Tetrahedron10 = 38,
+    Pyramid13 = 39,
+    Wedge15 = 40,
+    Wedge18 = 41,
+    Hexahedron20 = 48,
+    Hexahedron24 = 49,
+    Hexahedron27 = 50,
+}
+
+impl CellType {
+    pub fn num_points(&self) -> usize {
+        match self {
+            CellType::Triangle => 3,
+            CellType::Quadrilateral => 4,
+            CellType::Tetrahedron => 4,
+            CellType::Pyramid => 5,
+            CellType::Wedge => 6,
+            CellType::Hexahedron => 8,
+            CellType::Edge3 => 2,
+            CellType::Quadrilateral9 => 9,
+            CellType::Triangle6 => 6,
+            CellType::Quadrilateral8 => 8,
+            CellType::Tetrahedron10 => 10,
+            CellType::Pyramid13 => 13,
+            CellType::Wedge15 => 15,
+            CellType::Wedge18 => 18,
+            CellType::Hexahedron20 => 20,
+            CellType::Hexahedron24 => 24,
+            CellType::Hexahedron27 => 27,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

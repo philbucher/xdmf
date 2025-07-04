@@ -2,7 +2,6 @@ use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
 
 use hdf5::File as H5File;
-use ndarray::{ArrayView1, ArrayView2};
 
 use crate::DataWriter;
 use xdmf_elements::data_item::Format;
@@ -24,15 +23,16 @@ impl DataWriter for SingleFileHdf5Writer {
         Format::HDF
     }
 
-    fn write_mesh(
-        &mut self,
-        _points: &ArrayView2<f64>,
-        _cells: &ArrayView1<usize>,
-    ) -> IoResult<(String, String)> {
+    fn write_mesh(&mut self, _points: &[f64], _cells: &[u64]) -> IoResult<(String, String)> {
         unimplemented!()
     }
 
-    fn write_submesh(&mut self, _name: &str, _indices: &ArrayView1<usize>) -> IoResult<String> {
+    fn write_submesh(
+        &mut self,
+        _name: &str,
+        _point_indices: &[u64],
+        _cell_indices: &[u64],
+    ) -> IoResult<(String, String)> {
         unimplemented!()
     }
 
@@ -64,15 +64,16 @@ impl DataWriter for MultipleFilesHdf5Writer {
         Format::HDF
     }
 
-    fn write_mesh(
-        &mut self,
-        _points: &ArrayView2<f64>,
-        _cells: &ArrayView1<usize>,
-    ) -> IoResult<(String, String)> {
+    fn write_mesh(&mut self, _points: &[f64], _cells: &[u64]) -> IoResult<(String, String)> {
         unimplemented!()
     }
 
-    fn write_submesh(&mut self, _name: &str, _indices: &ArrayView1<usize>) -> IoResult<String> {
+    fn write_submesh(
+        &mut self,
+        _name: &str,
+        _point_indices: &[u64],
+        _cell_indices: &[u64],
+    ) -> IoResult<(String, String)> {
         unimplemented!()
     }
 

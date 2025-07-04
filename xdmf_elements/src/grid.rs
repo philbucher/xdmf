@@ -39,12 +39,12 @@ pub struct Uniform {
 }
 
 impl Uniform {
-    pub fn set_attributes(&mut self, attributes: &Vec<Attribute>) {
+    pub fn set_attributes(&mut self, attributes: &[Attribute]) {
         if self.attributes.is_none() {
             self.attributes = Some(vec![]);
         }
 
-        let mut attributes = attributes.clone();
+        let mut attributes = attributes.to_vec();
 
         // if indices are present, i.e. this is a subgrid, then they must be added to the attributes (before the actual dataitem)
         if let Some(indcs) = &self.indices {
@@ -91,10 +91,10 @@ impl Collection {
         for grid in &mut self.grids {
             match grid {
                 Grid::Uniform(uniform) => {
-                    uniform.set_attributes(&attributes);
+                    uniform.set_attributes(attributes);
                 }
                 Grid::Collection(collection) => {
-                    collection.set_attributes(&attributes);
+                    collection.set_attributes(attributes);
                 }
                 _ => {}
             }

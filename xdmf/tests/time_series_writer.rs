@@ -11,16 +11,10 @@ fn test_write_xdmf() {
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
     );
 
-    let cells = vec![(
-        xdmf::TopologyType::Triangle,
-        ArrayView2::from_shape((2, 3), &[0, 1, 2, 0, 2, 3]).unwrap(),
-    )];
-
     let mut xdmf_writer = xdmf_writer
         .write_mesh(
-            &ArrayView2::from_shape((4, 3), &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.])
-                .unwrap(),
-            &cells,
+            &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.],
+            (&[1, 2, 3], &[xdmf::CellType::Triangle]),
         )
         .unwrap();
 
@@ -29,14 +23,17 @@ fn test_write_xdmf() {
 
     let mut xdmf_writer_submeshes = xdmf_writer_submeshes
         .write_mesh_and_submeshes(
-            &ArrayView2::from_shape((4, 3), &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.])
-                .unwrap(),
-            &cells,
-            &[xdmf::SubMesh {
-                name: "submesh1".to_string(),
-                point_indices: ArrayView1::from(&point_indx),
-                cell_indices: ArrayView1::from(&cell_indx),
-            }],
+            &[0., 0., 0., 0., 1., 0., 1., 1., 0., 1., 0., 1.],
+            (&[1, 2, 3], &[xdmf::CellType::Triangle]),
+            &[(
+                "submesh_1".to_string(),
+                xdmf::SubMesh {
+                    point_indices: point_indx,
+                    cell_indices: cell_indx,
+                },
+            )]
+            .into_iter()
+            .collect(),
         )
         .unwrap();
 
@@ -45,26 +42,30 @@ fn test_write_xdmf() {
         let point_data_1 = vec![1., 2., 3., 6. * i as f64];
         let point_data_2 = vec![1. * i as f64, 2., 5., 6.];
 
-        let data = vec![
-            xdmf::Data::new_point_data(
-                "point_data1",
-                xdmf::AttributeType::Scalar,
-                xdmf::Values::View1Df64(ArrayView1::from(&point_data_1)),
+        let point_data = vec![
+            (
+                "point_data1".to_string(),
+                (xdmf::AttributeType::Scalar, point_data_1.into()),
             ),
-            xdmf::Data::new_point_data(
-                "point_data2",
-                xdmf::AttributeType::Scalar,
-                xdmf::Values::View1Df64(ArrayView1::from(&point_data_2)),
+            (
+                "point_data2".to_string(),
+                (xdmf::AttributeType::Scalar, point_data_2.into()),
             ),
-            xdmf::Data::new_cell_data(
-                "cell_data",
-                xdmf::AttributeType::Scalar,
-                xdmf::Values::View1Df64(ArrayView1::from(&cell_data)),
-            ),
-        ];
-        xdmf_writer.write_data(&i.to_string(), &data).unwrap();
+        ]
+        .into_iter()
+        .collect();
+
+        let cell_data = vec![(
+            "cell_data".to_string(),
+            (xdmf::AttributeType::Scalar, cell_data.into()),
+        )]
+        .into_iter()
+        .collect();
+        xdmf_writer
+            .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+            .unwrap();
         xdmf_writer_submeshes
-            .write_data(&i.to_string(), &data)
+            .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
             .unwrap();
     }
 }
