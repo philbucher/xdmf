@@ -1,4 +1,3 @@
-use ndarray::prelude::*;
 use xdmf::TimeSeriesWriter;
 
 #[test]

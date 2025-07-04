@@ -1,8 +1,7 @@
+use std::collections::BTreeMap;
 use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
-
-use itertools::Itertools;
-use ndarray::{Array1, ArrayView1, ArrayView2};
+use std::vec;
 
 use xdmf_elements::{
     Xdmf, attribute,
@@ -30,13 +29,14 @@ pub use xdmf_elements::topology::TopologyType;
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;
 
-    fn write_mesh(
-        &mut self,
-        points: &ArrayView2<f64>,
-        cells: &ArrayView1<usize>,
-    ) -> IoResult<(String, String)>;
+    fn write_mesh(&mut self, points: &Vec<f64>, cells: &Vec<u64>) -> IoResult<(String, String)>;
 
-    fn write_submesh(&mut self, name: &str, indices: &ArrayView1<usize>) -> IoResult<String>;
+    fn write_submesh(
+        &mut self,
+        name: &str,
+        point_indices: &Vec<u64>,
+        cell_indices: &Vec<u64>,
+    ) -> IoResult<(String, String)>;
 
     fn write_data(&mut self, time: &str, data: &Values) -> IoResult<String>;
 
@@ -125,41 +125,26 @@ impl TimeSeriesWriter {
     // TODO check bounds of connectivity indices
     pub fn write_mesh<'a, C>(
         mut self,
-        points: &ArrayView2<f64>,
-        cells: &'a C,
-    ) -> IoResult<TimeSeriesDataWriter>
-    where
-        &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
-    {
-        let geom_type = match points.shape()[1] {
-            2 => GeometryType::XY,
-            3 => GeometryType::XYZ,
-            _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Points must have 2 or 3 dimensions",
-                ));
-            }
-        };
-
-        let dim_points = points.shape()[1];
-        if dim_points != 2 && dim_points != 3 {
+        points: &Vec<f64>,
+        cells: &(Vec<u64>, Vec<u8>),
+    ) -> IoResult<TimeSeriesDataWriter> {
+        if points.len() % 3 != 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Points must have 2 or 3 dimensions",
+                "Points must have 3 dimensions",
             ));
         }
 
-        let num_cells = cells.into_iter().map(|(_, v)| v.shape()[0]).sum::<usize>();
+        let num_cells = cells.1.len();
 
         // Concatenate all arrays along axis 0
         let cells_flat = concatenate_cells(cells);
 
-        let (points_data, cells_data) = self.writer.write_mesh(points, &cells_flat.view())?;
+        let (points_data, cells_data) = self.writer.write_mesh(points, &cells_flat)?;
 
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
-            dimensions: Some(Dimensions(points.shape().into())),
+            dimensions: Some(Dimensions(vec![points.len() / 3, 3])),
             data: points_data,
             number_type: Some(NumberType::Float),
             precision: Some(8), // Default precision for f64
@@ -169,7 +154,7 @@ impl TimeSeriesWriter {
 
         let data_item_connectivity = DataItem {
             name: Some("connectivity".to_string()),
-            dimensions: Some(Dimensions(cells_flat.shape().into())),
+            dimensions: Some(Dimensions(vec![num_cells])),
             number_type: Some(NumberType::UInt),
             data: cells_data,
             format: Some(self.writer.format()),
@@ -186,7 +171,7 @@ impl TimeSeriesWriter {
             name: "mesh".to_string(),
             grid_type: GridType::Uniform,
             geometry: Geometry {
-                geometry_type: geom_type,
+                geometry_type: GeometryType::XYZ,
                 data_item: data_item_coords_ref,
             },
             topology: Topology {
@@ -194,6 +179,9 @@ impl TimeSeriesWriter {
                 number_of_elements: num_cells.to_string(),
                 data_item: data_item_connectivity_ref,
             },
+            time: None,
+            attributes: None,
+            indices: None,
         };
 
         self.xdmf.domains[0]
@@ -216,21 +204,21 @@ impl TimeSeriesWriter {
 
     // TODO check if indices are within bounds of points and cells
     // TODO check if submesh names are unique
+    // TODO use SpatialCollection when submeshes are used
+    // TODO each tolologytype can only appear once, otherwise indexing for submeshes will be wrong
     pub fn write_mesh_and_submeshes<'a, C, M>(
         self,
-        points: &ArrayView2<f64>,
-        cells: &'a C,
-        submeshes: &'a M,
-    ) -> IoResult<TimeSeriesDataWriter>
-    where
-        &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
-        &'a M: IntoIterator<Item = &'a SubMesh<'a>>,
-    {
+        points: &Vec<f64>,
+        cells: &(Vec<u64>, Vec<u8>),
+        submeshes: &BTreeMap<String, SubMesh>,
+    ) -> IoResult<TimeSeriesDataWriter> {
         let mut ts = self.write_mesh(points, cells)?;
 
-        for submesh in submeshes {
-            let name_points = format!("{}_points", submesh.name);
-            let name_cells = format!("{}_cells", submesh.name);
+        let format = ts.writer.format();
+
+        for (submesh_name, submesh) in submeshes {
+            let name_points = format!("{}_points", submesh_name);
+            let name_cells = format!("{}_cells", submesh_name);
 
             ts.xdmf.domains[0].data_items.push(DataItem {
                 data: ts
@@ -239,7 +227,7 @@ impl TimeSeriesWriter {
                 name: Some(name_points),
                 dimensions: Some(Dimensions(submesh.point_indices.shape().into())),
                 number_type: Some(NumberType::UInt),
-                format: Some(ts.writer.format()),
+                format: Some(format),
                 precision: Some(8),
                 reference: None,
             });
@@ -251,7 +239,7 @@ impl TimeSeriesWriter {
                 name: Some(name_cells),
                 dimensions: Some(Dimensions(submesh.cell_indices.shape().into())),
                 number_type: Some(NumberType::UInt),
-                format: Some(ts.writer.format()),
+                format: Some(format),
                 precision: Some(8),
                 reference: None,
             });
@@ -261,16 +249,12 @@ impl TimeSeriesWriter {
     }
 }
 
-pub struct SubMesh<'a> {
-    pub name: String,
-    pub point_indices: ArrayView1<'a, usize>,
-    pub cell_indices: ArrayView1<'a, usize>,
+pub struct SubMesh {
+    pub point_indices: Vec<u64>,
+    pub cell_indices: Vec<u64>,
 }
 
-fn concatenate_cells<'a, C>(cells: &'a C) -> Array1<usize>
-where
-    &'a C: IntoIterator<Item = &'a (TopologyType, ArrayView2<'a, usize>)>,
-{
+fn concatenate_cells(cells: &(Vec<u64>, Vec<u8>)) -> Vec<u64> {
     let concatenated_iter = cells
         .into_iter()
         .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
@@ -303,35 +287,45 @@ impl TimeSeriesDataWriter {
     // - make sure that names for data location (aka Center) are unique (Paraview just ignores duplicate names)
     // - check for unique time steps
     // - assert dimensions of points and cells match
-    pub fn write_data<'a, D>(&mut self, time: &str, data: &'a D) -> IoResult<()>
-    where
-        &'a D: IntoIterator<Item = &'a Data<'a>>,
-    {
+    pub fn write_data<D>(
+        &mut self,
+        time: &str,
+        point_data: Option<&BTreeMap<String, Data>>,
+        cell_data: Option<&BTreeMap<String, Data>>,
+    ) -> IoResult<()> {
         let format = self.writer.format();
         let mut new_attributes = Vec::new();
 
-        for d in data {
-            let v = d.values();
-            let data_item = DataItem {
-                dimensions: Some(v.dimensions()),
-                number_type: Some(v.number_type()),
-                format: Some(format),
-                precision: Some(v.precision()),
-                data: self.writer.write_data(time, d.values())?,
-                name: Some(d.name().to_string()),
-                reference: None,
-            };
+        let mut create_attributes = |data_map: Option<&BTreeMap<String, Data>>,
+                                     center: attribute::Center|
+         -> IoResult<()> {
+            for (data_name, data) in data_map.unwrap_or(&BTreeMap::new()) {
+                let vals = data.values();
+                let data_item = DataItem {
+                    name: None,
+                    dimensions: Some(vals.dimensions()),
+                    number_type: Some(vals.number_type()),
+                    format: Some(format),
+                    precision: Some(vals.precision()),
+                    data: self.writer.write_data(time, vals)?,
+                    reference: None,
+                };
 
-            let attribute = attribute::Attribute {
-                name: d.name(),
-                attribute_type: d.attribute_type(),
-                center: d.center(),
-                data_items: vec![data_item],
-            };
-            new_attributes.push(attribute);
-        }
+                let attribute = attribute::Attribute {
+                    name: data_name.clone(),
+                    attribute_type: data.attribute_type(),
+                    center: center,
+                    data_items: vec![data_item],
+                };
+                new_attributes.push(attribute);
+            }
+            Ok(())
+        };
 
-        self.temporal_grid().create_new_time(time, new_attributes);
+        create_attributes(point_data, attribute::Center::Node)?;
+        create_attributes(cell_data, attribute::Center::Cell)?;
+
+        self.temporal_grid().create_new_time(time, &new_attributes);
 
         self.write()
     }

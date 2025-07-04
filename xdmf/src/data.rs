@@ -2,39 +2,23 @@ use xdmf_elements::attribute;
 
 use crate::values::Values;
 
-pub enum Data<'a> {
-    PointData(PointDataImpl<'a>),
-    CellData(CellDataImpl<'a>),
+pub enum Data {
+    PointData(PointDataImpl),
+    CellData(CellDataImpl),
 }
 
-impl<'a> Data<'a> {
-    pub fn new_point_data(
-        name: impl ToString,
-        attribute_type: attribute::AttributeType,
-        values: Values<'a>,
-    ) -> Self {
+impl Data {
+    pub fn new_point_data(attribute_type: attribute::AttributeType, values: Values) -> Self {
         Data::PointData(PointDataImpl {
-            name: name.to_string(),
             attribute_type,
             values,
         })
     }
-    pub fn new_cell_data(
-        name: impl ToString,
-        attribute_type: attribute::AttributeType,
-        values: Values<'a>,
-    ) -> Self {
+    pub fn new_cell_data(attribute_type: attribute::AttributeType, values: Values) -> Self {
         Data::CellData(CellDataImpl {
-            name: name.to_string(),
             attribute_type,
             values,
         })
-    }
-    pub(crate) fn name(&self) -> String {
-        match self {
-            Data::PointData(data) => data.name.clone(),
-            Data::CellData(data) => data.name.clone(),
-        }
     }
     pub(crate) fn attribute_type(&self) -> attribute::AttributeType {
         match self {
@@ -48,7 +32,7 @@ impl<'a> Data<'a> {
             Data::CellData(_) => attribute::Center::Cell,
         }
     }
-    pub(crate) fn values(&self) -> &Values<'a> {
+    pub(crate) fn values(&self) -> &Values {
         match self {
             Data::PointData(data) => &data.values,
             Data::CellData(data) => &data.values,
@@ -56,14 +40,12 @@ impl<'a> Data<'a> {
     }
 }
 
-pub struct PointDataImpl<'a> {
-    name: String,
+pub struct PointDataImpl {
     attribute_type: attribute::AttributeType,
-    values: Values<'a>,
+    values: Values,
 }
 
-pub struct CellDataImpl<'a> {
-    name: String,
+pub struct CellDataImpl {
     attribute_type: attribute::AttributeType,
-    values: Values<'a>,
+    values: Values,
 }

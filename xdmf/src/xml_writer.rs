@@ -1,7 +1,5 @@
 use std::io::Result as IoResult;
 
-use ndarray::{ArrayView, ArrayView1, ArrayView2, Dimension};
-
 use crate::DataWriter;
 use crate::values::Values;
 
@@ -16,9 +14,8 @@ impl XmlWriter {
 
     fn values_to_string(&self, data: &Values) -> String {
         match data {
-            Values::View1Df64(view) => array_to_string_fmt(view),
-            Values::View2Df64(view) => array_to_string_fmt(view),
-            Values::ViewDynf64(view) => array_to_string_fmt(view),
+            Values::F64(v) => array_to_string_fmt(v),
+            Values::U64(v) => array_to_string_fmt(v),
         }
     }
 }
@@ -28,16 +25,21 @@ impl DataWriter for XmlWriter {
         Format::XML
     }
 
-    fn write_mesh(
-        &mut self,
-        points: &ArrayView2<f64>,
-        cells: &ArrayView1<usize>,
-    ) -> IoResult<(String, String)> {
+    fn write_mesh(&mut self, points: &Vec<f64>, cells: &Vec<u64>) -> IoResult<(String, String)> {
         Ok((array_to_string_fmt(points), array_to_string_fmt(cells)))
     }
 
-    fn write_submesh(&mut self, _name: &str, indices: &ArrayView1<usize>) -> IoResult<String> {
-        Ok(array_to_string_fmt(indices))
+    fn write_submesh(
+        &mut self,
+        _name: &str,
+
+        point_indices: &Vec<u64>,
+        cell_indices: &Vec<u64>,
+    ) -> IoResult<(String, String)> {
+        Ok((
+            array_to_string_fmt(point_indices),
+            array_to_string_fmt(cell_indices),
+        ))
     }
 
     fn write_data(&mut self, _time: &str, data: &Values) -> IoResult<String> {
@@ -75,13 +77,11 @@ impl_format_number!(u64, "{}");
 impl_format_number!(usize, "{}");
 
 /// Generic formatter for ndarray arrays of either f64 or i32
-pub fn array_to_string_fmt<T, D>(array: &ArrayView<T, D>) -> String
+pub fn array_to_string_fmt<T>(vec: &Vec<T>) -> String
 where
     T: FormatNumber,
-    D: Dimension,
 {
-    array
-        .iter()
+    vec.iter()
         .map(|elem| elem.format_number())
         .collect::<Vec<_>>()
         .join(" ")
@@ -91,8 +91,6 @@ where
 mod tests {
     use super::*;
 
-    use ndarray::ArrayViewD;
-
     #[test]
     fn test_format() {
         assert_eq!(XmlWriter::new().format(), Format::XML);
@@ -101,10 +99,10 @@ mod tests {
     #[test]
     fn test_write_mesh() {
         let mut writer = XmlWriter::new();
-        let points = &ArrayView2::from_shape((2, 3), &[1., 2., 3., 4., 5., 6.]).unwrap();
-        let cells = ArrayView1::from(&[0, 1, 2, 0, 2, 3]);
+        let points = vec![1., 2., 3., 4., 5., 6.];
+        let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
-        let result = writer.write_mesh(points, &cells).unwrap();
+        let result = writer.write_mesh(&points, &cells).unwrap();
         assert_eq!(
             result,
             (
@@ -115,43 +113,15 @@ mod tests {
     }
 
     #[test]
-    fn test_write_data_view_1d_f64() {
+    fn test_write_data_vec_f64() {
         let mut writer = XmlWriter::new();
         let raw_data = vec![1.0, 2.0, 3.0];
-        let data = Values::View1Df64(ArrayView1::from(&raw_data));
+        let data = raw_data.into();
 
         let result = writer.write_data("0.0", &data).unwrap();
         assert_eq!(
             result,
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
-        );
-    }
-
-    #[test]
-    fn test_write_data_view_2d_f64() {
-        let mut writer = XmlWriter::new();
-        let raw_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let data: Values<'_> =
-            Values::View2Df64(ArrayView2::from_shape((2, 3), &raw_data).unwrap());
-
-        let result = writer.write_data("0.0", &data).unwrap();
-        assert_eq!(
-            result,
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0"
-        );
-    }
-
-    #[test]
-    fn test_write_data_view_dyn_f64() {
-        let mut writer = XmlWriter::new();
-        let raw_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let data: Values<'_> =
-            Values::ViewDynf64(ArrayViewD::from_shape(ndarray::IxDyn(&[3, 2]), &raw_data).unwrap());
-
-        let result = writer.write_data("0.0", &data).unwrap();
-        assert_eq!(
-            result,
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0"
         );
     }
 }

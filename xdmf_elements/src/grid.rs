@@ -1,20 +1,20 @@
 use serde::Serialize;
 
 use crate::attribute::Attribute;
+use crate::data_item::DataItem;
 use crate::geometry::Geometry;
 use crate::topology::Topology;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum Grid {
     Uniform(Uniform),
     Tree(Tree),
     Collection(Collection),
-    Reference(Reference),
     TimeSeriesGrid(TimeSeriesGrid),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Uniform {
     #[serde(rename = "@Name")]
     pub name: String,
@@ -27,9 +27,36 @@ pub struct Uniform {
 
     #[serde(rename = "Topology")]
     pub topology: Topology,
+
+    #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
+    pub time: Option<Time>,
+
+    #[serde(rename = "Attribute", skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<Vec<Attribute>>,
+
+    #[serde(skip_serializing)]
+    pub indices: Option<DataItem>,
 }
 
-#[derive(Debug, Serialize)]
+impl Uniform {
+    pub fn set_attributes(&mut self, attributes: &Vec<Attribute>) {
+        if self.attributes.is_none() {
+            self.attributes = Some(vec![]);
+        }
+
+        let mut attributes = attributes.clone();
+
+        // if indices are present, i.e. this is a subgrid, then they must be added to the attributes (before the actual dataitem)
+        if let Some(indcs) = &self.indices {
+            for a in attributes.iter_mut() {
+                a.set_indices(indcs.clone());
+            }
+        }
+        self.attributes = Some(attributes);
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Tree {
     #[serde(rename = "@Name")]
     pub name: String,
@@ -41,7 +68,7 @@ pub struct Tree {
     pub grids: Vec<Grid>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Collection {
     #[serde(rename = "@Name")]
     pub name: String,
@@ -54,27 +81,28 @@ pub struct Collection {
 
     #[serde(rename = "Grid")]
     pub grids: Vec<Grid>,
+
+    #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
+    pub time: Option<Time>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct Reference {
-    #[serde(rename = "@Name")]
-    pub name: String,
-
-    #[serde(rename = "Geometry")]
-    pub geometry: Geometry,
-
-    #[serde(rename = "Topology")]
-    pub topology: Topology,
-
-    #[serde(rename = "Time")]
-    pub time: Time,
-
-    #[serde(rename = "Attribute")]
-    pub attributes: Vec<Attribute>,
+impl Collection {
+    pub fn set_attributes(&mut self, attributes: &Vec<Attribute>) {
+        for grid in &mut self.grids {
+            match grid {
+                Grid::Uniform(uniform) => {
+                    uniform.set_attributes(&attributes);
+                }
+                Grid::Collection(collection) => {
+                    collection.set_attributes(&attributes);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Time {
     #[serde(rename = "@Value")]
     pub value: String,
@@ -88,7 +116,7 @@ impl Time {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TimeSeriesGrid {
     #[serde(rename = "@Name")]
     pub name: String,
@@ -110,6 +138,9 @@ impl Grid {
             grid_type: GridType::Uniform,
             topology,
             geometry,
+            time: None,
+            attributes: None,
+            indices: None,
         })
     }
 
@@ -123,6 +154,7 @@ impl Grid {
             grid_type: GridType::Collection,
             collection_type,
             grids: grids.unwrap_or_default(),
+            time: None,
         })
     }
 
@@ -145,38 +177,42 @@ impl Grid {
 }
 
 impl TimeSeriesGrid {
-    pub fn create_new_time(&mut self, time: impl ToString, attributes: Vec<Attribute>) {
-        let first_grid = self
+    pub fn create_new_time(&mut self, time: impl ToString, attributes: &Vec<Attribute>) {
+        let prev_grid = self
             .grids
-            .first()
+            .last()
             .expect("Time series grid must have at least one grid");
 
-        let (geom, topo) = match first_grid {
-            Grid::Uniform(grid) => (grid.geometry.clone(), grid.topology.clone()),
-            Grid::Reference(grid) => (grid.geometry.clone(), grid.topology.clone()),
-            _ => panic!("First grid in time series must be a Uniform or Reference grid"),
+        // let mut new_grid = if prev_grid.time.is_some() {
+        //     prev_grid.clone()
+        // } else {
+        //     prev_grid
+        // };
+        let mut new_grid = prev_grid.clone();
+
+        match new_grid {
+            Grid::Uniform(ref mut grid) => {
+                if grid.time.is_none() {
+                    // remove the first grid if it has no time, i.e. this is the first time data is written
+                    self.grids.remove(0);
+                }
+                grid.name = format!("{}-t{}", self.name, time.to_string());
+                grid.time = Some(Time::new(time));
+                grid.set_attributes(attributes);
+            }
+            Grid::Collection(ref mut grid) if grid.collection_type == CollectionType::Spatial => {
+                if grid.time.is_none() {
+                    // remove the first grid if it has no time, i.e. this is the first time data is written
+                    self.grids.remove(0);
+                }
+                grid.name = format!("{}-t{}", self.name, time.to_string());
+                grid.time = Some(Time::new(time));
+                grid.set_attributes(attributes);
+            }
+            _ => panic!("First grid in time series must be a Uniform or (spatial) collection grid"),
         };
 
-        let ref_time = Reference {
-            name: format!("{}-t{}", self.name, time.to_string()),
-            geometry: geom,
-            topology: topo,
-            time: Time::new(time),
-            attributes,
-        };
-
-        self.grids.push(Grid::Reference(ref_time));
-
-        // if first grid is a Uniform grid, then remove it
-        // this happens the first time a time is created
-        // TODO change this once collection grids are supported (aka for submeshes support)
-        let first_grid = self
-            .grids
-            .first()
-            .expect("Time series grid must have at least one grid");
-        if let Grid::Uniform(_) = first_grid {
-            self.grids.remove(0);
-        }
+        self.grids.push(new_grid);
     }
 }
 

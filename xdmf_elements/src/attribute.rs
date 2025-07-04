@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::data_item::DataItem;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Attribute {
     #[serde(rename = "@Name")]
     pub name: String,
@@ -15,6 +15,18 @@ pub struct Attribute {
 
     #[serde(rename = "DataItem")]
     pub data_items: Vec<DataItem>,
+}
+
+impl Attribute {
+    pub(crate) fn set_indices(&mut self, indices: DataItem) {
+        assert_eq!(
+            self.data_items.len(),
+            1,
+            "Indices can only be set if one data item is present."
+        );
+        // prepend indices to the data items
+        self.data_items.insert(0, indices);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]

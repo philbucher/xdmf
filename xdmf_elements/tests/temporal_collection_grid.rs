@@ -6,7 +6,7 @@ use xdmf_elements::attribute::{Attribute, AttributeType, Center};
 use xdmf_elements::data_item::{DataItem, NumberType};
 use xdmf_elements::dimensions::Dimensions;
 use xdmf_elements::geometry::{Geometry, GeometryType};
-use xdmf_elements::grid::{CollectionType, Grid, Reference, Time};
+use xdmf_elements::grid::{CollectionType, Grid, Time, Uniform};
 use xdmf_elements::topology::{Topology, TopologyType};
 use xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
@@ -36,7 +36,7 @@ fn temporal_collection_grid() {
             "temporal_collection_grid",
             CollectionType::Temporal,
             Some(vec![
-                Grid::Reference(Reference {
+                Grid::Uniform(Uniform {
                     name: "Grid_t1".into(),
                     geometry: Geometry {
                         geometry_type: GeometryType::XYZ,
@@ -53,10 +53,12 @@ fn temporal_collection_grid() {
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
                     },
-                    time: Time {
+                    grid_type: xdmf_elements::grid::GridType::Uniform,
+                    indices: None,
+                    time: Some(Time {
                         value: "1.0".into(),
-                    },
-                    attributes: vec![
+                    }),
+                    attributes: Some(vec![
                         Attribute {
                             name: String::from("Pressure"),
                             attribute_type: AttributeType::Scalar,
@@ -79,9 +81,9 @@ fn temporal_collection_grid() {
                                 ..Default::default()
                             }],
                         },
-                    ],
+                    ]),
                 }),
-                Grid::Reference(Reference {
+                Grid::Uniform(Uniform {
                     name: "Grid_t2".into(),
                     geometry: Geometry {
                         geometry_type: GeometryType::XYZ,
@@ -98,10 +100,12 @@ fn temporal_collection_grid() {
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
                     },
-                    time: Time {
+                    grid_type: xdmf_elements::grid::GridType::Uniform,
+                    indices: None,
+                    time: Some(Time {
                         value: "2.0".into(),
-                    },
-                    attributes: vec![
+                    }),
+                    attributes: Some(vec![
                         Attribute {
                             name: String::from("Pressure"),
                             attribute_type: AttributeType::Scalar,
@@ -124,9 +128,9 @@ fn temporal_collection_grid() {
                                 ..Default::default()
                             }],
                         },
-                    ],
+                    ]),
                 }),
-                Grid::Reference(Reference {
+                Grid::Uniform(Uniform {
                     name: "Grid_t3".into(),
                     geometry: Geometry {
                         geometry_type: GeometryType::XYZ,
@@ -143,10 +147,12 @@ fn temporal_collection_grid() {
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
                     },
-                    time: Time {
+                    grid_type: xdmf_elements::grid::GridType::Uniform,
+                    indices: None,
+                    time: Some(Time {
                         value: "3.0".into(),
-                    },
-                    attributes: vec![
+                    }),
+                    attributes: Some(vec![
                         Attribute {
                             name: String::from("Pressure"),
                             attribute_type: AttributeType::Scalar,
@@ -169,7 +175,7 @@ fn temporal_collection_grid() {
                                 ..Default::default()
                             }],
                         },
-                    ],
+                    ]),
                 }),
             ]),
         )],
@@ -188,7 +194,7 @@ fn temporal_collection_grid() {
 <Xdmf Version="3.0">
     <Domain>
         <Grid Name="temporal_collection_grid" GridType="Collection" CollectionType="Temporal">
-            <Grid Name="Grid_t1">
+            <Grid Name="Grid_t1" GridType="Uniform">
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
@@ -203,7 +209,7 @@ fn temporal_collection_grid() {
                     <DataItem Dimensions="2" NumberType="Float" Format="XML" Precision="4">1 2</DataItem>
                 </Attribute>
             </Grid>
-            <Grid Name="Grid_t2">
+            <Grid Name="Grid_t2" GridType="Uniform">
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
@@ -218,7 +224,7 @@ fn temporal_collection_grid() {
                     <DataItem Dimensions="2" NumberType="Float" Format="XML" Precision="4">2 3</DataItem>
                 </Attribute>
             </Grid>
-            <Grid Name="Grid_t3">
+            <Grid Name="Grid_t3" GridType="Uniform">
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
