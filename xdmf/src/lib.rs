@@ -199,7 +199,6 @@ impl TimeSeriesWriter {
     }
 
     // TODO check if indices are within bounds of points and cells
-    // TODO check if submesh names are unique
     // TODO use SpatialCollection when submeshes are used
     // TODO each tolologytype can only appear once, otherwise indexing for submeshes will be wrong
     pub fn write_mesh_and_submeshes(

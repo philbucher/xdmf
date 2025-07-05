@@ -7,6 +7,7 @@ use crate::topology::Topology;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // TODO remove this
 pub enum Grid {
     Uniform(Uniform),
     Tree(Tree),
