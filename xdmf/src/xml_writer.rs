@@ -29,6 +29,7 @@ impl DataWriter for XmlWriter {
         Ok((array_to_string_fmt(points), array_to_string_fmt(cells)))
     }
 
+    #[cfg(feature = "unstable-submesh-api")]
     fn write_submesh(
         &mut self,
         _name: &str,

@@ -27,6 +27,7 @@ impl DataWriter for SingleFileHdf5Writer {
         unimplemented!()
     }
 
+    #[cfg(feature = "unstable-submesh-api")]
     fn write_submesh(
         &mut self,
         _name: &str,
@@ -68,6 +69,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         unimplemented!()
     }
 
+    #[cfg(feature = "unstable-submesh-api")]
     fn write_submesh(
         &mut self,
         _name: &str,

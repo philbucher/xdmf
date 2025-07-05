@@ -7,6 +7,7 @@ edition = "2024"
 default = ["hdf5"]
 hdf5 = ["dep:hdf5"]
 mpi = ["dep:mpi", "hdf5/mpio"]
+unstable-submesh-api = []
 
 [dependencies]
 xdmf_elements = { path = "../xdmf_elements" }

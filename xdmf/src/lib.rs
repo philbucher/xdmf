@@ -28,6 +28,7 @@ pub(crate) trait DataWriter {
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)>;
 
+    #[cfg(feature = "unstable-submesh-api")]
     fn write_submesh(
         &mut self,
         name: &str,
@@ -201,6 +202,7 @@ impl TimeSeriesWriter {
     // TODO check if indices are within bounds of points and cells
     // TODO use SpatialCollection when submeshes are used
     // TODO each tolologytype can only appear once, otherwise indexing for submeshes will be wrong
+    #[cfg(feature = "unstable-submesh-api")]
     pub fn write_mesh_and_submeshes(
         self,
         points: &[f64],

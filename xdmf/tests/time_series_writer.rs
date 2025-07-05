@@ -142,11 +142,12 @@ fn test_write_xdmf() {
     let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
 
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
-    std::fs::copy(xdmf_file, "time_series_writer.xdmf").unwrap();
+    // std::fs::copy(xdmf_file, "time_series_writer.xdmf").unwrap();
 
     pretty_assertions::assert_eq!(read_xdmf, expected_xdmf);
 }
 
+#[cfg(feature = "unstable-submesh-api")]
 #[test]
 fn test_write_xdmf_with_submeshes() {
     let node_coords = [
