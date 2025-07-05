@@ -103,7 +103,7 @@ mod tests {
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
         let result = writer.write_mesh(&points, &cells).unwrap();
-        assert_eq!(
+        pretty_assertions::assert_eq!(
             result,
             (
                 "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0".to_string(),
@@ -119,7 +119,7 @@ mod tests {
         let data = raw_data.into();
 
         let result = writer.write_data("0.0", &data).unwrap();
-        assert_eq!(
+        pretty_assertions::assert_eq!(
             result,
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
         );
