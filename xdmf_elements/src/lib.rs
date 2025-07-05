@@ -61,9 +61,11 @@ impl Domain {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CellType {
+    Vertex = 1,
+    Edge2 = 2,
     Triangle = 4,
     Quadrilateral = 5,
     Tetrahedron = 6,
@@ -86,13 +88,15 @@ pub enum CellType {
 impl CellType {
     pub fn num_points(&self) -> usize {
         match self {
+            CellType::Vertex => 1,
+            CellType::Edge2 => 2,
             CellType::Triangle => 3,
             CellType::Quadrilateral => 4,
             CellType::Tetrahedron => 4,
             CellType::Pyramid => 5,
             CellType::Wedge => 6,
             CellType::Hexahedron => 8,
-            CellType::Edge3 => 2,
+            CellType::Edge3 => 3,
             CellType::Quadrilateral9 => 9,
             CellType::Triangle6 => 6,
             CellType::Quadrilateral8 => 8,
