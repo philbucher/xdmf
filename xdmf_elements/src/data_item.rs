@@ -157,7 +157,7 @@ mod tests {
             reference: None,
         };
 
-        assert_eq!(
+        pretty_assertions::assert_eq!(
             to_string(&data_item).unwrap(),
             "<DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>"
         );
@@ -173,7 +173,7 @@ mod tests {
         let ref_item =
             DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());
 
-        assert_eq!(
+        pretty_assertions::assert_eq!(
             to_string(&ref_item).unwrap(),
             "<DataItem Reference=\"XML\">/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]</DataItem>"
         );

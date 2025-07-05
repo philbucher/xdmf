@@ -34,7 +34,7 @@ mod tests {
             data_item: DataItem::default(),
         };
 
-        assert_eq!(
+        pretty_assertions::assert_eq!(
             to_string(&topology).unwrap(),
             "<Topology TopologyType=\"Triangle\" NumberOfElements=\"3\"><DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/></Topology>"
         );

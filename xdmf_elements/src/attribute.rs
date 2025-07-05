@@ -72,7 +72,7 @@ mod tests {
             data_items: vec![DataItem::default(), DataItem::default()],
         };
 
-        assert_eq!(
+        pretty_assertions::assert_eq!(
             to_string(&attribute).unwrap(),
             "<Attribute Name=\"Temperature\" AttributeType=\"Scalar\" Center=\"Cell\">\
                 <DataItem Dimensions=\"1\" NumberType=\"Float\" Format=\"XML\" Precision=\"4\"/>\
