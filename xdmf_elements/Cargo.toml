@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 quick-xml = { version = "0.37.5", features = ["serialize"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true

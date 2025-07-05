@@ -245,7 +245,7 @@ fn temporal_collection_grid() {
     </Domain>
 </Xdmf>"#;
 
-    assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
+    pretty_assertions::assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
 
     // write to file
     // let mut file_writer = Writer::new_with_indent(

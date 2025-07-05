@@ -4,4 +4,3 @@ resolver = "3"
 
 [workspace.dependencies]
 pretty_assertions = "1.4.1"
-temp-dir = "0.1.16"
