@@ -15,3 +15,7 @@ mpi = { version = "0.8.0", features = [
     "user-operations",
     "derive",
 ], optional = true }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+temp-dir.workspace = true
