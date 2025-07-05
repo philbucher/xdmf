@@ -134,10 +134,9 @@ impl TimeSeriesWriter {
 
         let num_cells = cells.1.len();
 
-        // Concatenate all arrays along axis 0
-        let cells_flat = prepare_cells(cells);
+        let prepared_cells = prepare_cells(cells);
 
-        let (points_data, cells_data) = self.writer.write_mesh(points, &cells_flat)?;
+        let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
 
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
@@ -151,7 +150,7 @@ impl TimeSeriesWriter {
 
         let data_item_connectivity = DataItem {
             name: Some("connectivity".to_string()),
-            dimensions: Some(Dimensions(vec![num_cells])),
+            dimensions: Some(Dimensions(vec![prepared_cells.len()])),
             number_type: Some(NumberType::UInt),
             data: cells_data,
             format: Some(self.writer.format()),
@@ -253,6 +252,22 @@ pub struct SubMesh {
     pub cell_indices: Vec<u64>,
 }
 
+// Poly-cells need to additionally specify the number of points
+fn poly_cell_points(cell_type: CellType) -> Option<u64> {
+    // For polyvertex and polyline, need to add the number of points
+    match cell_type {
+        CellType::Vertex => {
+            // polyvertex with one point
+            Some(1)
+        }
+        CellType::Edge2 => {
+            // polyline with two points
+            Some(2)
+        }
+        _ => None,
+    }
+}
+
 fn prepare_cells(cells: (&[u64], &[CellType])) -> Vec<u64> {
     let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
     let mut index = 0_usize;
@@ -260,7 +275,12 @@ fn prepare_cells(cells: (&[u64], &[CellType])) -> Vec<u64> {
     for cell_type in cells.1 {
         let num_points = cell_type.num_points();
         cells_with_types.push(*cell_type as u64);
-        // TODO for vertex or line add another 1
+
+        if let Some(n_points_poly) = poly_cell_points(*cell_type) {
+            // poly-cells need to specify the number of points
+            cells_with_types.push(n_points_poly);
+        }
+
         cells_with_types.extend_from_slice(&cells.0[index..index + num_points]);
 
         index += num_points; // Move index to the next cell
