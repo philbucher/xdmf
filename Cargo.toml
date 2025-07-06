@@ -1,11 +1,11 @@
 [package]
-name = "xdmf"
 authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]
 description = "Small library to write XDMF files for Paraview"
 edition = "2024"
 keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
 license = "MIT"
+name = "xdmf"
 repository = "https://github.com/philbucher/xdmf"
 version = "0.1.0"
 
@@ -16,13 +16,13 @@ mpi = ["dep:mpi", "hdf5/mpio"]
 unstable-submesh-api = []
 
 [dependencies]
-quick-xml = { version = "0.37.5", features = ["serialize"] }
-serde = { version = "1.0", features = ["derive"] }
 hdf5 = { package = "hdf5-metno", version = "0.10.1", optional = true }
 mpi = { version = "0.8.0", features = [
     "user-operations",
     "derive",
 ], optional = true }
+quick-xml = { version = "0.37.5", features = ["serialize"] }
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

@@ -249,6 +249,7 @@ impl TimeSeriesWriter {
     }
 }
 
+#[cfg(feature = "unstable-submesh-api")]
 pub struct SubMesh {
     pub point_indices: Vec<u64>,
     pub cell_indices: Vec<u64>,
