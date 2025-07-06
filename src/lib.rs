@@ -136,7 +136,7 @@ impl TimeSeriesWriter {
 
         let num_cells = cells.1.len();
 
-        let prepared_cells = prepare_cells(cells);
+        let prepared_cells = prepare_cells(cells)?;
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
 
@@ -262,7 +262,7 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
             // polyvertex with one point
             Some(1)
         }
-        CellType::Edge2 => {
+        CellType::Edge => {
             // polyline with two points
             Some(2)
         }
@@ -270,7 +270,23 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
     }
 }
 
-fn prepare_cells(cells: (&[u64], &[CellType])) -> Vec<u64> {
+/// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
+/// and for poly-cells, the number of points is also added.
+/// TODO if all cells are the same, then the type information can be stored as TopologyType
+fn prepare_cells(cells: (&[u64], &[CellType])) -> IoResult<Vec<u64>> {
+    // validate input
+    let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
+    if exp_num_points != cells.0.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Size of connectivities not match the expected number based on the cell types: {} != {}",
+                cells.0.len(),
+                exp_num_points
+            ),
+        ));
+    }
+
     let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
     let mut index = 0_usize;
 
@@ -285,12 +301,10 @@ fn prepare_cells(cells: (&[u64], &[CellType])) -> Vec<u64> {
 
         cells_with_types.extend_from_slice(&cells.0[index..index + num_points]);
 
-        index += num_points; // Move index to the next cell
+        index += num_points; // move index to the next cell
     }
 
-    // TODO check if sizes match, i.e. if all things are processed
-
-    cells_with_types
+    Ok(cells_with_types)
 }
 
 pub struct TimeSeriesDataWriter {
@@ -364,11 +378,228 @@ impl TimeSeriesDataWriter {
     fn write(&mut self) -> IoResult<()> {
         self.writer.flush()?;
 
+        // Write the XDMF file to a temporary file first to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
 
         self.xdmf
             .write_to(&mut std::fs::File::create(&temp_xdmf_file_name)?)?;
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_poly_cell_points() {
+        assert_eq!(poly_cell_points(CellType::Vertex), Some(1));
+        assert_eq!(poly_cell_points(CellType::Edge), Some(2));
+        assert_eq!(poly_cell_points(CellType::Triangle), None);
+        assert_eq!(poly_cell_points(CellType::Quadrilateral), None);
+        assert_eq!(poly_cell_points(CellType::Tetrahedron), None);
+        assert_eq!(poly_cell_points(CellType::Pyramid), None);
+        assert_eq!(poly_cell_points(CellType::Wedge), None);
+        assert_eq!(poly_cell_points(CellType::Hexahedron), None);
+        assert_eq!(poly_cell_points(CellType::Edge3), None);
+        assert_eq!(poly_cell_points(CellType::Quadrilateral9), None);
+        assert_eq!(poly_cell_points(CellType::Triangle6), None);
+        assert_eq!(poly_cell_points(CellType::Quadrilateral8), None);
+        assert_eq!(poly_cell_points(CellType::Tetrahedron10), None);
+        assert_eq!(poly_cell_points(CellType::Pyramid13), None);
+        assert_eq!(poly_cell_points(CellType::Wedge15), None);
+        assert_eq!(poly_cell_points(CellType::Wedge18), None);
+        assert_eq!(poly_cell_points(CellType::Hexahedron20), None);
+        assert_eq!(poly_cell_points(CellType::Hexahedron24), None);
+        assert_eq!(poly_cell_points(CellType::Hexahedron27), None);
+    }
+
+    #[test]
+    fn test_prepare_cells() {
+        let cells_prep = prepare_cells((
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            &[
+                CellType::Vertex,
+                CellType::Edge,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
+        ))
+        .unwrap();
+
+        assert_eq!(
+            cells_prep,
+            vec![1, 1, 0, 2, 2, 1, 2, 4, 3, 4, 5, 5, 6, 7, 8, 9]
+        );
+    }
+
+    #[test]
+    fn test_prepare_cells_by_celltype() {
+        assert_eq!(
+            prepare_cells((&[5], &[CellType::Vertex])).unwrap(),
+            vec![1, 1, 5]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6], &[CellType::Edge])).unwrap(),
+            vec![2, 2, 5, 6]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7], &[CellType::Triangle])).unwrap(),
+            vec![4, 5, 6, 7]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8], &[CellType::Quadrilateral])).unwrap(),
+            vec![5, 5, 6, 7, 8]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8], &[CellType::Tetrahedron])).unwrap(),
+            vec![6, 5, 6, 7, 8]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8, 9], &[CellType::Pyramid])).unwrap(),
+            vec![7, 5, 6, 7, 8, 9]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Wedge])).unwrap(),
+            vec![8, 5, 6, 7, 8, 9, 10]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron])).unwrap(),
+            vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7], &[CellType::Edge3])).unwrap(),
+            vec![34, 5, 6, 7]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13],
+                &[CellType::Quadrilateral9]
+            ))
+            .unwrap(),
+            vec![35, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6])).unwrap(),
+            vec![36, 5, 6, 7, 8, 9, 10]
+        );
+
+        assert_eq!(
+            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8])).unwrap(),
+            vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+                &[CellType::Tetrahedron10]
+            ))
+            .unwrap(),
+            vec![38, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                &[CellType::Pyramid13]
+            ))
+            .unwrap(),
+            vec![39, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+                &[CellType::Wedge15]
+            ))
+            .unwrap(),
+            vec![40, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
+                ],
+                &[CellType::Wedge18]
+            ))
+            .unwrap(),
+            vec![
+                41, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
+            ]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                ],
+                &[CellType::Hexahedron20]
+            ))
+            .unwrap(),
+            vec![
+                48, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+            ]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28
+                ],
+                &[CellType::Hexahedron24]
+            ))
+            .unwrap(),
+            vec![
+                49, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                26, 27, 28
+            ]
+        );
+
+        assert_eq!(
+            prepare_cells((
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28, 29, 30, 31
+                ],
+                &[CellType::Hexahedron27]
+            ))
+            .unwrap(),
+            vec![
+                50, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                26, 27, 28, 29, 30, 31
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prepare_cells_mismatch() {
+        let res = prepare_cells((
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Edge,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
+        ));
+
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of connectivities not match the expected number based on the cell types: 8 != 10"
+        );
     }
 }

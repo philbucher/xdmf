@@ -65,7 +65,7 @@ impl Domain {
 #[repr(u8)]
 pub enum CellType {
     Vertex = 1,
-    Edge2 = 2,
+    Edge = 2,
     Triangle = 4,
     Quadrilateral = 5,
     Tetrahedron = 6,
@@ -89,7 +89,7 @@ impl CellType {
     pub fn num_points(&self) -> usize {
         match self {
             CellType::Vertex => 1,
-            CellType::Edge2 => 2,
+            CellType::Edge => 2,
             CellType::Triangle => 3,
             CellType::Quadrilateral => 4,
             CellType::Tetrahedron => 4,
