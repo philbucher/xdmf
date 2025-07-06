@@ -1,7 +1,10 @@
 [package]
+authors.workspace = true
+categories.workspace = true
+description = "A short description of my package"
+edition.workspace = true
 name = "xdmf"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
 
 [features]
 default = ["hdf5"]

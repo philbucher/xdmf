@@ -1,6 +1,16 @@
 [workspace]
-members = ["xdmf_elements", "xdmf"]
+members = ["xdmf", "xdmf_elements"]
 resolver = "3"
+
+[workspace.package]
+authors = ["Philipp Bucher"]
+categories = ["science", "simulation", "visualization"]
+description = "Small library to write XDMF files for Paraview"
+edition = "2024"
+keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
+license = "MIT"
+repository = "https://github.com/philbucher/xdmf"
+version = "0.1.0"
 
 [workspace.dependencies]
 pretty_assertions = "1.4.1"
