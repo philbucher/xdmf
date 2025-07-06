@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use hdf5::File as H5File;
 
 use crate::DataWriter;
-use xdmf_elements::data_item::Format;
+use crate::xdmf_elements::data_item::Format;
 
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::data_item::DataItem;
+use super::data_item::DataItem;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Attribute {

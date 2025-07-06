@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::data_item::DataItem;
+use super::data_item::DataItem;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Topology {

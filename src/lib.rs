@@ -16,6 +16,7 @@ mod hdf5_writer;
 mod xml_writer;
 
 mod values;
+pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use values::Values;

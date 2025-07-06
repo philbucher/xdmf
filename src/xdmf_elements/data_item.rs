@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::dimensions::Dimensions;
+use super::dimensions::Dimensions;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DataItem {
