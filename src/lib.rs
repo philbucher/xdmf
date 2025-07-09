@@ -121,7 +121,6 @@ impl TimeSeriesWriter {
         }
     }
 
-    // TODO check bounds of connectivity indices
     pub fn write_mesh(
         mut self,
         points: &[f64],
