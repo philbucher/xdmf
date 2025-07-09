@@ -127,12 +127,7 @@ impl TimeSeriesWriter {
         points: &[f64],
         cells: (&[u64], &[CellType]),
     ) -> IoResult<TimeSeriesDataWriter> {
-        if points.len() % 3 != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Points must have 3 dimensions",
-            ));
-        }
+        validate_points_and_cells(points, cells)?;
 
         let num_cells = cells.1.len();
 
@@ -253,6 +248,29 @@ impl TimeSeriesWriter {
 pub struct SubMesh {
     pub point_indices: Vec<u64>,
     pub cell_indices: Vec<u64>,
+}
+
+// Validate that the number of points and cells match the expected sizes
+fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> IoResult<()> {
+    if points.len() % 3 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Points must have 3 dimensions",
+        ));
+    }
+
+    let max_connectivity_index = cells.0.iter().max();
+
+    if let Some(&max_index) = max_connectivity_index {
+        if max_index as usize >= points.len() / 3 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Connectivity indices out of bounds for the given points",
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 // Poly-cells need to additionally specify the number of points

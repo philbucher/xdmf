@@ -24,6 +24,10 @@ fn test_write_xdmf() {
         xdmf::CellType::Triangle,
         xdmf::CellType::Triangle,
         xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
     ];
 
     let num_nodes = node_coords.len() / 3;
