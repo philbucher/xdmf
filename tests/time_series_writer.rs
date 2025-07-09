@@ -86,7 +86,7 @@ fn test_write_xdmf() {
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Mixed" NumberOfElements="8">
+                <Topology TopologyType="Mixed" NumberOfElements="12">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="0"/>
@@ -97,14 +97,14 @@ fn test_write_xdmf() {
                     <DataItem Dimensions="17" NumberType="Float" Format="XML" Precision="8">2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0 8.0000000000000000e0 9.0000000000000000e0 1.0000000000000000e1 1.1000000000000000e1 1.2000000000000000e1 1.3000000000000000e1 1.4000000000000000e1 1.5000000000000000e1 1.6000000000000000e1 1.7000000000000000e1 1.8000000000000000e1</DataItem>
                 </Attribute>
                 <Attribute Name="cell_data" AttributeType="Scalar" Center="Cell">
-                    <DataItem Dimensions="8" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0</DataItem>
+                    <DataItem Dimensions="12" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0 8.0000000000000000e0 9.0000000000000000e0 1.0000000000000000e1 1.1000000000000000e1</DataItem>
                 </Attribute>
             </Grid>
             <Grid Name="time_series-t1" GridType="Uniform">
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Mixed" NumberOfElements="8">
+                <Topology TopologyType="Mixed" NumberOfElements="12">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="1"/>
@@ -115,14 +115,14 @@ fn test_write_xdmf() {
                     <DataItem Dimensions="17" NumberType="Float" Format="XML" Precision="8">3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0 8.0000000000000000e0 9.0000000000000000e0 1.0000000000000000e1 1.1000000000000000e1 1.2000000000000000e1 1.3000000000000000e1 1.4000000000000000e1 1.5000000000000000e1 1.6000000000000000e1 1.7000000000000000e1 1.8000000000000000e1 1.9000000000000000e1</DataItem>
                 </Attribute>
                 <Attribute Name="cell_data" AttributeType="Scalar" Center="Cell">
-                    <DataItem Dimensions="8" NumberType="Float" Format="XML" Precision="8">1.5000000000000000e0 2.5000000000000000e0 3.5000000000000000e0 4.5000000000000000e0 5.5000000000000000e0 6.5000000000000000e0 7.5000000000000000e0 8.5000000000000000e0</DataItem>
+                    <DataItem Dimensions="12" NumberType="Float" Format="XML" Precision="8">1.5000000000000000e0 2.5000000000000000e0 3.5000000000000000e0 4.5000000000000000e0 5.5000000000000000e0 6.5000000000000000e0 7.5000000000000000e0 8.5000000000000000e0 9.5000000000000000e0 1.0500000000000000e1 1.1500000000000000e1 1.2500000000000000e1</DataItem>
                 </Attribute>
             </Grid>
             <Grid Name="time_series-t2" GridType="Uniform">
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Mixed" NumberOfElements="8">
+                <Topology TopologyType="Mixed" NumberOfElements="12">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="2"/>
@@ -133,12 +133,12 @@ fn test_write_xdmf() {
                     <DataItem Dimensions="17" NumberType="Float" Format="XML" Precision="8">4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0 8.0000000000000000e0 9.0000000000000000e0 1.0000000000000000e1 1.1000000000000000e1 1.2000000000000000e1 1.3000000000000000e1 1.4000000000000000e1 1.5000000000000000e1 1.6000000000000000e1 1.7000000000000000e1 1.8000000000000000e1 1.9000000000000000e1 2.0000000000000000e1</DataItem>
                 </Attribute>
                 <Attribute Name="cell_data" AttributeType="Scalar" Center="Cell">
-                    <DataItem Dimensions="8" NumberType="Float" Format="XML" Precision="8">3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0 8.0000000000000000e0 9.0000000000000000e0 1.0000000000000000e1</DataItem>
+                    <DataItem Dimensions="12" NumberType="Float" Format="XML" Precision="8">3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0 7.0000000000000000e0 8.0000000000000000e0 9.0000000000000000e0 1.0000000000000000e1 1.1000000000000000e1 1.2000000000000000e1 1.3000000000000000e1 1.4000000000000000e1</DataItem>
                 </Attribute>
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 5.0000000000000000e-1 -5.0000000000000000e-1 2.0000000000000001e-1 -5.0000000000000000e-1 5.0000000000000000e-1 2.0000000000000001e-1 1.5000000000000000e0 -5.0000000000000000e-1 2.0000000000000001e-1 2.5000000000000000e0 5.0000000000000000e-1 2.0000000000000001e-1 5.0000000000000000e-1 1.5000000000000000e0 2.0000000000000001e-1 5.0000000000000000e-1 2.5000000000000000e0 2.0000000000000001e-1 1.5000000000000000e0 2.5000000000000000e0 2.0000000000000001e-1 2.5000000000000000e0 1.5000000000000000e0 2.0000000000000001e-1</DataItem>
-        <DataItem Name="connectivity" Dimensions="36" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12</DataItem>
+        <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
 </Xdmf>"#;
 
