@@ -250,8 +250,9 @@ pub struct SubMesh {
     pub cell_indices: Vec<u64>,
 }
 
-// Validate that the number of points and cells match the expected sizes
+// Validate that the points and cells are valid
 fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> IoResult<()> {
+    // check that points are a multiple of 3 (x, y, z)
     if points.len() % 3 != 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -259,15 +260,33 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
         ));
     }
 
+    // check cells connectivity indices
     let max_connectivity_index = cells.0.iter().max();
 
     if let Some(&max_index) = max_connectivity_index {
         if max_index as usize >= points.len() / 3 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Connectivity indices out of bounds for the given points",
+                format!(
+                    "Connectivity indices out of bounds for the given points, max index: {}, but number of points is {}",
+                    max_index,
+                    points.len() / 3
+                ),
             ));
         }
+    }
+
+    // check that the number of connectivities matches the expected number based on the cell types
+    let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
+    if exp_num_points != cells.0.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Size of connectivities not match the expected number based on the cell types: {} != {}",
+                cells.0.len(),
+                exp_num_points
+            ),
+        ));
     }
 
     Ok(())
@@ -293,19 +312,6 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 /// and for poly-cells, the number of points is also added.
 /// TODO if all cells are the same, then the type information can be stored as TopologyType
 fn prepare_cells(cells: (&[u64], &[CellType])) -> IoResult<Vec<u64>> {
-    // validate input
-    let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
-    if exp_num_points != cells.0.len() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "Size of connectivities not match the expected number based on the cell types: {} != {}",
-                cells.0.len(),
-                exp_num_points
-            ),
-        ));
-    }
-
     let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
     let mut index = 0_usize;
 
@@ -347,7 +353,6 @@ impl TimeSeriesDataWriter {
 
     /// Write data for a specific time step.
     // TODOs:
-    // - make sure that names for data location (aka Center) are unique (Paraview just ignores duplicate names)
     // - check for unique time steps
     // - assert dimensions of points and cells match
     pub fn write_data(
@@ -602,18 +607,79 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn test_validate_points_and_cells_ok() {
+        // valid input, must not return an error
+        validate_points_and_cells(
+            &[0.0; 33],
+            (
+                &[0, 1, 2, 3, 4, 5, 6, 7],
+                &[
+                    CellType::Vertex,
+                    CellType::Triangle,
+                    CellType::Quadrilateral,
+                ],
+            ),
+        )
+        .unwrap();
+    }
 
     #[test]
-    fn test_prepare_cells_mismatch() {
-        let res = prepare_cells((
-            &[0, 1, 2, 3, 4, 5, 6, 7],
-            &[
-                CellType::Vertex,
-                CellType::Edge,
-                CellType::Triangle,
-                CellType::Quadrilateral,
-            ],
-        ));
+    fn test_validate_points_and_cells_points_not_3d() {
+        let res = validate_points_and_cells(
+            &[0.0; 22],
+            (
+                &[0, 1, 2, 3, 4, 5, 6, 7],
+                &[
+                    CellType::Vertex,
+                    CellType::Triangle,
+                    CellType::Quadrilateral,
+                ],
+            ),
+        );
+
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Points must have 3 dimensions"
+        );
+    }
+
+    #[test]
+    fn test_validate_points_and_cells_conn_index_out_of_bounds() {
+        let res = validate_points_and_cells(
+            &[0.0; 33],
+            (
+                &[0, 1, 2, 3, 4, 5, 6, 70],
+                &[
+                    CellType::Vertex,
+                    CellType::Triangle,
+                    CellType::Quadrilateral,
+                ],
+            ),
+        );
+
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Connectivity indices out of bounds for the given points, max index: 70, but number of points is 11"
+        );
+    }
+
+    #[test]
+    fn test_validate_points_and_cells_conn_mismatch() {
+        let res = validate_points_and_cells(
+            &[0.0; 33],
+            (
+                &[0, 1, 2, 3, 4, 5, 6, 7],
+                &[
+                    CellType::Vertex,
+                    CellType::Edge,
+                    CellType::Triangle,
+                    CellType::Quadrilateral,
+                ],
+            ),
+        );
 
         assert!(res.is_err());
         assert_eq!(
