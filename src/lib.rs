@@ -103,20 +103,32 @@ impl TimeSeriesWriter {
     pub fn options() -> TimeSeriesWriterOptions {
         TimeSeriesWriterOptions::default()
     }
-    pub fn new(file_name: impl AsRef<Path>) -> Self {
+    pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
         Self::new_with_options(file_name, &TimeSeriesWriter::options())
     }
 
     pub fn new_with_options(
         file_name: impl AsRef<Path>,
         options: &TimeSeriesWriterOptions,
-    ) -> Self {
-        // TODO create folder if it does not exist
+    ) -> IoResult<Self> {
+        let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf");
 
-        Self {
-            xdmf_file_name: file_name.as_ref().to_path_buf().with_extension("xdmf"),
-            writer: options.create_writer(file_name.as_ref()),
+        // create the parent directory if it does not exist
+        if let Some(parent) = xdmf_file_name.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(Path::new(parent)).map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("Failed to create directory {}: {}", parent.display(), e),
+                    )
+                })?;
+            }
         }
+
+        Ok(Self {
+            xdmf_file_name,
+            writer: options.create_writer(file_name.as_ref()),
+        })
     }
 
     pub fn write_mesh(
@@ -169,10 +181,10 @@ impl TimeSeriesWriter {
 
         let mut ts_writer = TimeSeriesDataWriter {
             xdmf_file_name: self.xdmf_file_name,
+            writer: self.writer,
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
             attributes: BTreeMap::new(),
-            writer: self.writer,
         };
 
         ts_writer.write()?;
@@ -327,10 +339,10 @@ fn prepare_cells(cells: (&[u64], &[CellType])) -> IoResult<Vec<u64>> {
 
 pub struct TimeSeriesDataWriter {
     xdmf_file_name: PathBuf,
+    writer: Box<dyn DataWriter>,
     grid: Grid,
     data_items: Vec<DataItem>,
     attributes: BTreeMap<String, Vec<attribute::Attribute>>,
-    writer: Box<dyn DataWriter>,
 }
 
 impl TimeSeriesDataWriter {
@@ -340,6 +352,7 @@ impl TimeSeriesDataWriter {
     // - check for unique time steps
     // - assert dimensions of points and cells match
     // - check that the data is not empty
+    // - maybe write data as ref in attribute, to make cloning cheaper. Really only matters for XML format, so unsure if worth it.
     pub fn write_data(
         &mut self,
         time: &str,
@@ -733,5 +746,23 @@ mod tests {
             res.unwrap_err().to_string(),
             "Size of connectivities not match the expected number based on the cell types: 8 != 10"
         );
+    }
+
+    #[test]
+    fn test_time_series_writer_create_folder() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let subfolder = Path::new("out/xdmf"); // deliberately not creating this folder
+        let xdmf_folder = tmp_dir.path().join(subfolder);
+        let xdmf_file_path = xdmf_folder.join("test_output");
+
+        assert!(!xdmf_folder.exists());
+
+        TimeSeriesWriter::new_with_options(
+            &xdmf_file_path,
+            &TimeSeriesWriter::options().format(Format::XML),
+        )
+        .unwrap();
+
+        assert!(xdmf_folder.exists());
     }
 }

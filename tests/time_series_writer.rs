@@ -39,7 +39,8 @@ fn test_write_xdmf() {
     let xdmf_writer = TimeSeriesWriter::new_with_options(
         &xdmf_file_path,
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
-    );
+    )
+    .unwrap();
 
     let mut xdmf_writer = xdmf_writer
         .write_mesh(&node_coords, (&connectivity, &cell_types))
@@ -185,7 +186,8 @@ fn test_write_xdmf_only_mesh() {
     let xdmf_writer = TimeSeriesWriter::new_with_options(
         &xdmf_file_path,
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
-    );
+    )
+    .unwrap();
 
     xdmf_writer
         .write_mesh(&node_coords, (&connectivity, &cell_types))
@@ -211,7 +213,7 @@ fn test_write_xdmf_only_mesh() {
     let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
 
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
-    std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
+    // std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
 
     pretty_assertions::assert_eq!(read_xdmf, expected_xdmf);
 }
@@ -250,7 +252,8 @@ fn test_write_xdmf_with_submeshes() {
     let xdmf_writer = TimeSeriesWriter::new_with_options(
         &xdmf_file_path,
         &TimeSeriesWriter::options().format(xdmf::Format::XML),
-    );
+    )
+    .unwrap();
 
     let point_indx = vec![0, 1, 2];
     let cell_indx = vec![0];
