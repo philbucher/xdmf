@@ -251,6 +251,14 @@ pub struct SubMesh {
 
 // Validate that the points and cells are valid
 fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> IoResult<()> {
+    // at least one point is required
+    if points.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "At least one point is required",
+        ));
+    }
+
     // check that points are a multiple of 3 (x, y, z)
     if points.len() % 3 != 0 {
         return Err(std::io::Error::new(
@@ -606,6 +614,7 @@ mod tests {
             ]
         );
     }
+
     #[test]
     fn test_validate_points_and_cells_ok() {
         // valid input, must not return an error
@@ -621,6 +630,33 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_validate_points_and_cells_only_points() {
+        // valid input, must not return an error
+        validate_points_and_cells(&[0.0; 33], (&[], &[])).unwrap();
+    }
+
+    #[test]
+    fn test_validate_points_and_cells_points_empty() {
+        let res = validate_points_and_cells(
+            &[],
+            (
+                &[0, 1, 2, 3, 4, 5, 6, 7],
+                &[
+                    CellType::Vertex,
+                    CellType::Triangle,
+                    CellType::Quadrilateral,
+                ],
+            ),
+        );
+
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "At least one point is required"
+        );
     }
 
     #[test]
