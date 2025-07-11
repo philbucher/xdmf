@@ -151,6 +151,71 @@ fn test_write_xdmf() {
     pretty_assertions::assert_eq!(read_xdmf, expected_xdmf);
 }
 
+#[test]
+fn test_write_xdmf_only_mesh() {
+    let node_coords = [
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0,
+        0.0, 2.0, 0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.5, -0.5, 0.2, -0.5, 0.5, 0.2, 1.5, -0.5,
+        0.2, 2.5, 0.5, 0.2, 0.5, 1.5, 0.2, 0.5, 2.5, 0.2, 1.5, 2.5, 0.2, 2.5, 1.5, 0.2,
+    ];
+
+    let connectivity = [
+        0, 1, 4, 3, 1, 2, 5, 4, 3, 4, 7, 6, 4, 5, 8, 7, 0, 1, 9, 3, 0, 10, 1, 2, 11, 2, 5, 12, 6,
+        3, 13, 6, 7, 14, 7, 8, 15, 5, 8, 16,
+    ];
+
+    let cell_types = [
+        xdmf::CellType::Quadrilateral,
+        xdmf::CellType::Quadrilateral,
+        xdmf::CellType::Quadrilateral,
+        xdmf::CellType::Quadrilateral,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+        xdmf::CellType::Triangle,
+    ];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer = TimeSeriesWriter::new_with_options(
+        &xdmf_file_path,
+        &TimeSeriesWriter::options().format(xdmf::Format::XML),
+    );
+
+    xdmf_writer
+        .write_mesh(&node_coords, (&connectivity, &cell_types))
+        .unwrap();
+
+    let expected_xdmf = r#"
+<Xdmf Version="3.0">
+    <Domain>
+        <Grid Name="mesh" GridType="Uniform">
+            <Geometry GeometryType="XYZ">
+                <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+            </Geometry>
+            <Topology TopologyType="Mixed" NumberOfElements="12">
+                <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
+            </Topology>
+        </Grid>
+        <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 5.0000000000000000e-1 -5.0000000000000000e-1 2.0000000000000001e-1 -5.0000000000000000e-1 5.0000000000000000e-1 2.0000000000000001e-1 1.5000000000000000e0 -5.0000000000000000e-1 2.0000000000000001e-1 2.5000000000000000e0 5.0000000000000000e-1 2.0000000000000001e-1 5.0000000000000000e-1 1.5000000000000000e0 2.0000000000000001e-1 5.0000000000000000e-1 2.5000000000000000e0 2.0000000000000001e-1 1.5000000000000000e0 2.5000000000000000e0 2.0000000000000001e-1 2.5000000000000000e0 1.5000000000000000e0 2.0000000000000001e-1</DataItem>
+        <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
+    </Domain>
+</Xdmf>"#;
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
+    std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
+
+    pretty_assertions::assert_eq!(read_xdmf, expected_xdmf);
+}
+
 #[cfg(feature = "unstable-submesh-api")]
 #[test]
 fn test_write_xdmf_with_submeshes() {
