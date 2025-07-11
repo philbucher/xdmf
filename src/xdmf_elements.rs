@@ -133,6 +133,11 @@ mod tests {
     }
 
     #[test]
+    fn test_xdmf_serialization() {
+        unimplemented!("Serialization test for Xdmf");
+    }
+
+    #[test]
     fn test_domain_new() {
         let grid = Grid::new_uniform(
             "test_grid",
@@ -170,5 +175,10 @@ mod tests {
 
         domain.data_items.push(DataItem::default());
         assert_eq!(domain.data_items.len(), 1);
+    }
+
+    #[test]
+    fn test_domain_serialization() {
+        unimplemented!("Serialization test for Domain");
     }
 }
