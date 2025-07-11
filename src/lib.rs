@@ -7,7 +7,7 @@ use xdmf_elements::{
     data_item::{DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
-    grid::{Grid, GridType, TimeSeriesGrid, Uniform},
+    grid::{CollectionType, Grid, Time},
     topology::{Topology, TopologyType},
 };
 
@@ -96,7 +96,6 @@ impl Default for TimeSeriesWriterOptions {
 
 pub struct TimeSeriesWriter {
     xdmf_file_name: PathBuf,
-    xdmf: Xdmf,
     writer: Box<dyn DataWriter>,
 }
 
@@ -116,7 +115,6 @@ impl TimeSeriesWriter {
 
         Self {
             xdmf_file_name: file_name.as_ref().to_path_buf().with_extension("xdmf"),
-            xdmf: Xdmf::default(),
             writer: options.create_writer(file_name.as_ref()),
         }
     }
@@ -159,33 +157,21 @@ impl TimeSeriesWriter {
         let data_item_connectivity_ref =
             DataItem::new_reference(&data_item_connectivity, "/Xdmf/Domain/DataItem".to_string());
 
-        let mesh_grid = Uniform {
-            name: "mesh".to_string(),
-            grid_type: GridType::Uniform,
-            geometry: Geometry {
-                geometry_type: GeometryType::XYZ,
-                data_item: data_item_coords_ref,
-            },
-            topology: Topology {
-                topology_type: TopologyType::Mixed,
-                number_of_elements: num_cells.to_string(),
-                data_item: data_item_connectivity_ref,
-            },
-            time: None,
-            attributes: None,
-            indices: None,
+        let geometry = Geometry {
+            geometry_type: GeometryType::XYZ,
+            data_item: data_item_coords_ref,
         };
-
-        self.xdmf.domains[0]
-            .grids
-            .push(Grid::new_time_series("time_series", mesh_grid));
-
-        self.xdmf.domains[0].data_items.push(data_item_coords);
-        self.xdmf.domains[0].data_items.push(data_item_connectivity);
+        let topology = Topology {
+            topology_type: TopologyType::Mixed,
+            number_of_elements: num_cells.to_string(),
+            data_item: data_item_connectivity_ref,
+        };
 
         let mut ts_writer = TimeSeriesDataWriter {
             xdmf_file_name: self.xdmf_file_name,
-            xdmf: self.xdmf,
+            grid: Grid::new_uniform("mesh", geometry, topology),
+            data_items: vec![data_item_coords, data_item_connectivity],
+            attributes: BTreeMap::new(),
             writer: self.writer,
         };
 
@@ -341,27 +327,19 @@ fn prepare_cells(cells: (&[u64], &[CellType])) -> IoResult<Vec<u64>> {
 
 pub struct TimeSeriesDataWriter {
     xdmf_file_name: PathBuf,
-    xdmf: Xdmf,
+    grid: Grid,
+    data_items: Vec<DataItem>,
+    attributes: BTreeMap<String, Vec<attribute::Attribute>>,
     writer: Box<dyn DataWriter>,
 }
 
 impl TimeSeriesDataWriter {
-    fn temporal_grid(&mut self) -> &mut TimeSeriesGrid {
-        let temp_grid = self.xdmf.domains[0]
-            .grids
-            .last_mut()
-            .expect("No grids found");
-
-        match temp_grid {
-            Grid::TimeSeriesGrid(gr) => gr,
-            _ => panic!("Last grid is not a collection"),
-        }
-    }
-
     /// Write data for a specific time step.
+    /// Accepts str for time to avoid dealing with formatting, thus leaving it to the user.
     // TODOs:
     // - check for unique time steps
     // - assert dimensions of points and cells match
+    // - check that the data is not empty
     pub fn write_data(
         &mut self,
         time: &str,
@@ -401,7 +379,10 @@ impl TimeSeriesDataWriter {
         create_attributes(point_data, attribute::Center::Node)?;
         create_attributes(cell_data, attribute::Center::Cell)?;
 
-        self.temporal_grid().create_new_time(time, &new_attributes);
+        self.attributes
+            .entry(time.to_string())
+            .or_default()
+            .extend(new_attributes);
 
         self.write()
     }
@@ -409,11 +390,42 @@ impl TimeSeriesDataWriter {
     fn write(&mut self) -> IoResult<()> {
         self.writer.flush()?;
 
+        // create the XDMF structure
+        let time_grids = self
+            .attributes
+            .iter()
+            .map(|(time, attributes)| {
+                let mut grid = self.grid.clone();
+
+                match &mut grid {
+                    Grid::Uniform(uniform_grid) => {
+                        uniform_grid.name = format!("time_series-t{time}");
+                        uniform_grid.time = Some(Time::new(time));
+                        uniform_grid.attributes = Some(attributes.clone());
+                        grid
+                    }
+                    _ => unimplemented!("Only Uniform grids are supported for time series"),
+                }
+            })
+            .collect();
+
+        let temporal_grid =
+            Grid::new_collection("time_series", CollectionType::Temporal, Some(time_grids));
+
+        // If there are no attributes aka time-data, write the grid directly
+        let grid_to_write = if self.attributes.is_empty() {
+            self.grid.clone()
+        } else {
+            temporal_grid
+        };
+
+        let mut xdmf = Xdmf::default();
+        xdmf.domains[0].grids.push(grid_to_write);
+        xdmf.domains[0].data_items.extend(self.data_items.clone());
+
         // Write the XDMF file to a temporary file first to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
-
-        self.xdmf
-            .write_to(&mut std::fs::File::create(&temp_xdmf_file_name)?)?;
+        xdmf.write_to(&mut std::fs::File::create(&temp_xdmf_file_name)?)?;
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
