@@ -5,63 +5,30 @@ use super::geometry::Geometry;
 use super::topology::Topology;
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(untagged)]
-#[allow(clippy::large_enum_variant)] // TODO remove this
-pub enum Grid {
-    Uniform(Uniform),
-    Tree(Tree),
-    Collection(Collection),
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Uniform {
+pub struct Grid {
     #[serde(rename = "@Name")]
     pub name: String,
 
     #[serde(rename = "@GridType")]
     pub grid_type: GridType,
 
-    #[serde(rename = "Geometry")]
-    pub geometry: Geometry,
+    #[serde(rename = "@CollectionType", skip_serializing_if = "Option::is_none")]
+    pub collection_type: Option<CollectionType>,
 
-    #[serde(rename = "Topology")]
-    pub topology: Topology,
+    #[serde(rename = "Geometry", skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<Geometry>,
+
+    #[serde(rename = "Topology", skip_serializing_if = "Option::is_none")]
+    pub topology: Option<Topology>,
+
+    #[serde(rename = "Grid", skip_serializing_if = "Option::is_none")]
+    pub grids: Option<Vec<Grid>>,
 
     #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
     pub time: Option<Time>,
 
     #[serde(rename = "Attribute", skip_serializing_if = "Option::is_none")]
     pub attributes: Option<Vec<Attribute>>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Tree {
-    #[serde(rename = "@Name")]
-    pub name: String,
-
-    #[serde(rename = "@GridType")]
-    pub grid_type: GridType,
-
-    #[serde(rename = "Grid")]
-    pub grids: Vec<Grid>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Collection {
-    #[serde(rename = "@Name")]
-    pub name: String,
-
-    #[serde(rename = "@GridType")]
-    pub grid_type: GridType,
-
-    #[serde(rename = "@CollectionType")]
-    pub collection_type: CollectionType,
-
-    #[serde(rename = "Grid")]
-    pub grids: Vec<Grid>,
-
-    #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
-    pub time: Option<Time>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -80,14 +47,16 @@ impl Time {
 
 impl Grid {
     pub fn new_uniform(name: impl ToString, geometry: Geometry, topology: Topology) -> Self {
-        Grid::Uniform(Uniform {
+        Grid {
             name: name.to_string(),
             grid_type: GridType::Uniform,
-            topology,
-            geometry,
+            collection_type: None,
+            geometry: Some(geometry),
+            topology: Some(topology),
+            grids: None,
             time: None,
             attributes: None,
-        })
+        }
     }
 
     pub fn new_collection(
@@ -95,21 +64,29 @@ impl Grid {
         collection_type: CollectionType,
         grids: Option<Vec<Grid>>,
     ) -> Self {
-        Grid::Collection(Collection {
+        Grid {
             name: name.to_string(),
             grid_type: GridType::Collection,
-            collection_type,
-            grids: grids.unwrap_or_default(),
+            collection_type: Some(collection_type),
+            geometry: None,
+            topology: None,
+            attributes: None,
+            grids,
             time: None,
-        })
+        }
     }
 
     pub fn new_tree(name: impl ToString, grids: Option<Vec<Grid>>) -> Self {
-        Grid::Tree(Tree {
+        Grid {
             name: name.to_string(),
             grid_type: GridType::Tree,
-            grids: grids.unwrap_or_default(),
-        })
+            collection_type: None,
+            grids,
+            geometry: None,
+            topology: None,
+            attributes: None,
+            time: None,
+        }
     }
 }
 

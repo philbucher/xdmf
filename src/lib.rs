@@ -7,7 +7,7 @@ use xdmf_elements::{
     data_item::{DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
-    grid::{CollectionType, Grid, Time},
+    grid::{CollectionType, Grid, GridType, Time},
     topology::{Topology, TopologyType},
 };
 
@@ -410,11 +410,11 @@ impl TimeSeriesDataWriter {
             .map(|(time, attributes)| {
                 let mut grid = self.grid.clone();
 
-                match &mut grid {
-                    Grid::Uniform(uniform_grid) => {
-                        uniform_grid.name = format!("time_series-t{time}");
-                        uniform_grid.time = Some(Time::new(time));
-                        uniform_grid.attributes = Some(attributes.clone());
+                match grid.grid_type {
+                    GridType::Uniform => {
+                        grid.name = format!("time_series-t{time}");
+                        grid.time = Some(Time::new(time));
+                        grid.attributes = Some(attributes.clone());
                         grid
                     }
                     _ => unimplemented!("Only Uniform grids are supported for time series"),

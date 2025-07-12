@@ -4,7 +4,7 @@ use xdmf::xdmf_elements::attribute::{Attribute, AttributeType, Center};
 use xdmf::xdmf_elements::data_item::{DataItem, NumberType};
 use xdmf::xdmf_elements::dimensions::Dimensions;
 use xdmf::xdmf_elements::geometry::{Geometry, GeometryType};
-use xdmf::xdmf_elements::grid::{CollectionType, Grid, Time, Uniform};
+use xdmf::xdmf_elements::grid::{CollectionType, Grid, Time};
 use xdmf::xdmf_elements::topology::{Topology, TopologyType};
 use xdmf::xdmf_elements::{Domain, XDMF_TAG, Xdmf};
 
@@ -396,23 +396,23 @@ fn temporal_collection_grid() {
             "temporal_collection_grid",
             CollectionType::Temporal,
             Some(vec![
-                Grid::Uniform(Uniform {
+                Grid {
                     name: "Grid_t1".into(),
-                    geometry: Geometry {
+                    geometry: Some(Geometry {
                         geometry_type: GeometryType::XYZ,
                         data_item: DataItem::new_reference(
                             &data_items[0],
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
-                    },
-                    topology: Topology {
+                    }),
+                    topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
                         number_of_elements: "2".into(),
                         data_item: DataItem::new_reference(
                             &data_items[1],
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
-                    },
+                    }),
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
                     time: Some(Time {
                         value: "1.0".into(),
@@ -441,24 +441,26 @@ fn temporal_collection_grid() {
                             }],
                         },
                     ]),
-                }),
-                Grid::Uniform(Uniform {
+                    collection_type: None,
+                    grids: None,
+                },
+                Grid {
                     name: "Grid_t2".into(),
-                    geometry: Geometry {
+                    geometry: Some(Geometry {
                         geometry_type: GeometryType::XYZ,
                         data_item: DataItem::new_reference(
                             &data_items[0],
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
-                    },
-                    topology: Topology {
+                    }),
+                    topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
                         number_of_elements: "2".into(),
                         data_item: DataItem::new_reference(
                             &data_items[1],
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
-                    },
+                    }),
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
                     time: Some(Time {
                         value: "2.0".into(),
@@ -487,24 +489,26 @@ fn temporal_collection_grid() {
                             }],
                         },
                     ]),
-                }),
-                Grid::Uniform(Uniform {
+                    collection_type: None,
+                    grids: None,
+                },
+                Grid {
                     name: "Grid_t3".into(),
-                    geometry: Geometry {
+                    geometry: Some(Geometry {
                         geometry_type: GeometryType::XYZ,
                         data_item: DataItem::new_reference(
                             &data_items[0],
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
-                    },
-                    topology: Topology {
+                    }),
+                    topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
                         number_of_elements: "2".into(),
                         data_item: DataItem::new_reference(
                             &data_items[1],
                             "/Xdmf/Domain/DataItem".to_string(),
                         ),
-                    },
+                    }),
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
                     time: Some(Time {
                         value: "3.0".into(),
@@ -533,7 +537,9 @@ fn temporal_collection_grid() {
                             }],
                         },
                     ]),
-                }),
+                    collection_type: None,
+                    grids: None,
+                },
             ]),
         )],
         data_items,
