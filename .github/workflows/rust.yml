@@ -19,13 +19,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Check formatting
       run: |
         rustup component add rustfmt --toolchain nightly
         cargo +nightly fmt --all --check
+
     - name: Run clippy
       run: |
         sudo apt-get install libhdf5-dev
         cargo clippy --all-targets -- -D warnings
+
     - name: Run tests
       run: cargo test
