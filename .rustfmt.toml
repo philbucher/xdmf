@@ -1,5 +1,4 @@
 # cargo +nightly fmt
 
-group_imports = "StdExternalCrate" # requires nightly
-imports_granularity = "Crate"      # requires nightly
-reorder_imports = true
+group_imports = "StdExternalCrate" # requires nightly, see https://rust-lang.github.io/rustfmt/?version=v1.8.0&search=#group_imports
+imports_granularity = "Crate"      # requires nightly, see https://rust-lang.github.io/rustfmt/?version=v1.8.0&search=#imports_granularity
