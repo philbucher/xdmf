@@ -115,14 +115,7 @@ impl TimeSeriesWriter {
 
         // create the parent directory if it does not exist
         if let Some(parent) = xdmf_file_name.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(Path::new(parent)).map_err(|e| {
-                    std::io::Error::new(
-                        e.kind(),
-                        format!("Failed to create directory {}: {}", parent.display(), e),
-                    )
-                })?;
-            }
+            mpi_safe_create_dir_all(parent)?;
         }
 
         Ok(Self {
@@ -442,6 +435,30 @@ impl TimeSeriesDataWriter {
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
+}
+
+/// Create directories in a way that is safe for MPI applications.
+/// This function will create the directory if it does not exist, and wait for it to appear
+/// This is particularly needed on systems such as clusters with slow filesystems, to ensure that
+/// all processes can see the created directory before proceeding.
+/// See https://github.com/KratosMultiphysics/Kratos/pull/9247 where this was taken from
+/// Its a battle-tested solution tested with > 1000 processes
+pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoResult<()> {
+    if !&path.as_ref().exists() {
+        std::fs::create_dir_all(&path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("Failed to create directory {:?}: {}", path, e),
+            )
+        })?;
+    }
+
+    if !path.as_ref().exists() {
+        // wait for the path to appear in the filesystem
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -764,5 +781,29 @@ mod tests {
         .unwrap();
 
         assert!(xdmf_folder.exists());
+    }
+
+    #[test]
+    fn test_mpi_safe_create_dir_all() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let dirs_to_create = tmp_dir.path().join("out/xdmf/test/folder/random/testing");
+
+        // Try to create dirs from 100 threads concurrently
+        let handles: Vec<_> = (0..100)
+            .map(|_| {
+                std::thread::spawn({
+                    let dir_thread_local = dirs_to_create.clone();
+                    move || mpi_safe_create_dir_all(dir_thread_local).unwrap()
+                })
+            })
+            .collect();
+
+        // join threads, will propagate errors if any
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Check that the directory was created
+        assert!(dirs_to_create.exists());
     }
 }
