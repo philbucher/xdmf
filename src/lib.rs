@@ -774,13 +774,14 @@ mod tests {
 
         assert!(!xdmf_folder.exists());
 
-        TimeSeriesWriter::new_with_options(
+        let writer = TimeSeriesWriter::new_with_options(
             &xdmf_file_path,
             &TimeSeriesWriter::options().format(Format::XML),
         )
         .unwrap();
 
         assert!(xdmf_folder.exists());
+        assert_eq!(writer.xdmf_file_name, xdmf_file_path.with_extension("xdmf"));
     }
 
     #[test]
