@@ -71,13 +71,11 @@ mod tests {
 
     #[test]
     fn test_attribute_type_default() {
-        let attribute_type = AttributeType::default();
-        assert_eq!(attribute_type, AttributeType::Scalar);
+        assert_eq!(AttributeType::default(), AttributeType::Scalar);
     }
 
     #[test]
     fn test_center_default() {
-        let center = Center::default();
-        assert_eq!(center, Center::Node);
+        assert_eq!(Center::default(), Center::Node);
     }
 }
