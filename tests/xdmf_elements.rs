@@ -1,5 +1,4 @@
 use quick_xml::Writer;
-
 use xdmf::xdmf_elements::{
     Domain, XDMF_TAG, Xdmf,
     attribute::{Attribute, AttributeType, Center},
