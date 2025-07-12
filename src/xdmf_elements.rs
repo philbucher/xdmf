@@ -114,6 +114,7 @@ impl CellType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quick_xml::se::to_string;
 
     #[test]
     fn test_xdmf_new() {
@@ -134,7 +135,12 @@ mod tests {
 
     #[test]
     fn test_xdmf_serialization() {
-        unimplemented!("Serialization test for Xdmf");
+        let xdmf = Xdmf::default();
+
+        pretty_assertions::assert_eq!(
+            to_string(&xdmf).unwrap(),
+            "<Xdmf Version=\"3.0\"><Domain/></Xdmf>"
+        );
     }
 
     #[test]
@@ -179,6 +185,7 @@ mod tests {
 
     #[test]
     fn test_domain_serialization() {
-        unimplemented!("Serialization test for Domain");
+        let domain = Domain::default();
+        pretty_assertions::assert_eq!(to_string(&domain).unwrap(), "<Domain/>");
     }
 }

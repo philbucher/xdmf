@@ -414,7 +414,6 @@ fn temporal_collection_grid() {
                         ),
                     },
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
-                    indices: None,
                     time: Some(Time {
                         value: "1.0".into(),
                     }),
@@ -461,7 +460,6 @@ fn temporal_collection_grid() {
                         ),
                     },
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
-                    indices: None,
                     time: Some(Time {
                         value: "2.0".into(),
                     }),
@@ -508,7 +506,6 @@ fn temporal_collection_grid() {
                         ),
                     },
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
-                    indices: None,
                     time: Some(Time {
                         value: "3.0".into(),
                     }),

@@ -17,18 +17,6 @@ pub struct Attribute {
     pub data_items: Vec<DataItem>,
 }
 
-impl Attribute {
-    pub(crate) fn set_indices(&mut self, indices: DataItem) {
-        assert_eq!(
-            self.data_items.len(),
-            1,
-            "Indices can only be set if one data item is present."
-        );
-        // prepend indices to the data items
-        self.data_items.insert(0, indices);
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum AttributeType {
     #[default]
