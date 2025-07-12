@@ -448,7 +448,7 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoRe
         std::fs::create_dir_all(&path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
-                format!("Failed to create directory {:?}: {}", path, e),
+                format!("Failed to create directory {path:?}: {e}"),
             )
         })?;
     }

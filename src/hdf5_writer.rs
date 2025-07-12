@@ -50,14 +50,16 @@ impl DataWriter for SingleFileHdf5Writer {
 
 pub(crate) struct MultipleFilesHdf5Writer {
     #[allow(dead_code)] // remove this, only temp to silence clippy
-    base_file_name: PathBuf,
+    h5_files_dir: PathBuf,
 }
 
 impl MultipleFilesHdf5Writer {
     pub(crate) fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
-        // TODO since multiple h5 files will be created, write them in a folder => TODO create this folder
-        let base_file_name = base_file_name.as_ref().to_path_buf();
-        Ok(Self { base_file_name })
+        let h5_files_dir = base_file_name.as_ref().to_path_buf().with_extension("h5");
+
+        crate::mpi_safe_create_dir_all(&h5_files_dir)?;
+
+        Ok(Self { h5_files_dir })
     }
 }
 
@@ -67,6 +69,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 
     fn write_mesh(&mut self, _points: &[f64], _cells: &[u64]) -> IoResult<(String, String)> {
+        let _file_name = self.h5_files_dir.join("mesh.h5");
         unimplemented!()
     }
 
@@ -80,7 +83,24 @@ impl DataWriter for MultipleFilesHdf5Writer {
         unimplemented!()
     }
 
-    fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
+    fn write_data(&mut self, time: &str, _data: &crate::Values) -> IoResult<String> {
+        let _file_name = self.h5_files_dir.join(format!("t_{time}.h5"));
         unimplemented!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mutliple_files_hdf5_writer_create_dir() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let writer = MultipleFilesHdf5Writer::new(&file_name).unwrap();
+        let exp_dir_name = file_name.with_extension("h5");
+        assert_eq!(writer.h5_files_dir, exp_dir_name);
+        assert!(writer.h5_files_dir.exists());
+        assert!(writer.h5_files_dir.is_dir());
     }
 }
