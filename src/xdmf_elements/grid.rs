@@ -1,8 +1,6 @@
 use serde::Serialize;
 
-use super::attribute::Attribute;
-use super::geometry::Geometry;
-use super::topology::Topology;
+use super::{attribute::Attribute, geometry::Geometry, topology::Topology};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Grid {
@@ -108,15 +106,17 @@ pub enum CollectionType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use quick_xml::se::to_string;
 
-    use crate::xdmf_elements::attribute::{Attribute, AttributeType, Center};
-    use crate::xdmf_elements::data_item::{DataItem, NumberType};
-    use crate::xdmf_elements::dimensions::Dimensions;
-    use crate::xdmf_elements::geometry::{Geometry, GeometryType};
-    use crate::xdmf_elements::grid::{CollectionType, Grid, Time};
-    use crate::xdmf_elements::topology::{Topology, TopologyType};
+    use super::*;
+    use crate::xdmf_elements::{
+        attribute::{Attribute, AttributeType, Center},
+        data_item::{DataItem, NumberType},
+        dimensions::Dimensions,
+        geometry::{Geometry, GeometryType},
+        grid::{CollectionType, Grid, Time},
+        topology::{Topology, TopologyType},
+    };
 
     fn dummy_geometry() -> Geometry {
         Geometry {

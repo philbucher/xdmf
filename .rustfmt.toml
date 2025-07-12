@@ -1,0 +1,5 @@
+# cargo +nightly fmt
+
+group_imports = "StdExternalCrate" # requires nightly
+imports_granularity = "Crate"      # requires nightly
+reorder_imports = true

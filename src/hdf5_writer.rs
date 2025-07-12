@@ -1,10 +1,11 @@
-use std::io::Result as IoResult;
-use std::path::{Path, PathBuf};
+use std::{
+    io::Result as IoResult,
+    path::{Path, PathBuf},
+};
 
 use hdf5::File as H5File;
 
-use crate::DataWriter;
-use crate::xdmf_elements::data_item::Format;
+use crate::{DataWriter, xdmf_elements::data_item::Format};
 
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,

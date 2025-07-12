@@ -1,6 +1,8 @@
-use std::collections::BTreeMap;
-use std::io::Result as IoResult;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    io::Result as IoResult,
+    path::{Path, PathBuf},
+};
 
 use xdmf_elements::{
     Xdmf, attribute,
@@ -20,9 +22,7 @@ pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use values::Values;
-pub use xdmf_elements::CellType;
-pub use xdmf_elements::attribute::AttributeType;
-pub use xdmf_elements::data_item::Format;
+pub use xdmf_elements::{CellType, attribute::AttributeType, data_item::Format};
 
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;

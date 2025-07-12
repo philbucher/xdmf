@@ -20,8 +20,9 @@ impl Serialize for Dimensions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use quick_xml::se::to_string;
+
+    use super::*;
 
     #[test]
     fn test_dimensions_serialize() {

@@ -1,5 +1,4 @@
 use temp_dir::TempDir;
-
 use xdmf::TimeSeriesWriter;
 
 #[test]

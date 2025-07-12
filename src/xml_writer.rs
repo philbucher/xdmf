@@ -1,9 +1,6 @@
 use std::io::Result as IoResult;
 
-use crate::DataWriter;
-use crate::values::Values;
-
-use crate::xdmf_elements::data_item::Format;
+use crate::{DataWriter, values::Values, xdmf_elements::data_item::Format};
 
 pub(crate) struct XmlWriter {}
 

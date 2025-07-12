@@ -1,12 +1,13 @@
 use quick_xml::Writer;
-
-use xdmf::xdmf_elements::attribute::{Attribute, AttributeType, Center};
-use xdmf::xdmf_elements::data_item::{DataItem, NumberType};
-use xdmf::xdmf_elements::dimensions::Dimensions;
-use xdmf::xdmf_elements::geometry::{Geometry, GeometryType};
-use xdmf::xdmf_elements::grid::{CollectionType, Grid, Time};
-use xdmf::xdmf_elements::topology::{Topology, TopologyType};
-use xdmf::xdmf_elements::{Domain, XDMF_TAG, Xdmf};
+use xdmf::xdmf_elements::{
+    Domain, XDMF_TAG, Xdmf,
+    attribute::{Attribute, AttributeType, Center},
+    data_item::{DataItem, NumberType},
+    dimensions::Dimensions,
+    geometry::{Geometry, GeometryType},
+    grid::{CollectionType, Grid, Time},
+    topology::{Topology, TopologyType},
+};
 
 #[test]
 fn basic_grid() {
