@@ -5,7 +5,7 @@ use std::{
 
 use hdf5::File as H5File;
 
-use crate::{DataWriter, xdmf_elements::data_item::Format};
+use crate::{DataMap, DataWriter, WrittenData, xdmf_elements::data_item::Format};
 
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,
@@ -38,7 +38,12 @@ impl DataWriter for SingleFileHdf5Writer {
         unimplemented!()
     }
 
-    fn write_data(&mut self, _time: &str, _data: &crate::Values) -> IoResult<String> {
+    fn write_data(
+        &mut self,
+        _time: &str,
+        _point_data: Option<&DataMap>,
+        _cell_data: Option<&DataMap>,
+    ) -> IoResult<WrittenData> {
         unimplemented!()
     }
 
@@ -88,8 +93,8 @@ impl DataWriter for MultipleFilesHdf5Writer {
             .map_err(std::io::Error::other)?;
 
         Ok((
-            file_name.join("points").to_string_lossy().to_string(),
-            file_name.join("cells").to_string_lossy().to_string(),
+            file_name.to_string_lossy().to_string() + ":points",
+            file_name.to_string_lossy().to_string() + ":cells",
         ))
     }
 
@@ -103,8 +108,12 @@ impl DataWriter for MultipleFilesHdf5Writer {
         unimplemented!()
     }
 
-    fn write_data(&mut self, time: &str, _data: &crate::Values) -> IoResult<String> {
-        let _file_name = self.h5_files_dir.join(format!("t_{time}.h5"));
+    fn write_data(
+        &mut self,
+        _time: &str,
+        _point_data: Option<&DataMap>,
+        _cell_data: Option<&DataMap>,
+    ) -> IoResult<WrittenData> {
         unimplemented!()
     }
 }
@@ -141,11 +150,11 @@ mod tests {
 
         assert_eq!(
             points_path,
-            mesh_file.join("points").to_string_lossy().to_string()
+            mesh_file.to_string_lossy().to_string() + ":points"
         );
         assert_eq!(
             cells_path,
-            mesh_file.join("cells").to_string_lossy().to_string()
+            mesh_file.to_string_lossy().to_string() + ":cells"
         );
 
         // read back the data to verify
