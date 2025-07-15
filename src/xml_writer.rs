@@ -53,8 +53,6 @@ impl DataWriter for XmlWriter {
         point_data: Option<&DataMap>,
         cell_data: Option<&DataMap>,
     ) -> IoResult<WrittenData> {
-        let format = self.format();
-
         let create_data_items =
             |data_map: Option<&DataMap>| -> IoResult<BTreeMap<String, (AttributeType, DataItem)>> {
                 data_map
@@ -65,7 +63,7 @@ impl DataWriter for XmlWriter {
                             name: None,
                             dimensions: Some(vals.dimensions()),
                             number_type: Some(vals.number_type()),
-                            format: Some(format),
+                            format: Some(self.format()),
                             precision: Some(vals.precision()),
                             data: self.values_to_string(vals),
                             reference: None,
