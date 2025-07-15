@@ -4,10 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use hdf5::File as H5File;
+use hdf5::{File as H5File, Group as H5Group};
 
 use crate::{
-    DataMap, DataWriter, WrittenData,
+    DataMap, DataWriter, Values, WrittenData,
     xdmf_elements::{
         attribute::AttributeType,
         data_item::{DataItem, Format},
@@ -124,42 +124,40 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
         let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
 
-        let point_data_group_name = "point_data";
-        let cell_data_group_name = "cell_data";
+        let point_data_group: Option<H5Group> = if point_data.is_some() {
+            Some(
+                h5_file
+                    .create_group("point_data")
+                    .map_err(std::io::Error::other)?,
+            )
+        } else {
+            None
+        };
 
-        if point_data.is_some() {
-            h5_file
-                .create_group(point_data_group_name)
-                .map_err(std::io::Error::other)?;
-        }
-
-        if cell_data.is_some() {
-            h5_file
-                .create_group(cell_data_group_name)
-                .map_err(std::io::Error::other)?;
-        }
+        let cell_data_group: Option<H5Group> = if cell_data.is_some() {
+            Some(
+                h5_file
+                    .create_group("cell_data")
+                    .map_err(std::io::Error::other)?,
+            )
+        } else {
+            None
+        };
 
         let format = self.format();
 
         let create_data_items = |data_map: Option<&DataMap>,
-                                 group_name: &str|
+                                 group: Option<H5Group>|
          -> IoResult<BTreeMap<String, (AttributeType, DataItem)>> {
             data_map
                 .unwrap_or(&BTreeMap::new())
                 .iter()
                 .map(|(data_name, (attr_type, vals))| {
-                    h5_file
-                        .group(group_name)
-                        .map_err(std::io::Error::other)?
-                        .new_dataset::<f64>()
-                        .shape(vals.len())
-                        .create(data_name.as_str())
-                        .map_err(std::io::Error::other)?
-                        .write(vals.data())
-                        .map_err(std::io::Error::other)?;
+                    let group = group.as_ref().expect("Group creation failed");
+                    write_values(group, data_name, vals)?;
 
                     let data_path = file_name.to_string_lossy().to_string()
-                        + &format!(":{group_name}/{data_name}");
+                        + &format!(":{}/{data_name}", group.name());
 
                     let data_item = DataItem {
                         name: None,
@@ -176,10 +174,29 @@ impl DataWriter for MultipleFilesHdf5Writer {
         };
 
         Ok(WrittenData {
-            point_data: create_data_items(point_data, point_data_group_name)?,
-            cell_data: create_data_items(cell_data, cell_data_group_name)?,
+            point_data: create_data_items(point_data, point_data_group)?,
+            cell_data: create_data_items(cell_data, cell_data_group)?,
         })
     }
+}
+
+fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<()> {
+    let data_set = match vals {
+        Values::F64(_) => group.new_dataset::<f64>(),
+        Values::U64(_) => group.new_dataset::<u64>(),
+    };
+
+    let data_set = data_set
+        .shape(vals.dimensions().0)
+        .create(dataset_name)
+        .map_err(std::io::Error::other)?;
+
+    match vals {
+        Values::F64(v) => data_set.write(v).map_err(std::io::Error::other),
+        Values::U64(v) => data_set.write(v).map_err(std::io::Error::other),
+    }?;
+
+    Ok(())
 }
 
 #[cfg(test)]
