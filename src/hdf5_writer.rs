@@ -194,9 +194,7 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
     match vals {
         Values::F64(v) => data_set.write(v).map_err(std::io::Error::other),
         Values::U64(v) => data_set.write(v).map_err(std::io::Error::other),
-    }?;
-
-    Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +202,46 @@ mod tests {
     use float_cmp::assert_approx_eq;
 
     use super::*;
+
+    #[test]
+    fn test_write_values() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+
+        let h5_file = H5File::create(&file_name).unwrap();
+        let group = h5_file.create_group("test_group").unwrap();
+
+        let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
+        let vec_u64 = vec![10_u64, 20, 30, 40, 50, 60];
+
+        write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
+        write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
+
+        // Verify the file exists
+        assert!(file_name.exists());
+
+        // Read back the data to verify
+        let h5_file_read = H5File::open(&file_name).unwrap();
+        let data_f64: Vec<f64> = h5_file_read
+            .group("test_group")
+            .unwrap()
+            .dataset("test_f64")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+        let data_u64: Vec<u64> = h5_file_read
+            .group("test_group")
+            .unwrap()
+            .dataset("test_u64")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+
+        assert_approx_eq!(&[f64], &vec_f64, &data_f64);
+        assert_eq!(&vec_u64, &data_u64);
+    }
 
     #[test]
     fn test_mutliple_files_hdf5_writer_new() {
