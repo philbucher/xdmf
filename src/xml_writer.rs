@@ -59,16 +59,13 @@ impl DataWriter for XmlWriter {
                     .unwrap_or(&BTreeMap::new())
                     .iter()
                     .map(|(data_name, (attr_type, vals))| {
-                        let data_item = DataItem {
-                            name: None,
-                            dimensions: Some(vals.dimensions()),
-                            number_type: Some(vals.number_type()),
-                            format: Some(self.format()),
-                            precision: Some(vals.precision()),
-                            data: self.values_to_string(vals),
-                            reference: None,
-                        };
-                        Ok((data_name.clone(), (*attr_type, data_item)))
+                        Ok((
+                            data_name.clone(),
+                            (
+                                *attr_type,
+                                self.create_data_item(vals, self.values_to_string(vals)),
+                            ),
+                        ))
                     })
                     .collect()
             };

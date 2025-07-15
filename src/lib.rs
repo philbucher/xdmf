@@ -50,6 +50,18 @@ pub(crate) trait DataWriter {
     fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
+
+    fn create_data_item(&self, vals: &Values, data: String) -> DataItem {
+        DataItem {
+            name: None,
+            dimensions: Some(vals.dimensions()),
+            number_type: Some(vals.number_type()),
+            format: Some(self.format()),
+            precision: Some(vals.precision()),
+            data,
+            reference: None,
+        }
+    }
 }
 
 pub(crate) struct WrittenData {

@@ -155,16 +155,10 @@ impl DataWriter for MultipleFilesHdf5Writer {
                     let data_path = file_name.to_string_lossy().to_string()
                         + &format!(":{group_name}/{data_name}");
 
-                    let data_item = DataItem {
-                        name: None,
-                        dimensions: Some(vals.dimensions()),
-                        number_type: Some(vals.number_type()),
-                        format: Some(self.format()),
-                        precision: Some(vals.precision()),
-                        data: data_path,
-                        reference: None,
-                    };
-                    Ok((data_name.clone(), (*attr_type, data_item)))
+                    Ok((
+                        data_name.clone(),
+                        (*attr_type, self.create_data_item(vals, data_path)),
+                    ))
                 })
                 .collect()
         };
