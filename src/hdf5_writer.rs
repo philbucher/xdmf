@@ -1,11 +1,18 @@
 use std::{
+    collections::BTreeMap,
     io::Result as IoResult,
     path::{Path, PathBuf},
 };
 
 use hdf5::File as H5File;
 
-use crate::{DataMap, DataWriter, WrittenData, xdmf_elements::data_item::Format};
+use crate::{
+    DataMap, DataWriter, WrittenData,
+    xdmf_elements::{
+        attribute::AttributeType,
+        data_item::{DataItem, Format},
+    },
+};
 
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,
@@ -110,11 +117,68 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
     fn write_data(
         &mut self,
-        _time: &str,
-        _point_data: Option<&DataMap>,
-        _cell_data: Option<&DataMap>,
+        time: &str,
+        point_data: Option<&DataMap>,
+        cell_data: Option<&DataMap>,
     ) -> IoResult<WrittenData> {
-        unimplemented!()
+        let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
+        let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
+
+        let point_data_group_name = "point_data";
+        let cell_data_group_name = "cell_data";
+
+        if point_data.is_some() {
+            h5_file
+                .create_group(point_data_group_name)
+                .map_err(std::io::Error::other)?;
+        }
+
+        if cell_data.is_some() {
+            h5_file
+                .create_group(cell_data_group_name)
+                .map_err(std::io::Error::other)?;
+        }
+
+        let format = self.format();
+
+        let create_data_items = |data_map: Option<&DataMap>,
+                                 group_name: &str|
+         -> IoResult<BTreeMap<String, (AttributeType, DataItem)>> {
+            data_map
+                .unwrap_or(&BTreeMap::new())
+                .iter()
+                .map(|(data_name, (attr_type, vals))| {
+                    h5_file
+                        .group(group_name)
+                        .map_err(std::io::Error::other)?
+                        .new_dataset::<f64>()
+                        .shape(vals.len())
+                        .create(data_name.as_str())
+                        .map_err(std::io::Error::other)?
+                        .write(vals.data())
+                        .map_err(std::io::Error::other)?;
+
+                    let data_path = file_name.to_string_lossy().to_string()
+                        + &format!(":{group_name}/{data_name}");
+
+                    let data_item = DataItem {
+                        name: None,
+                        dimensions: Some(vals.dimensions()),
+                        number_type: Some(vals.number_type()),
+                        format: Some(format),
+                        precision: Some(vals.precision()),
+                        data: data_path,
+                        reference: None,
+                    };
+                    Ok((data_name.clone(), (*attr_type, data_item)))
+                })
+                .collect()
+        };
+
+        Ok(WrittenData {
+            point_data: create_data_items(point_data, point_data_group_name)?,
+            cell_data: create_data_items(cell_data, cell_data_group_name)?,
+        })
     }
 }
 
