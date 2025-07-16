@@ -85,16 +85,16 @@ impl TimeSeriesWriterOptions {
         self
     }
 
-    fn create_writer(&self, file_name: &Path) -> Box<dyn DataWriter> {
+    fn create_writer(&self, file_name: &Path) -> IoResult<Box<dyn DataWriter>> {
         match self.format {
-            Format::XML => Box::new(xml_writer::XmlWriter::new()),
+            Format::XML => Ok(Box::new(xml_writer::XmlWriter::new())),
 
             Format::HDF => {
                 #[cfg(feature = "hdf5")]
                 if self.multiple_files {
-                    Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name).unwrap())
+                    Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name)?))
                 } else {
-                    Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name).unwrap())
+                    Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name)?))
                 }
 
                 #[cfg(not(feature = "hdf5"))]
@@ -152,7 +152,7 @@ impl TimeSeriesWriter {
 
         Ok(Self {
             xdmf_file_name,
-            writer: options.create_writer(file_name.as_ref()),
+            writer: options.create_writer(file_name.as_ref())?,
         })
     }
 
