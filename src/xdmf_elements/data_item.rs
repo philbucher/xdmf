@@ -41,7 +41,7 @@ impl Default for DataItem {
 }
 
 impl DataItem {
-    pub fn new_reference(source: &DataItem, source_path: String) -> Self {
+    pub fn new_reference(source: &DataItem, source_path: &str) -> Self {
         DataItem {
             name: None,
             dimensions: None,
@@ -131,8 +131,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ref_item =
-            DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());
+        let ref_item = DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
 
         assert!(ref_item.name.is_none());
         assert!(ref_item.dimensions.is_none());
@@ -171,8 +170,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ref_item =
-            DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem".to_string());
+        let ref_item = DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
 
         pretty_assertions::assert_eq!(
             to_string(&ref_item).unwrap(),

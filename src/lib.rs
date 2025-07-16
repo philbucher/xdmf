@@ -91,9 +91,10 @@ impl TimeSeriesWriterOptions {
 
             Format::HDF => {
                 #[cfg(feature = "hdf5")]
-                match self.multiple_files {
-                    true => Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name).unwrap()),
-                    false => Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name).unwrap()),
+                if self.multiple_files {
+                    Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name).unwrap())
+                } else {
+                    Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name).unwrap())
                 }
 
                 #[cfg(not(feature = "hdf5"))]
@@ -127,10 +128,17 @@ impl TimeSeriesWriter {
     pub fn options() -> TimeSeriesWriterOptions {
         TimeSeriesWriterOptions::default()
     }
+
+    /// # Errors
+    ///
+    /// TODO
     pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
         Self::new_with_options(file_name, &TimeSeriesWriter::options())
     }
 
+    /// # Errors
+    ///
+    /// TODO
     pub fn new_with_options(
         file_name: impl AsRef<Path>,
         options: &TimeSeriesWriterOptions,
@@ -148,6 +156,9 @@ impl TimeSeriesWriter {
         })
     }
 
+    /// # Errors
+    ///
+    /// TODO
     pub fn write_mesh(
         mut self,
         points: &[f64],
@@ -157,7 +168,7 @@ impl TimeSeriesWriter {
 
         let num_cells = cells.1.len();
 
-        let prepared_cells = prepare_cells(cells)?;
+        let prepared_cells = prepare_cells(cells);
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
 
@@ -182,9 +193,9 @@ impl TimeSeriesWriter {
         };
 
         let data_item_coords_ref =
-            DataItem::new_reference(&data_item_coords, "/Xdmf/Domain/DataItem".to_string());
+            DataItem::new_reference(&data_item_coords, "/Xdmf/Domain/DataItem");
         let data_item_connectivity_ref =
-            DataItem::new_reference(&data_item_connectivity, "/Xdmf/Domain/DataItem".to_string());
+            DataItem::new_reference(&data_item_connectivity, "/Xdmf/Domain/DataItem");
 
         let geometry = Geometry {
             geometry_type: GeometryType::XYZ,
@@ -332,8 +343,8 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 
 /// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
 /// and for poly-cells, the number of points is also added.
-/// TODO if all cells are the same, then the type information can be stored as TopologyType
-fn prepare_cells(cells: (&[u64], &[CellType])) -> IoResult<Vec<u64>> {
+/// TODO if all cells are the same, then the type information can be stored as `TopologyType`
+fn prepare_cells(cells: (&[u64], &[CellType])) -> Vec<u64> {
     let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
     let mut index = 0_usize;
 
@@ -351,7 +362,7 @@ fn prepare_cells(cells: (&[u64], &[CellType])) -> IoResult<Vec<u64>> {
         index += num_points; // move index to the next cell
     }
 
-    Ok(cells_with_types)
+    cells_with_types
 }
 
 pub struct TimeSeriesDataWriter {
@@ -369,6 +380,9 @@ impl TimeSeriesDataWriter {
     // - check for unique time steps
     // - assert dimensions of points and cells match
     // - check that the data is not empty
+    /// # Errors
+    ///
+    /// TODO
     pub fn write_data(
         &mut self,
         time: &str,
@@ -452,8 +466,11 @@ impl TimeSeriesDataWriter {
 /// This function will create the directory if it does not exist, and wait for it to appear
 /// This is particularly needed on systems such as clusters with slow filesystems, to ensure that
 /// all processes can see the created directory before proceeding.
-/// See https://github.com/KratosMultiphysics/Kratos/pull/9247 where this was taken from
+/// See <https://github.com/KratosMultiphysics/Kratos/pull/9247> where this was taken from
 /// Its a battle-tested solution tested with > 1000 processes
+/// # Errors
+///
+/// TODO
 pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoResult<()> {
     if !&path.as_ref().exists() {
         std::fs::create_dir_all(&path).map_err(|e| {
@@ -509,8 +526,7 @@ mod tests {
                 CellType::Triangle,
                 CellType::Quadrilateral,
             ],
-        ))
-        .unwrap();
+        ));
 
         assert_eq!(
             cells_prep,
@@ -520,48 +536,45 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_by_celltype() {
-        assert_eq!(
-            prepare_cells((&[5], &[CellType::Vertex])).unwrap(),
-            vec![1, 1, 5]
-        );
+        assert_eq!(prepare_cells((&[5], &[CellType::Vertex])), vec![1, 1, 5]);
 
         assert_eq!(
-            prepare_cells((&[5, 6], &[CellType::Edge])).unwrap(),
+            prepare_cells((&[5, 6], &[CellType::Edge])),
             vec![2, 2, 5, 6]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7], &[CellType::Triangle])).unwrap(),
+            prepare_cells((&[5, 6, 7], &[CellType::Triangle])),
             vec![4, 5, 6, 7]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8], &[CellType::Quadrilateral])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8], &[CellType::Quadrilateral])),
             vec![5, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8], &[CellType::Tetrahedron])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8], &[CellType::Tetrahedron])),
             vec![6, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9], &[CellType::Pyramid])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8, 9], &[CellType::Pyramid])),
             vec![7, 5, 6, 7, 8, 9]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Wedge])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Wedge])),
             vec![8, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron])),
             vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7], &[CellType::Edge3])).unwrap(),
+            prepare_cells((&[5, 6, 7], &[CellType::Edge3])),
             vec![34, 5, 6, 7]
         );
 
@@ -569,18 +582,17 @@ mod tests {
             prepare_cells((
                 &[5, 6, 7, 8, 9, 10, 11, 12, 13],
                 &[CellType::Quadrilateral9]
-            ))
-            .unwrap(),
+            )),
             vec![35, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6])),
             vec![36, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8])).unwrap(),
+            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8])),
             vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
@@ -588,8 +600,7 @@ mod tests {
             prepare_cells((
                 &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
                 &[CellType::Tetrahedron10]
-            ))
-            .unwrap(),
+            )),
             vec![38, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         );
 
@@ -597,8 +608,7 @@ mod tests {
             prepare_cells((
                 &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
                 &[CellType::Pyramid13]
-            ))
-            .unwrap(),
+            )),
             vec![39, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
 
@@ -606,8 +616,7 @@ mod tests {
             prepare_cells((
                 &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
                 &[CellType::Wedge15]
-            ))
-            .unwrap(),
+            )),
             vec![40, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
         );
 
@@ -617,8 +626,7 @@ mod tests {
                     5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
                 ],
                 &[CellType::Wedge18]
-            ))
-            .unwrap(),
+            )),
             vec![
                 41, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
             ]
@@ -630,8 +638,7 @@ mod tests {
                     5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
                 ],
                 &[CellType::Hexahedron20]
-            ))
-            .unwrap(),
+            )),
             vec![
                 48, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
             ]
@@ -644,8 +651,7 @@ mod tests {
                     26, 27, 28
                 ],
                 &[CellType::Hexahedron24]
-            ))
-            .unwrap(),
+            )),
             vec![
                 49, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
                 26, 27, 28
@@ -659,8 +665,7 @@ mod tests {
                     26, 27, 28, 29, 30, 31
                 ],
                 &[CellType::Hexahedron27]
-            ))
-            .unwrap(),
+            )),
             vec![
                 50, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
                 26, 27, 28, 29, 30, 31
