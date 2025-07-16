@@ -92,7 +92,9 @@ impl TimeSeriesWriterOptions {
             Format::HDF => {
                 #[cfg(feature = "hdf5")]
                 if self.multiple_files {
-                    Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(file_name)?))
+                    Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
+                        file_name,
+                    )?))
                 } else {
                     Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name)?))
                 }
