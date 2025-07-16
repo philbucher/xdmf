@@ -28,7 +28,7 @@ jobs:
     - name: Run clippy
       run: |
         sudo apt-get install libhdf5-dev
-        cargo clippy --all-targets -- -D warnings
+        cargo clippy --all-targets -- -D warnings -W clippy::missing_errors_doc -W clippy::needless_pass_by_value -W clippy::match_bool -W clippy::doc_markdown -W clippy::unnecessary_wraps
 
     - name: Run tests
       run: |
