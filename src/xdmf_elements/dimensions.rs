@@ -32,7 +32,7 @@ mod tests {
             T: Serialize,
         {
             #[serde(rename = "$value")]
-            pub(crate) content: T,
+            content: T,
         }
 
         let dimensions = XmlRoot {
