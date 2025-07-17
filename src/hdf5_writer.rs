@@ -274,7 +274,6 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use float_cmp::assert_approx_eq;
