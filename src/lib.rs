@@ -135,7 +135,7 @@ impl TimeSeriesWriter {
     ///
     /// TODO
     pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
-        Self::new_with_options(file_name, &TimeSeriesWriter::options())
+        Self::new_with_options(file_name, &Self::options())
     }
 
     /// # Errors
