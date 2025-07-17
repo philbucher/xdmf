@@ -30,6 +30,8 @@ pretty_assertions = "1.4.1"
 temp-dir = "0.1.16"
 
 [lints.clippy]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 assertions_on_result_states = "warn"
 bool_to_int_with_if = "warn"
 cfg_not_test = "warn"
