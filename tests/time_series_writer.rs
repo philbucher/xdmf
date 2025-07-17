@@ -2,7 +2,7 @@ use temp_dir::TempDir;
 use xdmf::TimeSeriesWriter;
 
 #[test]
-fn test_write_xdmf() {
+fn write_xdmf() {
     let node_coords = [
         0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0,
         0.0, 2.0, 0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.5, -0.5, 0.2, -0.5, 0.5, 0.2, 1.5, -0.5,
@@ -152,7 +152,7 @@ fn test_write_xdmf() {
 }
 
 #[test]
-fn test_write_xdmf_only_mesh() {
+fn write_xdmf_only_mesh() {
     let node_coords = [
         0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0,
         0.0, 2.0, 0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.5, -0.5, 0.2, -0.5, 0.5, 0.2, 1.5, -0.5,
@@ -219,7 +219,7 @@ fn test_write_xdmf_only_mesh() {
 
 #[cfg(feature = "unstable-submesh-api")]
 #[test]
-fn test_write_xdmf_with_submeshes() {
+fn write_xdmf_with_submeshes() {
     let node_coords = [
         0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0,
         0.0, 2.0, 0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.5, -0.5, 0.2, -0.5, 0.5, 0.2, 1.5, -0.5,

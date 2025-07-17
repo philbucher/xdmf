@@ -25,7 +25,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dimensions_serialize() {
+    fn dimensions_serialize() {
         #[derive(Serialize)]
         pub(crate) struct XmlRoot<T>
         where
@@ -42,7 +42,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dimensions_compare() {
+    fn dimensions_compare() {
         let dimensions1 = Dimensions(vec![2, 3, 4]);
         let dimensions2 = Dimensions(vec![2, 3, 4]);
         let dimensions3 = Dimensions(vec![1, 2, 3]);

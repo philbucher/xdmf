@@ -28,7 +28,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_topology_serialization() {
+    fn topology_serialization() {
         let topology = Topology {
             topology_type: TopologyType::Triangle,
             number_of_elements: "3".to_string(),

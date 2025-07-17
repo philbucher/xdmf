@@ -25,12 +25,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_geometry_type_default() {
+    fn geometry_type_default() {
         assert_eq!(GeometryType::default(), GeometryType::XYZ);
     }
 
     #[test]
-    fn test_geometry_serialization() {
+    fn geometry_serialization() {
         let geometry = Geometry {
             geometry_type: GeometryType::XY,
             data_item: DataItem::default(),

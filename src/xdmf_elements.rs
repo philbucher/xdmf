@@ -121,7 +121,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_xdmf_new() {
+    fn xdmf_new() {
         let domain = Domain::default();
         let xdmf = Xdmf::new(domain);
 
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xdmf_default() {
+    fn xdmf_default() {
         let xdmf = Xdmf::default();
 
         assert_eq!(xdmf.version, "3.0");
@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xdmf_serialization() {
+    fn xdmf_serialization() {
         let xdmf = Xdmf::default();
 
         pretty_assertions::assert_eq!(
@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_new() {
+    fn domain_new() {
         let grid = Grid::new_uniform(
             "test_grid",
             geometry::Geometry {
@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_default() {
+    fn domain_default() {
         let mut domain = Domain::default();
         assert!(domain.grids.is_empty());
         assert!(domain.data_items.is_empty());
@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_serialization() {
+    fn domain_serialization() {
         let domain = Domain::default();
         pretty_assertions::assert_eq!(to_string(&domain).unwrap(), "<Domain/>");
     }

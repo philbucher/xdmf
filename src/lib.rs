@@ -496,7 +496,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_poly_cell_points() {
+    fn poly_cell_points_works() {
         assert_eq!(poly_cell_points(CellType::Vertex), Some(1));
         assert_eq!(poly_cell_points(CellType::Edge), Some(2));
         assert_eq!(poly_cell_points(CellType::Triangle), None);
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_cells() {
+    fn prepare_cells_works() {
         let cells_prep = prepare_cells((
             &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             &[
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_cells_by_celltype() {
+    fn prepare_cells_by_celltype() {
         assert_eq!(prepare_cells((&[5], &[CellType::Vertex])), vec![1, 1, 5]);
 
         assert_eq!(
@@ -676,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_points_and_cells_ok() {
+    fn validate_points_and_cells_ok() {
         // valid input, must not return an error
         validate_points_and_cells(
             &[0.0; 33],
@@ -693,13 +693,13 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_points_and_cells_only_points() {
+    fn validate_points_and_cells_only_points() {
         // valid input, must not return an error
         validate_points_and_cells(&[0.0; 33], (&[], &[])).unwrap();
     }
 
     #[test]
-    fn test_validate_points_and_cells_points_empty() {
+    fn validate_points_and_cells_points_empty() {
         let res = validate_points_and_cells(
             &[],
             (
@@ -720,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_points_and_cells_points_not_3d() {
+    fn validate_points_and_cells_points_not_3d() {
         let res = validate_points_and_cells(
             &[0.0; 22],
             (
@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_points_and_cells_conn_index_out_of_bounds() {
+    fn validate_points_and_cells_conn_index_out_of_bounds() {
         let res = validate_points_and_cells(
             &[0.0; 33],
             (
@@ -762,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_points_and_cells_conn_mismatch() {
+    fn validate_points_and_cells_conn_mismatch() {
         let res = validate_points_and_cells(
             &[0.0; 33],
             (
@@ -784,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn test_time_series_writer_create_folder() {
+    fn time_series_writer_create_folder() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let subfolder = Path::new("out/xdmf"); // deliberately not creating this folder
         let xdmf_folder = tmp_dir.path().join(subfolder);
@@ -803,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mpi_safe_create_dir_all() {
+    fn mpi_safe_create_dir_all_works() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let dirs_to_create = tmp_dir.path().join("out/xdmf/test/folder/random/testing");
 

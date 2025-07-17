@@ -194,7 +194,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_write_values() {
+    fn write_values_works() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("test.h5");
 
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mutliple_files_hdf5_writer_new() {
+    fn mutliple_files_hdf5_writer_new() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("test.xdmf");
         let writer = MultipleFilesHdf5Writer::new(&file_name).unwrap();
@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mutliple_files_hdf5_writer_write_mesh() {
+    fn mutliple_files_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(file_name).unwrap();

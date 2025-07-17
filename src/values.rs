@@ -45,7 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vec_f64() {
+    fn vec_f64() {
         let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
 
         let values = vec_f64.into();
@@ -57,7 +57,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vec_u64() {
+    fn vec_u64() {
         let vec_u64 = vec![1_u64, 2, 3, 4, 5, 6];
         let values = vec_u64.into();
         matches!(values, Values::U64(_));

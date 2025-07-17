@@ -45,7 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_attribute_default() {
+    fn attribute_default() {
         let attribute = Attribute::default();
         assert_eq!(attribute.name, "");
         assert_eq!(attribute.attribute_type, AttributeType::Scalar);
@@ -53,7 +53,7 @@ mod tests {
     }
 
     #[test]
-    fn test_attribute_serialization() {
+    fn attribute_serialization() {
         let attribute = Attribute {
             name: String::from("Temperature"),
             attribute_type: AttributeType::Scalar,
@@ -71,12 +71,12 @@ mod tests {
     }
 
     #[test]
-    fn test_attribute_type_default() {
+    fn attribute_type_default() {
         assert_eq!(AttributeType::default(), AttributeType::Scalar);
     }
 
     #[test]
-    fn test_center_default() {
+    fn center_default() {
         assert_eq!(Center::default(), Center::Node);
     }
 }

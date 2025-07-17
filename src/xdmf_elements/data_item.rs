@@ -83,7 +83,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_item_default() {
+    fn data_item_default() {
         let default_item = DataItem::default();
         assert!(default_item.name.is_none());
         assert_eq!(default_item.dimensions, Some(Dimensions(vec![1])));
@@ -95,17 +95,17 @@ mod tests {
     }
 
     #[test]
-    fn test_number_type_default() {
+    fn number_type_default() {
         assert_eq!(NumberType::default(), NumberType::Float);
     }
 
     #[test]
-    fn test_format_default() {
+    fn format_default() {
         assert_eq!(Format::default(), Format::XML);
     }
 
     #[test]
-    fn test_data_item_custom() {
+    fn data_item_custom() {
         let custom_item = DataItem {
             name: Some("custom_data_item".to_string()),
             dimensions: Some(Dimensions(vec![2, 3])),
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn test_data_item_reference() {
+    fn data_item_reference() {
         let source_data_item = DataItem {
             name: Some("source_data_item".to_string()),
             ..Default::default()
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn test_data_item_serialize() {
+    fn data_item_serialize() {
         let data_item = DataItem {
             name: Some("custom_data_item".to_string()),
             dimensions: Some(Dimensions(vec![2, 3])),
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn test_data_item_reference_serialize() {
+    fn data_item_reference_serialize() {
         let source_data_item = DataItem {
             name: Some("source_data_item".to_string()),
             ..Default::default()

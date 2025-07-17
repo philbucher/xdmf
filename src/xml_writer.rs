@@ -122,12 +122,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format() {
+    fn format() {
         assert_eq!(XmlWriter::new().format(), Format::XML);
     }
 
     #[test]
-    fn test_write_mesh() {
+    fn write_mesh() {
         let mut writer = XmlWriter::new();
         let points = vec![1., 2., 3., 4., 5., 6.];
         let cells = vec![0_u64, 1, 2, 0, 2, 3];

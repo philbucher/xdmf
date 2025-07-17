@@ -158,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grid_new_uniform() {
+    fn grid_new_uniform() {
         let grid = Grid::new_uniform("test", dummy_geometry(), dummy_topology());
         assert_eq!(grid.name, "test");
         assert_eq!(grid.grid_type, GridType::Uniform);
@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grid_new_collection() {
+    fn grid_new_collection() {
         let subgrid = Grid::new_uniform("sub", dummy_geometry(), dummy_topology());
         let grid = Grid::new_collection("coll", CollectionType::Spatial, Some(vec![subgrid]));
         assert_eq!(grid.name, "coll");
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grid_new_tree() {
+    fn grid_new_tree() {
         let subgrid = Grid::new_uniform("sub", dummy_geometry(), dummy_topology());
         let grid = Grid::new_tree("tree", Some(vec![subgrid]));
         assert_eq!(grid.name, "tree");
@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn test_time_new() {
+    fn time_new() {
         let time = Time::new(42);
         assert_eq!(time.value, "42");
         let time_str = Time::new("2024-06-01");
@@ -207,13 +207,13 @@ mod tests {
     }
 
     #[test]
-    fn test_time_serialization() {
+    fn time_serialization() {
         let time = Time::new("2024-06-01");
         pretty_assertions::assert_eq!(to_string(&time).unwrap(), "<Time Value=\"2024-06-01\"/>");
     }
 
     #[test]
-    fn test_grid_serialization() {
+    fn grid_serialization() {
         let geometry = dummy_geometry();
         let topology = dummy_topology();
         let mut grid = Grid::new_uniform("serialize", geometry, topology);
@@ -238,12 +238,12 @@ mod tests {
     }
 
     #[test]
-    fn test_gridtype_default() {
+    fn gridtype_default() {
         assert_eq!(GridType::default(), GridType::Uniform);
     }
 
     #[test]
-    fn test_collectiontype_default() {
+    fn collectiontype_default() {
         assert_eq!(CollectionType::default(), CollectionType::Spatial);
     }
 }
