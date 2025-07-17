@@ -28,7 +28,7 @@ pub struct DataItem {
 
 impl Default for DataItem {
     fn default() -> Self {
-        DataItem {
+        Self {
             name: None,
             dimensions: Some(Dimensions(vec![1])),
             number_type: Some(NumberType::default()),
@@ -41,8 +41,8 @@ impl Default for DataItem {
 }
 
 impl DataItem {
-    pub fn new_reference(source: &DataItem, source_path: &str) -> Self {
-        DataItem {
+    pub fn new_reference(source: &Self, source_path: &str) -> Self {
+        Self {
             name: None,
             dimensions: None,
             number_type: None,

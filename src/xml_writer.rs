@@ -13,7 +13,7 @@ pub(crate) struct XmlWriter {}
 
 impl XmlWriter {
     pub fn new() -> Self {
-        XmlWriter {}
+        Self {}
     }
 
     fn values_to_string(&self, data: &Values) -> String {

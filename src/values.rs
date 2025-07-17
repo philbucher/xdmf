@@ -7,35 +7,35 @@ pub enum Values {
 
 impl From<Vec<f64>> for Values {
     fn from(vec: Vec<f64>) -> Self {
-        Values::F64(vec)
+        Self::F64(vec)
     }
 }
 
 impl From<Vec<u64>> for Values {
     fn from(vec: Vec<u64>) -> Self {
-        Values::U64(vec)
+        Self::U64(vec)
     }
 }
 
 impl Values {
     pub(crate) fn precision(&self) -> u8 {
         match self {
-            Values::F64(_) => 8,
-            Values::U64(_) => 8,
+            Self::F64(_) => 8,
+            Self::U64(_) => 8,
         }
     }
 
     pub(crate) fn number_type(&self) -> NumberType {
         match self {
-            Values::F64(_) => NumberType::Float,
-            Values::U64(_) => NumberType::UInt,
+            Self::F64(_) => NumberType::Float,
+            Self::U64(_) => NumberType::UInt,
         }
     }
 
     pub(crate) fn dimensions(&self) -> Dimensions {
         match self {
-            Values::F64(v) => Dimensions(vec![v.len()]),
-            Values::U64(v) => Dimensions(vec![v.len()]),
+            Self::F64(v) => Dimensions(vec![v.len()]),
+            Self::U64(v) => Dimensions(vec![v.len()]),
         }
     }
 }

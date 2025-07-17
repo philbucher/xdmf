@@ -37,7 +37,7 @@ pub struct Time {
 
 impl Time {
     pub fn new(value: impl ToString) -> Self {
-        Time {
+        Self {
             value: value.to_string(),
         }
     }
@@ -45,7 +45,7 @@ impl Time {
 
 impl Grid {
     pub fn new_uniform(name: impl ToString, geometry: Geometry, topology: Topology) -> Self {
-        Grid {
+        Self {
             name: name.to_string(),
             grid_type: GridType::Uniform,
             collection_type: None,
@@ -60,9 +60,9 @@ impl Grid {
     pub fn new_collection(
         name: impl ToString,
         collection_type: CollectionType,
-        grids: Option<Vec<Grid>>,
+        grids: Option<Vec<Self>>,
     ) -> Self {
-        Grid {
+        Self {
             name: name.to_string(),
             grid_type: GridType::Collection,
             collection_type: Some(collection_type),
@@ -74,8 +74,8 @@ impl Grid {
         }
     }
 
-    pub fn new_tree(name: impl ToString, grids: Option<Vec<Grid>>) -> Self {
-        Grid {
+    pub fn new_tree(name: impl ToString, grids: Option<Vec<Self>>) -> Self {
+        Self {
             name: name.to_string(),
             grid_type: GridType::Tree,
             collection_type: None,
