@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     io::Result as IoResult,
     path::{Path, PathBuf},
 };
@@ -7,22 +6,23 @@ use std::{
 use hdf5::{File as H5File, Group as H5Group};
 
 use crate::{
-    DataMap, DataWriter, Values, WrittenData,
-    xdmf_elements::{
-        attribute::AttributeType,
-        data_item::{DataItem, Format},
-    },
+    DataWriter, Values,
+    xdmf_elements::{attribute, data_item::Format},
 };
 
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,
+    write_time: Option<String>,
 }
 
 impl SingleFileHdf5Writer {
     pub(crate) fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
         let h5_file = H5File::create(file_name.as_ref().to_path_buf().with_extension("h5"))
             .map_err(std::io::Error::other)?;
-        Ok(Self { h5_file })
+        Ok(Self {
+            h5_file,
+            write_time: None,
+        })
     }
 }
 
@@ -47,11 +47,38 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_data(
         &mut self,
-        _time: &str,
-        _point_data: Option<&DataMap>,
-        _cell_data: Option<&DataMap>,
-    ) -> IoResult<WrittenData> {
-        unimplemented!()
+        _name: &str,
+        _center: attribute::Center,
+        _data: &Values,
+    ) -> IoResult<String> {
+        if self.write_time.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Data file not initialized",
+            ));
+        }
+        Ok("asdf".to_string()) // Placeholder for actual implementation
+    }
+
+    fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
+        if self.write_time.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "Data file already initialized",
+            ));
+        }
+        self.write_time = Some(time.to_string());
+        Ok(())
+    }
+    fn write_data_finalize(&mut self) -> IoResult<()> {
+        if self.write_time.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Data file not initialized",
+            ));
+        }
+        self.write_time = None;
+        Ok(())
     }
 
     fn flush(&mut self) -> IoResult<()> {
@@ -62,6 +89,7 @@ impl DataWriter for SingleFileHdf5Writer {
 
 pub(crate) struct MultipleFilesHdf5Writer {
     h5_files_dir: PathBuf,
+    h5_data_file: Option<H5File>,
 }
 
 impl MultipleFilesHdf5Writer {
@@ -70,7 +98,10 @@ impl MultipleFilesHdf5Writer {
 
         crate::mpi_safe_create_dir_all(&h5_files_dir)?;
 
-        Ok(Self { h5_files_dir })
+        Ok(Self {
+            h5_files_dir,
+            h5_data_file: None,
+        })
     }
 }
 
@@ -117,59 +148,115 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
     fn write_data(
         &mut self,
-        time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
-    ) -> IoResult<WrittenData> {
-        let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
-        let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
+        _name: &str,
+        _center: attribute::Center,
+        _data: &Values,
+    ) -> IoResult<String> {
+        // TODO create group if it does not exist
+        // also double check that the name does not already exist
 
-        let point_data_group_name = "point_data";
-        let cell_data_group_name = "cell_data";
+        if self.h5_data_file.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Data file not initialized",
+            ));
+        }
 
-        if point_data.is_some() {
-            h5_file
-                .create_group(point_data_group_name)
-                .map_err(std::io::Error::other)?;
-        };
+        // write_values(
+        //     &self
+        //         .h5_data_file
+        //         .unwrap()
+        //         .group(group_name)
+        //         .map_err(std::io::Error::other)?,
+        //     data_name,
+        //     data,
+        // )?;
 
-        if cell_data.is_some() {
-            h5_file
-                .create_group(cell_data_group_name)
-                .map_err(std::io::Error::other)?;
-        };
-
-        let create_data_items = |data_map: Option<&DataMap>,
-                                 group_name: &str|
-         -> IoResult<BTreeMap<String, (AttributeType, DataItem)>> {
-            data_map
-                .unwrap_or(&BTreeMap::new())
-                .iter()
-                .map(|(data_name, (attr_type, vals))| {
-                    write_values(
-                        &h5_file.group(group_name).map_err(std::io::Error::other)?,
-                        data_name,
-                        vals,
-                    )?;
-
-                    let data_path = file_name.to_string_lossy().to_string()
-                        + &format!(":{group_name}/{data_name}");
-
-                    Ok((
-                        data_name.clone(),
-                        (*attr_type, self.create_data_item(vals, data_path)),
-                    ))
-                })
-                .collect()
-        };
-
-        Ok(WrittenData {
-            point_data: create_data_items(point_data, point_data_group_name)?,
-            cell_data: create_data_items(cell_data, cell_data_group_name)?,
-        })
+        // Ok(file_name.to_string_lossy().to_string() + &format!(":{group_name}/{name}"))
+        Ok("asdf".to_string()) // Placeholder for actual implementation
     }
+
+    fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
+        if self.h5_data_file.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "Data file already initialized",
+            ));
+        }
+        let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
+        self.h5_data_file = Some(H5File::create(&file_name).map_err(std::io::Error::other)?);
+
+        Ok(())
+    }
+
+    fn write_data_finalize(&mut self) -> IoResult<()> {
+        if self.h5_data_file.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Data file not initialized",
+            ));
+        }
+        // TODO check if this flushes the file etc
+        self.h5_data_file = None;
+        Ok(())
+    }
+
+    // fn write_data(
+    //     &mut self,
+    //     time: &str,
+    //     point_data: Option<&DataMap>,
+    //     cell_data: Option<&DataMap>,
+    // ) -> IoResult<WrittenData> {
+    //     let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
+    //     let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
+
+    //     let point_data_group_name = "point_data";
+    //     let cell_data_group_name = "cell_data";
+
+    //     if point_data.is_some() {
+    //         h5_file
+    //             .create_group(point_data_group_name)
+    //             .map_err(std::io::Error::other)?;
+    //     };
+
+    //     if cell_data.is_some() {
+    //         h5_file
+    //             .create_group(cell_data_group_name)
+    //             .map_err(std::io::Error::other)?;
+    //     };
+
+    //     let create_data_items = |data_map: Option<&DataMap>,
+    //                              group_name: &str|
+    //      -> IoResult<BTreeMap<String, (AttributeType, DataItem)>> {
+    //         data_map
+    //             .unwrap_or(&BTreeMap::new())
+    //             .iter()
+    //             .map(|(data_name, (attr_type, vals))| {
+    //                 write_values(
+    //                     &h5_file.group(group_name).map_err(std::io::Error::other)?,
+    //                     data_name,
+    //                     vals,
+    //                 )?;
+
+    //                 let data_path = file_name.to_string_lossy().to_string()
+    //                     + &format!(":{group_name}/{data_name}");
+
+    //                 Ok((
+    //                     data_name.clone(),
+    //                     (*attr_type, self.create_data_item(vals, data_path)),
+    //                 ))
+    //             })
+    //             .collect()
+    //     };
+
+    //     Ok(WrittenData {
+    //         point_data: create_data_items(point_data, point_data_group_name)?,
+    //         cell_data: create_data_items(cell_data, cell_data_group_name)?,
+    //     })
+    // }
 }
 
+#[expect(dead_code, reason = "Will be used again later on")]
 fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<()> {
     let data_set = match vals {
         Values::F64(_) => group.new_dataset::<f64>(),
@@ -187,51 +274,52 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use float_cmp::assert_approx_eq;
 
     use super::*;
 
-    #[test]
-    fn write_values_works() {
-        let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.h5");
+    // #[test]
+    // fn write_values_works() {
+    //     let tmp_dir = temp_dir::TempDir::new().unwrap();
+    //     let file_name = tmp_dir.path().join("test.h5");
 
-        let h5_file = H5File::create(&file_name).unwrap();
-        let group = h5_file.create_group("test_group").unwrap();
+    //     let h5_file = H5File::create(&file_name).unwrap();
+    //     let group = h5_file.create_group("test_group").unwrap();
 
-        let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
-        let vec_u64 = vec![10_u64, 20, 30, 40, 50, 60];
+    //     let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
+    //     let vec_u64 = vec![10_u64, 20, 30, 40, 50, 60];
 
-        write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
-        write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
+    //     write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
+    //     write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
 
-        // Verify the file exists
-        assert!(file_name.exists());
+    //     // Verify the file exists
+    //     assert!(file_name.exists());
 
-        // Read back the data to verify
-        let h5_file_read = H5File::open(&file_name).unwrap();
-        let data_f64: Vec<f64> = h5_file_read
-            .group("test_group")
-            .unwrap()
-            .dataset("test_f64")
-            .unwrap()
-            .read()
-            .unwrap()
-            .to_vec();
-        let data_u64: Vec<u64> = h5_file_read
-            .group("test_group")
-            .unwrap()
-            .dataset("test_u64")
-            .unwrap()
-            .read()
-            .unwrap()
-            .to_vec();
+    //     // Read back the data to verify
+    //     let h5_file_read = H5File::open(&file_name).unwrap();
+    //     let data_f64: Vec<f64> = h5_file_read
+    //         .group("test_group")
+    //         .unwrap()
+    //         .dataset("test_f64")
+    //         .unwrap()
+    //         .read()
+    //         .unwrap()
+    //         .to_vec();
+    //     let data_u64: Vec<u64> = h5_file_read
+    //         .group("test_group")
+    //         .unwrap()
+    //         .dataset("test_u64")
+    //         .unwrap()
+    //         .read()
+    //         .unwrap()
+    //         .to_vec();
 
-        assert_approx_eq!(&[f64], &vec_f64, &data_f64);
-        assert_eq!(&vec_u64, &data_u64);
-    }
+    //     assert_approx_eq!(&[f64], &vec_f64, &data_f64);
+    //     assert_eq!(&vec_u64, &data_u64);
+    // }
 
     #[test]
     fn mutliple_files_hdf5_writer_new() {

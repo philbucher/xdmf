@@ -41,32 +41,23 @@ pub(crate) trait DataWriter {
 
     fn write_data(
         &mut self,
-        time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
-    ) -> IoResult<WrittenData>;
+        name: &str,
+        center: attribute::Center,
+        data: &Values,
+    ) -> IoResult<String>;
+
+    fn write_data_initialize(&mut self, _time: &str) -> IoResult<()> {
+        Ok(())
+    }
+
+    fn write_data_finalize(&mut self) -> IoResult<()> {
+        Ok(())
+    }
 
     // flush the writer, if applicable
     fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
-
-    fn create_data_item(&self, vals: &Values, data: String) -> DataItem {
-        DataItem {
-            name: None,
-            dimensions: Some(vals.dimensions()),
-            number_type: Some(vals.number_type()),
-            format: Some(self.format()),
-            precision: Some(vals.precision()),
-            data,
-            reference: None,
-        }
-    }
-}
-
-pub(crate) struct WrittenData {
-    point_data: BTreeMap<String, (AttributeType, DataItem)>,
-    cell_data: BTreeMap<String, (AttributeType, DataItem)>,
 }
 
 pub struct TimeSeriesWriterOptions {
@@ -382,6 +373,7 @@ impl TimeSeriesDataWriter {
     // - check for unique time steps
     // - assert dimensions of points and cells match
     // - check that the data is not empty
+    // - maybe write data as ref in attribute, to make cloning cheaper. Really only matters for XML format, so unsure if worth it.
     /// # Errors
     ///
     /// TODO
@@ -391,31 +383,51 @@ impl TimeSeriesDataWriter {
         point_data: Option<&DataMap>,
         cell_data: Option<&DataMap>,
     ) -> IoResult<()> {
-        let written_data = self.writer.write_data(time, point_data, cell_data)?;
+        self.writer.write_data_initialize(time)?;
+        let format = self.writer.format();
+
         let mut new_attributes = Vec::new();
 
-        let mut create_attributes = |data_map: BTreeMap<String, (AttributeType, DataItem)>,
-                                     center: attribute::Center|
-         -> IoResult<()> {
-            for (data_name, data) in data_map {
-                let attribute = attribute::Attribute {
-                    name: data_name,
-                    attribute_type: data.0,
-                    center,
-                    data_items: vec![data.1],
-                };
-                new_attributes.push(attribute);
-            }
-            Ok(())
-        };
+        let mut create_attributes =
+            |data_map: Option<&BTreeMap<String, (AttributeType, Values)>>,
 
-        create_attributes(written_data.point_data, attribute::Center::Node)?;
-        create_attributes(written_data.cell_data, attribute::Center::Cell)?;
+             center: attribute::Center|
+             -> IoResult<()> {
+                for (data_name, data) in data_map.unwrap_or(&BTreeMap::new()) {
+                    let vals = &data.1;
+
+                    let data_item = DataItem {
+                        name: None,
+                        dimensions: Some(vals.dimensions()),
+                        number_type: Some(vals.number_type()),
+                        format: Some(format),
+                        precision: Some(vals.precision()),
+                        data: self.writer.write_data(data_name, center, vals)?,
+                        reference: None,
+                    };
+
+                    let attribute = attribute::Attribute {
+                        name: data_name.clone(),
+                        attribute_type: data.0,
+                        center,
+                        data_items: vec![data_item],
+                    };
+
+                    new_attributes.push(attribute);
+                }
+
+                Ok(())
+            };
+
+        create_attributes(point_data, attribute::Center::Node)?;
+        create_attributes(cell_data, attribute::Center::Cell)?;
 
         self.attributes
             .entry(time.to_string())
             .or_default()
             .extend(new_attributes);
+
+        self.writer.write_data_finalize()?;
 
         self.write()
     }

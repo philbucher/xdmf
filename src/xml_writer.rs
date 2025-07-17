@@ -1,12 +1,9 @@
-use std::{collections::BTreeMap, io::Result as IoResult};
+use std::io::Result as IoResult;
 
 use crate::{
-    DataMap, DataWriter, WrittenData,
+    DataWriter,
     values::Values,
-    xdmf_elements::{
-        attribute::AttributeType,
-        data_item::{DataItem, Format},
-    },
+    xdmf_elements::{attribute, data_item::Format},
 };
 
 pub(crate) struct XmlWriter {}
@@ -49,31 +46,11 @@ impl DataWriter for XmlWriter {
 
     fn write_data(
         &mut self,
-        _time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
-    ) -> IoResult<WrittenData> {
-        let create_data_items =
-            |data_map: Option<&DataMap>| -> IoResult<BTreeMap<String, (AttributeType, DataItem)>> {
-                data_map
-                    .unwrap_or(&BTreeMap::new())
-                    .iter()
-                    .map(|(data_name, (attr_type, vals))| {
-                        Ok((
-                            data_name.clone(),
-                            (
-                                *attr_type,
-                                self.create_data_item(vals, self.values_to_string(vals)),
-                            ),
-                        ))
-                    })
-                    .collect()
-            };
-
-        Ok(WrittenData {
-            point_data: create_data_items(point_data)?,
-            cell_data: create_data_items(cell_data)?,
-        })
+        _name: &str,
+        _center: attribute::Center,
+        data: &Values,
+    ) -> IoResult<String> {
+        Ok(self.values_to_string(data))
     }
 }
 
@@ -142,16 +119,18 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_write_data_vec_f64() {
-    //     let mut writer = XmlWriter::new();
-    //     let raw_data = vec![1.0, 2.0, 3.0];
-    //     let data = raw_data.into();
+    #[test]
+    fn write_data_vec_f64() {
+        let mut writer = XmlWriter::new();
+        let raw_data = vec![1.0, 2.0, 3.0];
+        let data = raw_data.into();
 
-    //     let result = writer.write_data("0.0", &data).unwrap();
-    //     pretty_assertions::assert_eq!(
-    //         result,
-    //         "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
-    //     );
-    // }
+        let result = writer
+            .write_data("dummy", attribute::Center::Node, &data)
+            .unwrap();
+        pretty_assertions::assert_eq!(
+            result,
+            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
+        );
+    }
 }
