@@ -48,11 +48,11 @@ impl DataWriter for SingleFileHdf5Writer {
             .create_group(MESH)
             .map_err(std::io::Error::other)?;
 
-        write_mesh(&mesh_group, points, cells)?;
+        let (data_name_points, data_name_cells) = write_mesh(&mesh_group, points, cells)?;
 
         Ok((
-            self.h5_file.filename() + &format!(":{MESH}/{POINTS}"),
-            self.h5_file.filename() + &format!(":{MESH}/{CELLS}"),
+            full_path(&self.h5_file, &data_name_points),
+            full_path(&self.h5_file, &data_name_cells),
         ))
     }
 
@@ -86,7 +86,7 @@ impl DataWriter for SingleFileHdf5Writer {
                 .map_err(std::io::Error::other)?;
         }
 
-        write_values(
+        let data_path = write_values(
             &self
                 .h5_file
                 .group(group_name)
@@ -95,7 +95,7 @@ impl DataWriter for SingleFileHdf5Writer {
             data,
         )?;
 
-        Ok(self.h5_file.filename() + &format!(":{group_name}/{name}"))
+        Ok(full_path(&self.h5_file, &data_path))
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -151,11 +151,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
 
-        write_mesh(&h5_file, points, cells)?;
+        let (data_name_points, data_name_cells) = write_mesh(&h5_file, points, cells)?;
 
         Ok((
-            file_name.to_string_lossy().to_string() + ":" + POINTS,
-            file_name.to_string_lossy().to_string() + ":" + CELLS,
+            full_path(&h5_file, &data_name_points),
+            full_path(&h5_file, &data_name_cells),
         ))
     }
 
@@ -191,13 +191,13 @@ impl DataWriter for MultipleFilesHdf5Writer {
                 .map_err(std::io::Error::other)?;
         }
 
-        write_values(
+        let data_path = write_values(
             &data_file.group(group_name).map_err(std::io::Error::other)?,
             name,
             data,
         )?;
 
-        Ok(data_file.filename() + &format!(":{group_name}/{name}"))
+        Ok(full_path(&data_file, &data_path))
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -224,25 +224,29 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 }
 
-fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<()> {
-    group
+fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
+    let dataset_points = group
         .new_dataset::<f64>()
         .shape(points.len())
         .create(POINTS)
-        .map_err(std::io::Error::other)?
+        .map_err(std::io::Error::other)?;
+
+    dataset_points
         .write(points)
         .map_err(std::io::Error::other)?;
 
-    group
+    let dataset_cells = group
         .new_dataset::<u64>()
         .shape(cells.len())
         .create(CELLS)
-        .map_err(std::io::Error::other)?
-        .write(cells)
-        .map_err(std::io::Error::other)
+        .map_err(std::io::Error::other)?;
+
+    dataset_cells.write(cells).map_err(std::io::Error::other)?;
+
+    Ok((dataset_points.name(), dataset_cells.name()))
 }
 
-fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<()> {
+fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<String> {
     let data_set = match vals {
         Values::F64(_) => group.new_dataset::<f64>(),
         Values::U64(_) => group.new_dataset::<u64>(),
@@ -254,9 +258,11 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
         .map_err(std::io::Error::other)?;
 
     match vals {
-        Values::F64(v) => data_set.write(v).map_err(std::io::Error::other),
-        Values::U64(v) => data_set.write(v).map_err(std::io::Error::other),
-    }
+        Values::F64(v) => data_set.write(v).map_err(std::io::Error::other)?,
+        Values::U64(v) => data_set.write(v).map_err(std::io::Error::other)?,
+    };
+
+    Ok(data_set.name())
 }
 
 fn attribute_center_to_hdf5(center: attribute::Center) -> &'static str {
@@ -270,11 +276,29 @@ fn attribute_center_to_hdf5(center: attribute::Center) -> &'static str {
     }
 }
 
+fn full_path(file: &H5File, data_name: &str) -> String {
+    format!("{}{}", file.filename(), data_name.replacen("/", ":", 1))
+}
+
 #[cfg(test)]
 mod tests {
     use float_cmp::assert_approx_eq;
 
     use super::*;
+
+    #[test]
+    fn full_path_works() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+        let h5_file = H5File::create(&file_name).unwrap();
+
+        let data_name = "/test_group/test_data";
+        let full_path = full_path(&h5_file, data_name);
+        assert_eq!(
+            full_path,
+            file_name.to_string_lossy().to_string() + ":test_group/test_data"
+        );
+    }
 
     #[test]
     fn write_mesh_works() {
@@ -289,7 +313,9 @@ mod tests {
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0, 1, 2];
 
-        write_mesh(&group, &points, &cells).unwrap();
+        let (data_name_points, data_name_cells) = write_mesh(&group, &points, &cells).unwrap();
+        assert_eq!(data_name_points, "/test_group/points");
+        assert_eq!(data_name_cells, "/test_group/cells");
 
         // Read back the data to verify
         let h5_file_read = H5File::open(&file_name).unwrap();
@@ -327,8 +353,11 @@ mod tests {
         let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
         let vec_u64 = vec![10_u64, 20, 30, 40, 50, 60];
 
-        write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
-        write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
+        let f64_path = write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
+        let u64_path = write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
+
+        assert_eq!(f64_path, "/test_group/test_f64");
+        assert_eq!(u64_path, "/test_group/test_u64");
 
         // Read back the data to verify
         let h5_file_read = H5File::open(&file_name).unwrap();
