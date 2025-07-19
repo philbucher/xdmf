@@ -335,9 +335,7 @@ mod tests {
             "Writing data was not initialized"
         );
 
-        let exp_file_name = file_name
-            .with_extension("h5")
-            .join(format!("data_t_0.123.h5"));
+        let exp_file_name = file_name.with_extension("h5").join("data_t_0.123.h5");
         writer.write_data_initialize("0.123").unwrap();
         assert!(writer.h5_data_file.is_some());
 
@@ -408,5 +406,68 @@ mod tests {
 
         assert_approx_eq!(&[f64], &points, &points_data);
         assert_eq!(&cells, &cells_data);
+    }
+
+    #[test]
+    fn mutliple_files_hdf5_writer_write_data() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = MultipleFilesHdf5Writer::new(file_name).unwrap();
+        let write_time = "12.258";
+        let data_file = writer.h5_files_dir.join(format!("data_t_{write_time}.h5"));
+        assert!(!data_file.exists());
+
+        writer.write_data_initialize(write_time).unwrap();
+        assert!(data_file.exists());
+
+        // write points data
+        let data_points = vec![0.0, 1.0, 2.0];
+        let data_path_points = writer
+            .write_data(
+                "dummy_point_data",
+                attribute::Center::Node,
+                &Values::F64(data_points.clone()),
+            )
+            .unwrap();
+
+        // write cell data
+        let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
+        let data_path_cells = writer
+            .write_data(
+                "some_cell_data",
+                attribute::Center::Cell,
+                &Values::F64(data_cells.clone()),
+            )
+            .unwrap();
+
+        writer.write_data_finalize().unwrap();
+        assert!(data_file.exists());
+
+        assert_eq!(
+            data_path_points,
+            data_file.to_string_lossy().to_string() + ":point_data/dummy_point_data"
+        );
+        assert_eq!(
+            data_path_cells,
+            data_file.to_string_lossy().to_string() + ":cell_data/some_cell_data"
+        );
+
+        // read back the data to verify
+        let h5_file = H5File::open(&data_file).unwrap();
+        let points_data: Vec<f64> = h5_file
+            .dataset("point_data/dummy_point_data")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+        let cells_data: Vec<f64> = h5_file
+            .dataset("cell_data/some_cell_data")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+
+        assert_approx_eq!(&[f64], &data_points, &points_data);
+        assert_approx_eq!(&[f64], &data_cells, &cells_data);
     }
 }
