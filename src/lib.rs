@@ -374,6 +374,7 @@ impl TimeSeriesDataWriter {
     // - assert dimensions of points and cells match
     // - check that the data is not empty
     // - maybe write data as ref in attribute, to make cloning cheaper. Really only matters for XML format, so unsure if worth it.
+    // - check if time is not "", and it can be converted to a float
     /// # Errors
     ///
     /// TODO
