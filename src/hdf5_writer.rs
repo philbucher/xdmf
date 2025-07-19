@@ -10,6 +10,11 @@ use crate::{
     xdmf_elements::{attribute, data_item::Format},
 };
 
+const MESH: &str = "mesh";
+const DATA: &str = "data";
+const POINTS: &str = "points";
+const CELLS: &str = "cells";
+
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,
     write_time: Option<String>,
@@ -33,8 +38,22 @@ impl DataWriter for SingleFileHdf5Writer {
         Format::HDF
     }
 
-    fn write_mesh(&mut self, _points: &[f64], _cells: &[u64]) -> IoResult<(String, String)> {
-        unimplemented!()
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
+        if self.h5_file.link_exists(MESH) {
+            return Err(std::io::Error::other("Mesh was already written"));
+        }
+
+        let mesh_group = self
+            .h5_file
+            .create_group(MESH)
+            .map_err(std::io::Error::other)?;
+
+        write_mesh(points, cells, &mesh_group)?;
+
+        Ok((
+            self.h5_file.filename() + &format!(":{MESH}/{POINTS}"),
+            self.h5_file.filename() + &format!(":{MESH}/{CELLS}"),
+        ))
     }
 
     #[cfg(feature = "unstable-submesh-api")]
@@ -49,17 +68,34 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_data(
         &mut self,
-        _name: &str,
-        _center: attribute::Center,
-        _data: &Values,
+        name: &str,
+        center: attribute::Center,
+        data: &Values,
     ) -> IoResult<String> {
-        if self.write_time.is_none() {
-            return Err(std::io::Error::other("Writing data was not initialized"));
+        let time = self
+            .write_time
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
+
+        let group_name = &format!("{}/t_{time}/{}", DATA, attribute_center_to_hdf5(center));
+
+        // Create the group if it does not exist
+        if !self.h5_file.link_exists(group_name) {
+            self.h5_file
+                .create_group(group_name)
+                .map_err(std::io::Error::other)?;
         }
 
-        // TODO create group and time if it does not exist
+        write_values(
+            &self
+                .h5_file
+                .group(group_name)
+                .map_err(std::io::Error::other)?,
+            name,
+            data,
+        )?;
 
-        Ok("asdf".to_string()) // Placeholder for actual implementation
+        Ok(self.h5_file.filename() + &format!(":{group_name}/{name}"))
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -112,28 +148,14 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
-        let file_name = self.h5_files_dir.join("mesh.h5");
+        let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
 
-        h5_file
-            .new_dataset::<f64>()
-            .shape(points.len())
-            .create("points")
-            .map_err(std::io::Error::other)?
-            .write(points)
-            .map_err(std::io::Error::other)?;
-
-        h5_file
-            .new_dataset::<u64>()
-            .shape(cells.len())
-            .create("cells")
-            .map_err(std::io::Error::other)?
-            .write(cells)
-            .map_err(std::io::Error::other)?;
+        write_mesh(points, cells, &h5_file)?;
 
         Ok((
-            file_name.to_string_lossy().to_string() + ":points",
-            file_name.to_string_lossy().to_string() + ":cells",
+            file_name.to_string_lossy().to_string() + ":" + POINTS,
+            file_name.to_string_lossy().to_string() + ":" + CELLS,
         ))
     }
 
@@ -200,6 +222,24 @@ impl DataWriter for MultipleFilesHdf5Writer {
         self.h5_data_file = None;
         Ok(())
     }
+}
+
+fn write_mesh(points: &[f64], cells: &[u64], group: &H5Group) -> IoResult<()> {
+    group
+        .new_dataset::<f64>()
+        .shape(points.len())
+        .create(POINTS)
+        .map_err(std::io::Error::other)?
+        .write(points)
+        .map_err(std::io::Error::other)?;
+
+    group
+        .new_dataset::<u64>()
+        .shape(cells.len())
+        .create(CELLS)
+        .map_err(std::io::Error::other)?
+        .write(cells)
+        .map_err(std::io::Error::other)
 }
 
 fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<()> {
