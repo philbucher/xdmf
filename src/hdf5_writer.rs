@@ -48,7 +48,7 @@ impl DataWriter for SingleFileHdf5Writer {
             .create_group(MESH)
             .map_err(std::io::Error::other)?;
 
-        write_mesh(points, cells, &mesh_group)?;
+        write_mesh(&mesh_group, points, cells)?;
 
         Ok((
             self.h5_file.filename() + &format!(":{MESH}/{POINTS}"),
@@ -151,7 +151,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
 
-        write_mesh(points, cells, &h5_file)?;
+        write_mesh(&h5_file, points, cells)?;
 
         Ok((
             file_name.to_string_lossy().to_string() + ":" + POINTS,
@@ -224,7 +224,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 }
 
-fn write_mesh(points: &[f64], cells: &[u64], group: &H5Group) -> IoResult<()> {
+fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<()> {
     group
         .new_dataset::<f64>()
         .shape(points.len())
@@ -277,11 +277,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn write_mesh_works() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+
+        let h5_file = H5File::create(&file_name).unwrap();
+        assert!(file_name.exists());
+
+        let group = h5_file.create_group("test_group").unwrap();
+
+        let points = vec![0.0, 1.0, 2.0];
+        let cells = vec![0, 1, 2];
+
+        write_mesh(&group, &points, &cells).unwrap();
+
+        // Read back the data to verify
+        let h5_file_read = H5File::open(&file_name).unwrap();
+        let points_read: Vec<f64> = h5_file_read
+            .group("test_group")
+            .unwrap()
+            .dataset("points")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+        let cells_read: Vec<u64> = h5_file_read
+            .group("test_group")
+            .unwrap()
+            .dataset("cells")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+
+        assert_approx_eq!(&[f64], &points, &points_read);
+        assert_eq!(&cells, &cells_read);
+    }
+
+    #[test]
     fn write_values_works() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("test.h5");
 
         let h5_file = H5File::create(&file_name).unwrap();
+        assert!(file_name.exists());
+
         let group = h5_file.create_group("test_group").unwrap();
 
         let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
@@ -289,9 +329,6 @@ mod tests {
 
         write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
         write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
-
-        // Verify the file exists
-        assert!(file_name.exists());
 
         // Read back the data to verify
         let h5_file_read = H5File::open(&file_name).unwrap();
@@ -418,6 +455,11 @@ mod tests {
     }
 
     #[test]
+    fn single_file_hdf5_writer_write_mesh() {
+        unimplemented!()
+    }
+
+    #[test]
     fn mutliple_files_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("test.xdmf");
@@ -446,6 +488,11 @@ mod tests {
 
         assert_approx_eq!(&[f64], &points, &points_data);
         assert_eq!(&cells, &cells_data);
+    }
+
+    #[test]
+    fn single_file_hdf5_writer_write_data() {
+        unimplemented!()
     }
 
     #[test]
