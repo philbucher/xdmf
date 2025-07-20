@@ -4,8 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::Serialize;
 use xdmf_elements::{
-    Xdmf, attribute,
+    Domain, MetaData, Xdmf, attribute,
     data_item::{DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
@@ -26,8 +27,17 @@ pub use xdmf_elements::{CellType, attribute::AttributeType, data_item::Format};
 
 pub type DataMap = BTreeMap<String, (AttributeType, Values)>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum WriterFormat {
+    Xml,
+    Hdf5SingleFile,
+    Hdf5MultipleFiles,
+}
+
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;
+
+    fn writer_format(&self) -> WriterFormat;
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)>;
 
@@ -465,7 +475,10 @@ impl TimeSeriesDataWriter {
             temporal_grid
         };
 
-        let mut xdmf = Xdmf::default();
+        let mut xdmf = Xdmf::new_with_metadata(
+            Domain::default(),
+            MetaData::new(self.writer.writer_format()),
+        );
         xdmf.domains[0].grids.push(grid_to_write);
         xdmf.domains[0].data_items.extend(self.data_items.clone());
 

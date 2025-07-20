@@ -10,6 +10,8 @@ pub mod topology;
 use data_item::DataItem;
 use grid::Grid;
 
+use crate::WriterFormat;
+
 pub const XDMF_TAG: &str = "Xdmf";
 
 #[derive(Debug, Serialize)]
@@ -19,6 +21,9 @@ pub struct Xdmf {
 
     #[serde(rename = "Domain")]
     pub domains: Vec<Domain>,
+
+    #[serde(rename = "MetaData", skip_serializing_if = "Option::is_none")]
+    pub meta_data: Option<MetaData>,
 }
 
 impl Xdmf {
@@ -26,7 +31,14 @@ impl Xdmf {
         Self {
             version: "3.0".to_string(),
             domains: vec![domain],
+            meta_data: None,
         }
+    }
+
+    pub fn new_with_metadata(domain: Domain, meta_data: MetaData) -> Self {
+        let mut xdmf = Self::new(domain);
+        xdmf.meta_data = Some(meta_data);
+        xdmf
     }
 
     /// # Errors
@@ -43,6 +55,24 @@ impl Xdmf {
 impl Default for Xdmf {
     fn default() -> Self {
         Self::new(Domain::default())
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct MetaData {
+    #[serde(rename = "@Version")]
+    pub version: String,
+
+    #[serde(rename = "@Format")]
+    pub format: WriterFormat,
+}
+
+impl MetaData {
+    pub fn new(format: WriterFormat) -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            format,
+        }
     }
 }
 
@@ -127,6 +157,21 @@ mod tests {
 
         assert_eq!(xdmf.version, "3.0");
         assert_eq!(xdmf.domains.len(), 1);
+    }
+
+    #[test]
+    fn xdmf_new_with_metadata() {
+        let domain = Domain::default();
+        let xdmf = Xdmf::new_with_metadata(domain, MetaData::new(WriterFormat::Xml));
+
+        assert_eq!(xdmf.version, "3.0");
+        assert_eq!(xdmf.domains.len(), 1);
+        assert!(xdmf.meta_data.is_some());
+        assert_eq!(
+            xdmf.meta_data.as_ref().unwrap().version,
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(xdmf.meta_data.as_ref().unwrap().format, WriterFormat::Xml);
     }
 
     #[test]
