@@ -28,6 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 float-cmp = "0.10.0"
 pretty_assertions = "1.4.1"
 temp-dir = "0.1.16"
+vtkio = "0.6.3"
 
 [lints.clippy]
 allow_attributes = "warn"
