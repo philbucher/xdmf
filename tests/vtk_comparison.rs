@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use vtkio::model::*;
@@ -60,10 +61,20 @@ enum OutputType {
     VtkAscii,
     VtkBinary,
     VtkXmlUncompressed,
-    VtkXmlCompressed,
+    VtkXmlCompressedZlib1,
+    VtkXmlCompressedZlib5,
+    VtkXmlCompressedLZ4, // compression level not yet supported
+    VtkXmlCompressedLZMA1,
+    VtkXmlCompressedLZMA5,
 }
 
 trait Case {
+    fn name(&self) -> String {
+        format!("{:?}", self.output_type())
+    }
+
+    fn output_type(&self) -> OutputType;
+
     fn write_mesh(
         &mut self,
         coordinates: Vec<f64>,
@@ -77,7 +88,9 @@ trait Case {
 
 struct XdmfCase {
     output_type: OutputType,
-    writer: Option<TimeSeriesWriter>,
+    file_name: PathBuf,
+    wdir: PathBuf,
+    writer: Option<xdmf::TimeSeriesDataWriter>,
     time_write_mesh: Duration,
     time_write_steps: Duration,
 }
@@ -86,6 +99,8 @@ impl XdmfCase {
     fn new(output_type: OutputType, base_path: &Path) -> Self {
         Self {
             output_type,
+            file_name: base_path.join(format!("{:?}/mesh.xdmf", output_type)),
+            wdir: base_path.join(format!("{:?}", output_type)),
             writer: None,
             time_write_mesh: Duration::ZERO,
             time_write_steps: Duration::ZERO,
@@ -94,19 +109,72 @@ impl XdmfCase {
 }
 
 impl Case for XdmfCase {
+    fn output_type(&self) -> OutputType {
+        self.output_type
+    }
+
     fn write_mesh(
         &mut self,
         coordinates: Vec<f64>,
         connectivity: Vec<usize>,
     ) -> std::io::Result<()> {
         let start = Instant::now();
-        // Implement mesh writing logic here
+
+        let writer = match self.output_type {
+            OutputType::XdmfXml => TimeSeriesWriter::new_with_options(
+                &self.file_name,
+                &TimeSeriesWriter::options().format(xdmf::Format::XML),
+            ),
+            OutputType::XdmfH5Single => TimeSeriesWriter::new_with_options(
+                &self.file_name,
+                &TimeSeriesWriter::options()
+                    .format(xdmf::Format::HDF)
+                    .multiple_files(false),
+            ),
+            OutputType::XdmfH5Multiple => TimeSeriesWriter::new_with_options(
+                &self.file_name,
+                &TimeSeriesWriter::options()
+                    .format(xdmf::Format::HDF)
+                    .multiple_files(true),
+            ),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Unsupported XDMF type: {:?}", self.output_type),
+                ));
+            }
+        };
+
+        let cell_types = vec![xdmf::CellType::Hexahedron; connectivity.len() / 8];
+        let conn: Vec<u64> = connectivity.iter().map(|&x| x as u64).collect();
+
+        let writer = writer
+            .unwrap()
+            .write_mesh(&coordinates, (&conn, &cell_types))
+            .unwrap();
+
+        self.writer = Some(writer);
+
         self.time_write_mesh = start.elapsed();
         Ok(())
     }
 
     fn write_step(&mut self, time: f64, data: &[f64]) -> std::io::Result<()> {
         let start = Instant::now();
+
+        let point_data = vec![(
+            "pressure".to_string(),
+            (xdmf::AttributeType::Scalar, data.to_vec().into()),
+        )]
+        .into_iter()
+        .collect();
+
+        self.writer.as_mut().unwrap().write_data(
+            format!("data_t_{}", time).as_str(),
+            Some(&point_data),
+            None,
+        )?;
+
         // Implement step writing logic here
         self.time_write_steps += start.elapsed();
         Ok(())
@@ -117,13 +185,14 @@ impl Case for XdmfCase {
             output_type: self.output_type,
             time_write_mesh: Some(self.time_write_mesh),
             time_write_steps: self.time_write_steps,
-            size: 0, // Placeholder for size calculation
+            folder: self.wdir.clone(),
         }
     }
 }
 
 struct VtkCase {
     output_type: OutputType,
+    wdir: PathBuf,
     time_write_steps: Duration,
     coordinates: Vec<f64>,
     connectivity: Vec<usize>,
@@ -131,8 +200,11 @@ struct VtkCase {
 
 impl VtkCase {
     fn new(output_type: OutputType, base_path: &Path) -> Self {
+        let wdir = base_path.join(format!("{:?}", output_type));
+        std::fs::create_dir_all(&wdir).unwrap();
         Self {
             output_type,
+            wdir,
             time_write_steps: Duration::ZERO,
             coordinates: Vec::new(),
             connectivity: Vec::new(),
@@ -141,6 +213,10 @@ impl VtkCase {
 }
 
 impl Case for VtkCase {
+    fn output_type(&self) -> OutputType {
+        self.output_type
+    }
+
     fn write_mesh(
         &mut self,
         coordinates: Vec<f64>,
@@ -158,40 +234,64 @@ impl Case for VtkCase {
         let vtk = create_vtk(
             self.coordinates.clone(),
             self.connectivity.clone(),
-            0, // Placeholder for pressure
-            0, // Placeholder for velocity
+            data, // Placeholder for pressure
+                  // 0,    // Placeholder for velocity
         );
+
+        let out_file = self.wdir.join(format!("output_{}.vtk", time));
 
         match self.output_type {
             OutputType::VtkAscii => {
-                let path = PathBuf::from(format!("output_{}.vtk", time));
-                vtk.export_ascii(&path).map_err(std::io::Error::from)?;
+                vtk.export_ascii(&out_file).map_err(std::io::Error::from)?;
             }
             OutputType::VtkBinary => {
-                let path = PathBuf::from(format!("output_{}.vtu", time));
-                vtk.export_be(&path).map_err(std::io::Error::from)?;
+                vtk.export_be(&out_file).map_err(std::io::Error::from)?;
             }
             OutputType::VtkXmlUncompressed => {
-                let path = PathBuf::from(format!("output_{}.vtu", time));
                 vtk.try_into_xml_format(vtkio::xml::Compressor::None, 0)
                     .unwrap()
-                    .export(&path)
+                    .export(&out_file)
                     .unwrap();
             }
-            OutputType::VtkXmlCompressed => {
-                let path = PathBuf::from(format!("output_{}.vtu.gz", time));
+            OutputType::VtkXmlCompressedZlib5 => {
                 vtk.try_into_xml_format(vtkio::xml::Compressor::ZLib, 5)
                     .unwrap()
-                    .export(&path)
+                    .export(&out_file)
+                    .unwrap();
+            }
+            OutputType::VtkXmlCompressedZlib1 => {
+                vtk.try_into_xml_format(vtkio::xml::Compressor::ZLib, 1)
+                    .unwrap()
+                    .export(&out_file)
+                    .unwrap();
+            }
+            OutputType::VtkXmlCompressedLZ4 => {
+                vtk.try_into_xml_format(vtkio::xml::Compressor::LZ4, 1)
+                    .unwrap()
+                    .export(&out_file)
+                    .unwrap();
+            }
+            OutputType::VtkXmlCompressedLZMA1 => {
+                vtk.try_into_xml_format(vtkio::xml::Compressor::LZMA, 1)
+                    .unwrap()
+                    .export(&out_file)
+                    .unwrap();
+            }
+            OutputType::VtkXmlCompressedLZMA5 => {
+                vtk.try_into_xml_format(vtkio::xml::Compressor::LZMA, 5)
+                    .unwrap()
+                    .export(&out_file)
                     .unwrap();
             }
             _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Unsupported VTK type",
-                ));
+                return Err(std::io::Error::other(format!(
+                    "Unsupported VTK type: {:?}",
+                    self.output_type
+                )));
             }
         }
+
+        self.time_write_steps += start.elapsed();
 
         Ok(())
     }
@@ -201,7 +301,7 @@ impl Case for VtkCase {
             output_type: self.output_type,
             time_write_mesh: None,
             time_write_steps: self.time_write_steps,
-            size: 0, // Placeholder for size calculation
+            folder: self.wdir.clone(),
         }
     }
 }
@@ -210,32 +310,39 @@ struct Results {
     output_type: OutputType,
     time_write_mesh: Option<Duration>,
     time_write_steps: Duration,
-    size: usize,
+    folder: PathBuf,
 }
 
 impl std::fmt::Display for Results {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // compute size of folder
         write!(
             f,
-            "Output Type: {:?}, Mesh Write Time: {:?}, Step Write Time: {:?}, Size: {}",
-            self.output_type, self.time_write_mesh, self.time_write_steps, self.size
+            "Output Type: {:?}, Total Time: {:?}, Mesh Write Time: {:?}, Step Write Time: {:?}, Size: {}",
+            self.output_type,
+            self.time_write_steps + self.time_write_mesh.unwrap_or(Duration::ZERO),
+            self.time_write_mesh,
+            self.time_write_steps,
+            humansize::format_size(
+                fs_extra::dir::get_size(&self.folder).unwrap(),
+                humansize::DECIMAL
+            )
         )
     }
 }
 
 #[test]
 fn compare_xdmf_to_vtk_formats() {
-    const NUM_STEPS: usize = 1000;
+    const NUM_STEPS: usize = 100;
     const NUM_NODES_X: usize = 10;
     const NUM_NODES_Y: usize = 10;
+
     const NUM_NODES_Z: usize = 1000;
 
     println!(
-        "Running xdmf_vtk_comparison test with {} steps, {} nodes in x, {} nodes in y, {} nodes in z",
+        "Running xdmf_vtk_comparison test with {} steps, {}/{}/{} nodes in X/Y/Z\n",
         NUM_STEPS, NUM_NODES_X, NUM_NODES_Y, NUM_NODES_Z
     );
-
-    let (coords, connectivity) = create_mesh(NUM_NODES_X, NUM_NODES_Y, NUM_NODES_Z);
 
     let base_path = Path::new("tests/xdmf_vtk_comparison");
     if base_path.exists() {
@@ -245,7 +352,7 @@ fn compare_xdmf_to_vtk_formats() {
 
     let mut cases: Vec<Box<dyn Case>> = vec![];
 
-    cases.push(Box::new(XdmfCase::new(OutputType::XdmfXml, &base_path)));
+    // cases.push(Box::new(XdmfCase::new(OutputType::XdmfXml, &base_path)));
     cases.push(Box::new(XdmfCase::new(
         OutputType::XdmfH5Single,
         &base_path,
@@ -260,21 +367,46 @@ fn compare_xdmf_to_vtk_formats() {
         OutputType::VtkXmlUncompressed,
         &base_path,
     )));
+    // cases.push(Box::new(VtkCase::new(
+    //     OutputType::VtkXmlCompressedZlib1,
+    //     &base_path,
+    // )));
+    // cases.push(Box::new(VtkCase::new(
+    //     OutputType::VtkXmlCompressedZlib5,
+    //     &base_path,
+    // )));
     cases.push(Box::new(VtkCase::new(
-        OutputType::VtkXmlCompressed,
+        OutputType::VtkXmlCompressedLZ4,
         &base_path,
     )));
+    cases.push(Box::new(VtkCase::new(
+        OutputType::VtkXmlCompressedLZMA1,
+        &base_path,
+    )));
+    // cases.push(Box::new(VtkCase::new(
+    //     OutputType::VtkXmlCompressedLZMA5,
+    //     &base_path,
+    // )));
 
     for case in &mut cases {
+        println!("\nRunning case {:?} ...", case.name());
+
         let (coords, connectivity) = create_mesh(NUM_NODES_X, NUM_NODES_Y, NUM_NODES_Z);
         case.write_mesh(coords, connectivity).unwrap();
 
         for step in 0..NUM_STEPS {
+            print!(".");
+            std::io::stdout().flush().unwrap(); // Forces print to appear immediately
+
             let time = step as f64 * 0.1;
-            let data: Vec<f64> = (0..coords.len()).map(|_| rand::random::<f64>()).collect();
+            let data: Vec<f64> = (0..NUM_NODES_X * NUM_NODES_Y * NUM_NODES_Z)
+                .map(|i| (i as f64 + time) / 1000.0)
+                .collect();
             case.write_step(time, &data).unwrap();
         }
+        println!();
     }
+    println!();
 
     for case in &cases {
         let results = case.get_results();
@@ -282,42 +414,31 @@ fn compare_xdmf_to_vtk_formats() {
     }
 }
 
-fn create_vtk(
-    coordinates: Vec<f64>,
-    connectivity: Vec<usize>,
-    pressure: i32,
-    velocity: i32,
-) -> Vtk {
-    let vertices = mesh
-        .geometries()
-        .iter()
-        .flat_map(|geometry| {
-            let nodes = geometry
-                .nodes()
-                .iter()
-                .map(|node| node.lock().index() as u32)
-                .collect::<Vec<u32>>();
-
-            // Prepend the number of nodes to the connectivity list
-            let mut result = vec![geometry.num_nodes() as u32];
-            result.extend(nodes);
-            result
+fn create_vtk(coordinates: Vec<f64>, connectivity: Vec<usize>, pressure: &[f64]) -> Vtk {
+    let vertices: Vec<u32> = connectivity
+        .chunks(8)
+        .flat_map(|chunk| {
+            let mut chunk_vec = vec![chunk.len() as u32];
+            chunk_vec.extend(chunk.iter().map(|&x| x as u32));
+            chunk_vec
         })
         .collect();
 
+    let num_cells = connectivity.len() / 8;
+
     Vtk {
         version: Version::new(),
-        byte_order: ByteOrder::BigEndian,
+        byte_order: ByteOrder::native(),
         title: String::from("vtk output"),
         file_path: None,
         data: DataSet::inline(UnstructuredGridPiece {
             points: IOBuffer::F64(coordinates),
             cells: Cells {
                 cell_verts: VertexNumbers::Legacy {
-                    num_cells: mesh.num_geometries() as u32,
+                    num_cells: num_cells as u32,
                     vertices,
                 },
-                types: cell_types,
+                types: vec![CellType::Hexahedron; num_cells],
             },
             data: Attributes {
                 point: vec![
@@ -326,26 +447,19 @@ fn create_vtk(
                         data_array: vec![FieldArray {
                             name: String::from("Pressure"),
                             elem: 1,
-                            data: point_indices,
+                            data: IOBuffer::F64(pressure.to_vec()),
                         }],
                     },
-                    Attribute::Field {
-                        name: String::from("FieldData"),
-                        data_array: vec![FieldArray {
-                            name: String::from("Velocity"),
-                            elem: 1,
-                            data: is_ghost,
-                        }],
-                    },
+                    // Attribute::Field {
+                    //     name: String::from("FieldData"),
+                    //     data_array: vec![FieldArray {
+                    //         name: String::from("Velocity"),
+                    //         elem: 1,
+                    //         data: is_ghost,
+                    //     }],
+                    // },
                 ],
-                cell: vec![Attribute::Field {
-                    name: String::from("FieldData"),
-                    data_array: vec![FieldArray {
-                        name: String::from("Index"),
-                        elem: 1,
-                        data: cell_indices,
-                    }],
-                }],
+                cell: vec![],
             },
         }),
     }
