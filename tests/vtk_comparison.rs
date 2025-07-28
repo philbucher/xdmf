@@ -102,8 +102,8 @@ impl XdmfCase {
     fn new(output_type: OutputType, base_path: &Path) -> Self {
         Self {
             output_type,
-            file_name: base_path.join(format!("{:?}/mesh.xdmf", output_type)),
-            wdir: base_path.join(format!("{:?}", output_type)),
+            file_name: base_path.join(format!("{output_type:?}/mesh.xdmf")),
+            wdir: base_path.join(format!("{output_type:?}")),
             writer: None,
             time_write_mesh: Duration::ZERO,
             time_write_steps: Duration::ZERO,
@@ -173,7 +173,7 @@ impl Case for XdmfCase {
         .collect();
 
         self.writer.as_mut().unwrap().write_data(
-            format!("data_t_{}", time).as_str(),
+            format!("{time}").as_str(),
             Some(&point_data),
             None,
         )?;
@@ -203,7 +203,7 @@ struct VtkCase {
 
 impl VtkCase {
     fn new(output_type: OutputType, base_path: &Path) -> Self {
-        let wdir = base_path.join(format!("{:?}", output_type));
+        let wdir = base_path.join(format!("{output_type:?}"));
         std::fs::create_dir_all(&wdir).unwrap();
         Self {
             output_type,
@@ -241,7 +241,7 @@ impl Case for VtkCase {
                   // 0,    // Placeholder for velocity
         );
 
-        let out_file = self.wdir.join(format!("output_{}.vtk", time));
+        let out_file = self.wdir.join(format!("output_{time}.vtk"));
 
         match self.output_type {
             OutputType::VtkAscii => {
@@ -343,8 +343,7 @@ fn compare_xdmf_to_vtk_formats() {
     const NUM_NODES_Z: usize = 1000;
 
     println!(
-        "Running xdmf_vtk_comparison test with {} steps, {}/{}/{} nodes in X/Y/Z\n",
-        NUM_STEPS, NUM_NODES_X, NUM_NODES_Y, NUM_NODES_Z
+        "Running xdmf_vtk_comparison test with {NUM_STEPS} steps, {NUM_NODES_X}/{NUM_NODES_Y}/{NUM_NODES_Z} nodes in X/Y/Z\n"
     );
 
     let base_path = Path::new("tests/xdmf_vtk_comparison");
@@ -356,19 +355,16 @@ fn compare_xdmf_to_vtk_formats() {
     let mut cases: Vec<Box<dyn Case>> = vec![];
 
     // cases.push(Box::new(XdmfCase::new(OutputType::XdmfXml, &base_path)));
-    cases.push(Box::new(XdmfCase::new(
-        OutputType::XdmfH5Single,
-        &base_path,
-    )));
+    cases.push(Box::new(XdmfCase::new(OutputType::XdmfH5Single, base_path)));
     cases.push(Box::new(XdmfCase::new(
         OutputType::XdmfH5Multiple,
-        &base_path,
+        base_path,
     )));
-    cases.push(Box::new(VtkCase::new(OutputType::VtkAscii, &base_path)));
-    cases.push(Box::new(VtkCase::new(OutputType::VtkBinary, &base_path)));
+    cases.push(Box::new(VtkCase::new(OutputType::VtkAscii, base_path)));
+    cases.push(Box::new(VtkCase::new(OutputType::VtkBinary, base_path)));
     cases.push(Box::new(VtkCase::new(
         OutputType::VtkXmlUncompressed,
-        &base_path,
+        base_path,
     )));
     // cases.push(Box::new(VtkCase::new(
     //     OutputType::VtkXmlCompressedZlib1,
@@ -380,11 +376,11 @@ fn compare_xdmf_to_vtk_formats() {
     // )));
     cases.push(Box::new(VtkCase::new(
         OutputType::VtkXmlCompressedLZ4,
-        &base_path,
+        base_path,
     )));
     cases.push(Box::new(VtkCase::new(
         OutputType::VtkXmlCompressedLZMA1,
-        &base_path,
+        base_path,
     )));
     // cases.push(Box::new(VtkCase::new(
     //     OutputType::VtkXmlCompressedLZMA5,
@@ -413,7 +409,7 @@ fn compare_xdmf_to_vtk_formats() {
 
     for case in &cases {
         let results = case.get_results();
-        println!("{}", results);
+        println!("{results}");
     }
 }
 
