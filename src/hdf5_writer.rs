@@ -81,7 +81,11 @@ impl DataWriter for SingleFileHdf5Writer {
             .as_ref()
             .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
 
-        let group_name = &format!("{}/t_{time}/{}", DATA, attribute_center_to_hdf5(center));
+        let group_name = &format!(
+            "{}/t_{time}/{}",
+            DATA,
+            attribute::center_to_data_tag(center)
+        );
 
         // Create the group if it does not exist
         if !self.h5_file.link_exists(group_name) {
@@ -190,7 +194,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
             .as_ref()
             .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
 
-        let group_name = attribute_center_to_hdf5(center);
+        let group_name = attribute::center_to_data_tag(center);
 
         // Create the group if it does not exist
         if !data_file.link_exists(group_name) {
@@ -271,17 +275,6 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
     };
 
     Ok(data_set.name())
-}
-
-fn attribute_center_to_hdf5(center: attribute::Center) -> &'static str {
-    match center {
-        attribute::Center::Node => "point_data",
-        attribute::Center::Cell => "cell_data",
-        attribute::Center::Edge => "edge_data",
-        attribute::Center::Face => "face_data",
-        attribute::Center::Grid => "grid_data",
-        attribute::Center::Other => "other_data",
-    }
 }
 
 // Path that is written to the xdmf file, specifying where the data is stored in the h5 file

@@ -90,6 +90,9 @@ impl TimeSeriesWriterOptions {
         match self.format {
             Format::XML => Ok(Box::new(xml_writer::XmlWriter::new())),
 
+            // TODO use proper format
+            Format::Binary => Ok(Box::new(xml_writer::XmlExternalDataWriter::new(file_name)?)),
+
             Format::HDF => {
                 #[cfg(feature = "hdf5")]
                 if self.multiple_files {

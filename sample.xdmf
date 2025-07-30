@@ -1,0 +1,16 @@
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="mesh" GridType="Uniform">
+            <Geometry GeometryType="XYZ">
+                <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+            </Geometry>
+            <Topology TopologyType="Mixed" NumberOfElements="12">
+                <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
+            </Topology>
+        </Grid>
+        <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8"> <xi:include href="coords.txt" parse="text"/>
+        </DataItem>
+        <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
+    </Domain>
+    <MetaData Version="0.1.0" Format="Xml"/>
+</Xdmf>

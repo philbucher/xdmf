@@ -37,6 +37,16 @@ pub enum Center {
     Grid,
     Other,
 }
+pub(crate) fn center_to_data_tag(center: Center) -> &'static str {
+    match center {
+        Center::Node => "point_data",
+        Center::Cell => "cell_data",
+        Center::Edge => "edge_data",
+        Center::Face => "face_data",
+        Center::Grid => "grid_data",
+        Center::Other => "other_data",
+    }
+}
 
 #[cfg(test)]
 mod tests {
