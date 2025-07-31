@@ -34,3 +34,8 @@ jobs:
       run: |
         rustup show active-toolchain
         cargo test
+
+    - name: Run tests (no default features)
+      run: |
+        rustup show active-toolchain
+        cargo test --no-default-features
