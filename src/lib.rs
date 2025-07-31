@@ -70,6 +70,18 @@ pub(crate) trait DataWriter {
     }
 }
 
+/// Check if the hdf5 feature is enabled.
+pub const fn is_hdf5_enabled() -> bool {
+    #[cfg(feature = "hdf5")]
+    {
+        true
+    }
+    #[cfg(not(feature = "hdf5"))]
+    {
+        false
+    }
+}
+
 pub struct TimeSeriesWriter {
     xdmf_file_name: PathBuf,
     writer: Box<dyn DataWriter>,

@@ -330,8 +330,6 @@ mod tests {
 
         let mut cases: Vec<Box<dyn Case>> = vec![
             Box::new(XdmfCase::new(OutputType::XdmfAsciiInline, base_path)),
-            Box::new(XdmfCase::new(OutputType::XdmfH5Single, base_path)),
-            Box::new(XdmfCase::new(OutputType::XdmfH5Multiple, base_path)),
             Box::new(VtkCase::new(OutputType::VtkAscii, base_path)),
             Box::new(VtkCase::new(OutputType::VtkBinary, base_path)),
             Box::new(VtkCase::new(OutputType::VtkXmlUncompressed, base_path)),
@@ -341,6 +339,16 @@ mod tests {
             Box::new(VtkCase::new(OutputType::VtkXmlCompressedLZMA1, base_path)),
             Box::new(VtkCase::new(OutputType::VtkXmlCompressedLZMA5, base_path)),
         ];
+
+        if xdmf::is_hdf5_enabled() {
+            cases.push(Box::new(XdmfCase::new(OutputType::XdmfH5Single, base_path)));
+            cases.push(Box::new(XdmfCase::new(
+                OutputType::XdmfH5Multiple,
+                base_path,
+            )));
+        } else {
+            println!("HDF5 feature is not enabled, skipping HDF5 cases.");
+        }
 
         for case in &mut cases {
             println!("\nRunning case {} ...", case.name());
