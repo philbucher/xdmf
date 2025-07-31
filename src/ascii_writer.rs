@@ -9,9 +9,9 @@ use crate::{
     xdmf_elements::{attribute, data_item::Format},
 };
 
-pub(crate) struct XmlWriter {}
+pub(crate) struct AsciiInlineWriter {}
 
-impl XmlWriter {
+impl AsciiInlineWriter {
     pub fn new() -> Self {
         Self {}
     }
@@ -24,7 +24,7 @@ impl XmlWriter {
     }
 }
 
-impl DataWriter for XmlWriter {
+impl DataWriter for AsciiInlineWriter {
     fn format(&self) -> Format {
         Format::XML
     }
@@ -63,12 +63,12 @@ impl DataWriter for XmlWriter {
 
 /// This writer uses the XML format, but instead of writing the data directly into the xdmf file,
 /// it writes it to a separate file and includes it in the xdmf file using an `xi:include` tag.
-pub(crate) struct XmlExternalDataWriter {
+pub(crate) struct AsciiDataWriter {
     txt_files_dir: PathBuf,
     write_time: Option<String>,
 }
 
-impl XmlExternalDataWriter {
+impl AsciiDataWriter {
     pub fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
         let txt_files_dir = base_file_name.as_ref().to_path_buf().with_extension("txt");
 
@@ -88,7 +88,7 @@ impl XmlExternalDataWriter {
     }
 }
 
-impl DataWriter for XmlExternalDataWriter {
+impl DataWriter for AsciiDataWriter {
     fn format(&self) -> Format {
         Format::XML
     }
@@ -222,12 +222,12 @@ mod tests {
 
     #[test]
     fn format() {
-        assert_eq!(XmlWriter::new().format(), Format::XML);
+        assert_eq!(AsciiInlineWriter::new().format(), Format::XML);
     }
 
     #[test]
     fn write_mesh() {
-        let mut writer = XmlWriter::new();
+        let mut writer = AsciiInlineWriter::new();
         let points = vec![1., 2., 3., 4., 5., 6.];
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn write_data_vec_f64() {
-        let mut writer = XmlWriter::new();
+        let mut writer = AsciiInlineWriter::new();
         let raw_data = vec![1.0, 2.0, 3.0];
         let data = raw_data.into();
 

@@ -14,9 +14,9 @@ use xdmf_elements::{
     topology::{Topology, TopologyType},
 };
 
+mod ascii_writer;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
-mod xml_writer;
 
 mod values;
 pub mod xdmf_elements;
@@ -469,8 +469,8 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoRe
 
 fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dyn DataWriter>> {
     match data_storage {
-        DataStorage::Ascii => Ok(Box::new(xml_writer::XmlExternalDataWriter::new(file_name)?)),
-        DataStorage::AsciiInline => Ok(Box::new(xml_writer::XmlWriter::new())),
+        DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiDataWriter::new(file_name)?)),
+        DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
         DataStorage::Hdf5SingleFile => {
             #[cfg(feature = "hdf5")]
             {
