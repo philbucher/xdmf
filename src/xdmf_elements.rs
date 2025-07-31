@@ -10,8 +10,6 @@ pub mod topology;
 use data_item::DataItem;
 use grid::Grid;
 
-use crate::DataStorage;
-
 pub const XDMF_TAG: &str = "Xdmf";
 
 #[derive(Debug, Serialize)]
@@ -22,8 +20,8 @@ pub struct Xdmf {
     #[serde(rename = "Domain")]
     pub domains: Vec<Domain>,
 
-    #[serde(rename = "MetaData", skip_serializing_if = "Option::is_none")]
-    pub meta_data: Option<MetaData>,
+    #[serde(rename = "Information", skip_serializing_if = "Vec::is_empty")]
+    pub information: Vec<Information>,
 }
 
 impl Xdmf {
@@ -31,14 +29,8 @@ impl Xdmf {
         Self {
             version: "3.0".to_string(),
             domains: vec![domain],
-            meta_data: None,
+            information: vec![],
         }
-    }
-
-    pub fn new_with_metadata(domain: Domain, meta_data: MetaData) -> Self {
-        let mut xdmf = Self::new(domain);
-        xdmf.meta_data = Some(meta_data);
-        xdmf
     }
 
     /// # Errors
@@ -58,20 +50,23 @@ impl Default for Xdmf {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct MetaData {
-    #[serde(rename = "@Version")]
-    pub version: String,
+// <Information Name="XBounds" Value="0.0 10.0"/>
+// <Information Name="Bounds"> 0.0 10.0 100.0 110.0 200.0 210.0 </Information>
 
-    #[serde(rename = "@Format")]
-    pub format: DataStorage,
+#[derive(Debug, Serialize)]
+pub struct Information {
+    #[serde(rename = "@Name")]
+    pub name: String,
+
+    #[serde(rename = "$value")]
+    pub value: String,
 }
 
-impl MetaData {
-    pub fn new(format: DataStorage) -> Self {
+impl Information {
+    pub fn new(name: impl ToString, value: impl ToString) -> Self {
         Self {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            format,
+            name: name.to_string(),
+            value: value.to_string(),
         }
     }
 }
@@ -160,19 +155,19 @@ mod tests {
     }
 
     #[test]
-    fn xdmf_new_with_metadata() {
+    fn xdmf_new_with_information() {
         let domain = Domain::default();
-        let xdmf = Xdmf::new_with_metadata(domain, MetaData::new(DataStorage::AsciiInline));
+        let xdmf = Xdmf::new_with_information(domain, Information::new(DataStorage::AsciiInline));
 
         assert_eq!(xdmf.version, "3.0");
         assert_eq!(xdmf.domains.len(), 1);
-        assert!(xdmf.meta_data.is_some());
+        assert!(xdmf.information.is_some());
         assert_eq!(
-            xdmf.meta_data.as_ref().unwrap().version,
+            xdmf.information.as_ref().unwrap().version,
             env!("CARGO_PKG_VERSION")
         );
         assert_eq!(
-            xdmf.meta_data.as_ref().unwrap().format,
+            xdmf.information.as_ref().unwrap().format,
             DataStorage::AsciiInline
         );
     }

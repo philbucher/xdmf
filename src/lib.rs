@@ -6,7 +6,7 @@ use std::{
 
 use serde::Serialize;
 use xdmf_elements::{
-    Domain, MetaData, Xdmf, attribute,
+    Domain, Information, Xdmf, attribute,
     data_item::{DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
@@ -409,9 +409,9 @@ impl TimeSeriesDataWriter {
             temporal_grid
         };
 
-        let mut xdmf = Xdmf::new_with_metadata(
+        let mut xdmf = Xdmf::new_with_information(
             Domain::default(),
-            MetaData::new(self.writer.writer_format()),
+            Information::new(self.writer.writer_format()),
         );
         xdmf.domains[0].grids.push(grid_to_write);
         xdmf.domains[0].data_items.extend(self.data_items.clone());
