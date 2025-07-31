@@ -60,6 +60,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum OutputType {
+        XdmfAscii,
         XdmfAsciiInline,
         XdmfH5Single,
         XdmfH5Multiple,
@@ -118,6 +119,9 @@ mod tests {
             let start = Instant::now();
 
             let writer = match self.output_type {
+                OutputType::XdmfAscii => {
+                    TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::Ascii).unwrap()
+                }
                 OutputType::XdmfAsciiInline => {
                     TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::AsciiInline).unwrap()
                 }
@@ -329,6 +333,7 @@ mod tests {
         std::fs::create_dir_all(base_path).unwrap();
 
         let mut cases: Vec<Box<dyn Case>> = vec![
+            Box::new(XdmfCase::new(OutputType::XdmfAscii, base_path)),
             Box::new(XdmfCase::new(OutputType::XdmfAsciiInline, base_path)),
             Box::new(VtkCase::new(OutputType::VtkAscii, base_path)),
             Box::new(VtkCase::new(OutputType::VtkBinary, base_path)),

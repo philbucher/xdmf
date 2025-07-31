@@ -29,6 +29,7 @@ pub type DataMap = BTreeMap<String, (AttributeType, Values)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum DataStorage {
+    Ascii,
     AsciiInline,
     Hdf5SingleFile,
     Hdf5MultipleFiles,
@@ -467,12 +468,8 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoRe
 }
 
 fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dyn DataWriter>> {
-    #[cfg(not(feature = "hdf5"))]
-    {
-        // Prevent unused variable warning
-        let _ = file_name;
-    }
     match data_storage {
+        DataStorage::Ascii => Ok(Box::new(xml_writer::XmlExternalDataWriter::new(file_name)?)),
         DataStorage::AsciiInline => Ok(Box::new(xml_writer::XmlWriter::new())),
         DataStorage::Hdf5SingleFile => {
             #[cfg(feature = "hdf5")]
