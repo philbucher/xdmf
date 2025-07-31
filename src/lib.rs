@@ -455,6 +455,11 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoRe
 }
 
 fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dyn DataWriter>> {
+    #[cfg(not(feature = "hdf5"))]
+    {
+        // Prevent unused variable warning
+        let _ = file_name;
+    }
     match data_storage {
         DataStorage::AsciiInline => Ok(Box::new(xml_writer::XmlWriter::new())),
         DataStorage::Hdf5SingleFile => {
@@ -465,8 +470,8 @@ fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dy
             #[cfg(not(feature = "hdf5"))]
             {
                 Err(std::io::Error::other(
-                    "The HDF5 feature is not enabled. Please enable it in Cargo.toml.",
-                ));
+                    "Using Hdf5SingleFile DataStorage requires the hdf5 feature.",
+                ))
             }
         }
         DataStorage::Hdf5MultipleFiles => {
@@ -479,8 +484,8 @@ fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dy
             #[cfg(not(feature = "hdf5"))]
             {
                 Err(std::io::Error::other(
-                    "The HDF5 feature is not enabled. Please enable it in Cargo.toml.",
-                ));
+                    "Using Hdf5MultipleFiles DataStorage requires the hdf5 feature.",
+                ))
             }
         }
     }
