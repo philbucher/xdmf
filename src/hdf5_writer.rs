@@ -38,7 +38,7 @@ impl DataWriter for SingleFileHdf5Writer {
         Format::HDF
     }
 
-    fn writer_format(&self) -> DataStorage {
+    fn data_storage(&self) -> DataStorage {
         DataStorage::Hdf5SingleFile
     }
 
@@ -151,7 +151,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         Format::HDF
     }
 
-    fn writer_format(&self) -> DataStorage {
+    fn data_storage(&self) -> DataStorage {
         DataStorage::Hdf5MultipleFiles
     }
 

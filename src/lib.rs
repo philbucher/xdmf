@@ -6,7 +6,7 @@ use std::{
 
 use serde::Serialize;
 use xdmf_elements::{
-    Domain, Information, Xdmf, attribute,
+    Information, Xdmf, attribute,
     data_item::{DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
@@ -37,7 +37,7 @@ pub enum DataStorage {
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;
 
-    fn writer_format(&self) -> DataStorage;
+    fn data_storage(&self) -> DataStorage;
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)>;
 
@@ -409,10 +409,13 @@ impl TimeSeriesDataWriter {
             temporal_grid
         };
 
-        let mut xdmf = Xdmf::new_with_information(
-            Domain::default(),
-            Information::new(self.writer.writer_format()),
-        );
+        let mut xdmf = Xdmf {
+            information: vec![
+                Information::new("data_storage", format!("{:?}", self.writer.data_storage())),
+                Information::new("version", env!("CARGO_PKG_VERSION")),
+            ],
+            ..Default::default()
+        };
         xdmf.domains[0].grids.push(grid_to_write);
         xdmf.domains[0].data_items.extend(self.data_items.clone());
 

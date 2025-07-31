@@ -26,7 +26,7 @@ impl DataWriter for XmlWriter {
         Format::XML
     }
 
-    fn writer_format(&self) -> DataStorage {
+    fn data_storage(&self) -> DataStorage {
         DataStorage::AsciiInline
     }
 

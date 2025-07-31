@@ -50,15 +50,12 @@ impl Default for Xdmf {
     }
 }
 
-// <Information Name="XBounds" Value="0.0 10.0"/>
-// <Information Name="Bounds"> 0.0 10.0 100.0 110.0 200.0 210.0 </Information>
-
 #[derive(Debug, Serialize)]
 pub struct Information {
     #[serde(rename = "@Name")]
     pub name: String,
 
-    #[serde(rename = "$value")]
+    #[serde(rename = "@Value")]
     pub value: String,
 }
 
@@ -156,20 +153,16 @@ mod tests {
 
     #[test]
     fn xdmf_new_with_information() {
-        let domain = Domain::default();
-        let xdmf = Xdmf::new_with_information(domain, Information::new(DataStorage::AsciiInline));
+        let xdmf = Xdmf {
+            information: vec![Information::new("the_name", "some_value")],
+            ..Default::default()
+        };
 
         assert_eq!(xdmf.version, "3.0");
         assert_eq!(xdmf.domains.len(), 1);
-        assert!(xdmf.information.is_some());
-        assert_eq!(
-            xdmf.information.as_ref().unwrap().version,
-            env!("CARGO_PKG_VERSION")
-        );
-        assert_eq!(
-            xdmf.information.as_ref().unwrap().format,
-            DataStorage::AsciiInline
-        );
+        assert_eq!(xdmf.information.len(), 1);
+        assert_eq!(xdmf.information[0].name, "the_name");
+        assert_eq!(xdmf.information[0].value, "some_value");
     }
 
     #[test]
