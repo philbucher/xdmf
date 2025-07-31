@@ -10,7 +10,7 @@ pub mod topology;
 use data_item::DataItem;
 use grid::Grid;
 
-use crate::WriterFormat;
+use crate::DataStorage;
 
 pub const XDMF_TAG: &str = "Xdmf";
 
@@ -64,11 +64,11 @@ pub struct MetaData {
     pub version: String,
 
     #[serde(rename = "@Format")]
-    pub format: WriterFormat,
+    pub format: DataStorage,
 }
 
 impl MetaData {
-    pub fn new(format: WriterFormat) -> Self {
+    pub fn new(format: DataStorage) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             format,
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn xdmf_new_with_metadata() {
         let domain = Domain::default();
-        let xdmf = Xdmf::new_with_metadata(domain, MetaData::new(WriterFormat::Xml));
+        let xdmf = Xdmf::new_with_metadata(domain, MetaData::new(DataStorage::AsciiInline));
 
         assert_eq!(xdmf.version, "3.0");
         assert_eq!(xdmf.domains.len(), 1);
@@ -171,7 +171,10 @@ mod tests {
             xdmf.meta_data.as_ref().unwrap().version,
             env!("CARGO_PKG_VERSION")
         );
-        assert_eq!(xdmf.meta_data.as_ref().unwrap().format, WriterFormat::Xml);
+        assert_eq!(
+            xdmf.meta_data.as_ref().unwrap().format,
+            DataStorage::AsciiInline
+        );
     }
 
     #[test]

@@ -60,7 +60,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum OutputType {
-        XdmfXml,
+        XdmfAsciiInline,
         XdmfH5Single,
         XdmfH5Multiple,
         VtkAscii,
@@ -118,22 +118,17 @@ mod tests {
             let start = Instant::now();
 
             let writer = match self.output_type {
-                OutputType::XdmfXml => TimeSeriesWriter::new_with_options(
-                    &self.file_name,
-                    &TimeSeriesWriter::options().format(xdmf::Format::XML),
-                ),
-                OutputType::XdmfH5Single => TimeSeriesWriter::new_with_options(
-                    &self.file_name,
-                    &TimeSeriesWriter::options()
-                        .format(xdmf::Format::HDF)
-                        .multiple_files(false),
-                ),
-                OutputType::XdmfH5Multiple => TimeSeriesWriter::new_with_options(
-                    &self.file_name,
-                    &TimeSeriesWriter::options()
-                        .format(xdmf::Format::HDF)
-                        .multiple_files(true),
-                ),
+                OutputType::XdmfAsciiInline => {
+                    TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::AsciiInline).unwrap()
+                }
+                OutputType::XdmfH5Single => {
+                    TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::Hdf5SingleFile)
+                        .unwrap()
+                }
+                OutputType::XdmfH5Multiple => {
+                    TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::Hdf5MultipleFiles)
+                        .unwrap()
+                }
                 _ => {
                     panic!("Unsupported XDMF type: {:?}", self.output_type);
                 }
@@ -143,7 +138,6 @@ mod tests {
             let conn: Vec<u64> = connectivity.iter().map(|&x| x as u64).collect();
 
             let writer = writer
-                .unwrap()
                 .write_mesh(&coordinates, (&conn, &cell_types))
                 .unwrap();
 
@@ -335,7 +329,7 @@ mod tests {
         std::fs::create_dir_all(base_path).unwrap();
 
         let mut cases: Vec<Box<dyn Case>> = vec![
-            Box::new(XdmfCase::new(OutputType::XdmfXml, base_path)),
+            Box::new(XdmfCase::new(OutputType::XdmfAsciiInline, base_path)),
             Box::new(XdmfCase::new(OutputType::XdmfH5Single, base_path)),
             Box::new(XdmfCase::new(OutputType::XdmfH5Multiple, base_path)),
             Box::new(VtkCase::new(OutputType::VtkAscii, base_path)),

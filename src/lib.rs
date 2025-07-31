@@ -28,8 +28,8 @@ pub use xdmf_elements::{CellType, attribute::AttributeType, data_item::Format};
 pub type DataMap = BTreeMap<String, (AttributeType, Values)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub enum WriterFormat {
-    Xml,
+pub enum DataStorage {
+    AsciiInline,
     Hdf5SingleFile,
     Hdf5MultipleFiles,
 }
@@ -37,7 +37,7 @@ pub enum WriterFormat {
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;
 
-    fn writer_format(&self) -> WriterFormat;
+    fn writer_format(&self) -> DataStorage;
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)>;
 
@@ -70,82 +70,16 @@ pub(crate) trait DataWriter {
     }
 }
 
-pub struct TimeSeriesWriterOptions {
-    format: Format,
-    multiple_files: bool,
-}
-
-impl TimeSeriesWriterOptions {
-    pub fn format(mut self, format: Format) -> Self {
-        self.format = format;
-        self
-    }
-
-    pub fn multiple_files(mut self, multiple_files: bool) -> Self {
-        self.multiple_files = multiple_files;
-        self
-    }
-
-    fn create_writer(&self, file_name: &Path) -> IoResult<Box<dyn DataWriter>> {
-        match self.format {
-            Format::XML => Ok(Box::new(xml_writer::XmlWriter::new())),
-
-            Format::HDF => {
-                #[cfg(feature = "hdf5")]
-                if self.multiple_files {
-                    Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
-                        file_name,
-                    )?))
-                } else {
-                    Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name)?))
-                }
-
-                #[cfg(not(feature = "hdf5"))]
-                panic!("HDF5 feature is not enabled. Please enable it in Cargo.toml.");
-            }
-            _ => unimplemented!("Unsupported format"),
-        }
-    }
-}
-
-impl Default for TimeSeriesWriterOptions {
-    fn default() -> Self {
-        let default_format = if cfg!(feature = "hdf5") {
-            Format::HDF
-        } else {
-            Format::XML
-        };
-        Self {
-            format: default_format,
-            multiple_files: false,
-        }
-    }
-}
-
 pub struct TimeSeriesWriter {
     xdmf_file_name: PathBuf,
     writer: Box<dyn DataWriter>,
 }
 
 impl TimeSeriesWriter {
-    pub fn options() -> TimeSeriesWriterOptions {
-        TimeSeriesWriterOptions::default()
-    }
-
     /// # Errors
     ///
     /// TODO
-    pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
-        Self::new_with_options(file_name, &Self::options())
-    }
-
-    /// # Errors
-    ///
-    /// TODO
-    pub fn new_with_options(
-        file_name: impl AsRef<Path>,
-        options: &TimeSeriesWriterOptions,
-    ) -> IoResult<Self> {
+    pub fn new(file_name: impl AsRef<Path>, data_storage: DataStorage) -> IoResult<Self> {
         let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf");
 
         // create the parent directory if it does not exist
@@ -155,7 +89,7 @@ impl TimeSeriesWriter {
 
         Ok(Self {
             xdmf_file_name,
-            writer: options.create_writer(file_name.as_ref())?,
+            writer: create_writer(file_name.as_ref(), data_storage)?,
         })
     }
 
@@ -517,6 +451,38 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoRe
     Ok(())
 }
 
+fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dyn DataWriter>> {
+    match data_storage {
+        DataStorage::AsciiInline => Ok(Box::new(xml_writer::XmlWriter::new())),
+        DataStorage::Hdf5SingleFile => {
+            #[cfg(feature = "hdf5")]
+            {
+                Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name)?))
+            }
+            #[cfg(not(feature = "hdf5"))]
+            {
+                Err(std::io::Error::other(
+                    "The HDF5 feature is not enabled. Please enable it in Cargo.toml.",
+                ));
+            }
+        }
+        DataStorage::Hdf5MultipleFiles => {
+            #[cfg(feature = "hdf5")]
+            {
+                Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
+                    file_name,
+                )?))
+            }
+            #[cfg(not(feature = "hdf5"))]
+            {
+                Err(std::io::Error::other(
+                    "The HDF5 feature is not enabled. Please enable it in Cargo.toml.",
+                ));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,11 +784,7 @@ mod tests {
 
         assert!(!xdmf_folder.exists());
 
-        let writer = TimeSeriesWriter::new_with_options(
-            &xdmf_file_path,
-            &TimeSeriesWriter::options().format(Format::XML),
-        )
-        .unwrap();
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
 
         assert!(xdmf_folder.exists());
         assert_eq!(writer.xdmf_file_name, xdmf_file_path.with_extension("xdmf"));

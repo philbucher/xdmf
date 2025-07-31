@@ -1,7 +1,7 @@
 use std::io::Result as IoResult;
 
 use crate::{
-    DataWriter, WriterFormat,
+    DataStorage, DataWriter,
     values::Values,
     xdmf_elements::{attribute, data_item::Format},
 };
@@ -26,8 +26,8 @@ impl DataWriter for XmlWriter {
         Format::XML
     }
 
-    fn writer_format(&self) -> WriterFormat {
-        WriterFormat::Xml
+    fn writer_format(&self) -> DataStorage {
+        DataStorage::AsciiInline
     }
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {

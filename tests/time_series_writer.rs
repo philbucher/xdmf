@@ -35,11 +35,8 @@ fn write_xdmf() {
     let tmp_dir = TempDir::new().unwrap();
     let xdmf_file_path = tmp_dir.path().join("test_output");
 
-    let xdmf_writer = TimeSeriesWriter::new_with_options(
-        &xdmf_file_path,
-        &TimeSeriesWriter::options().format(xdmf::Format::XML),
-    )
-    .unwrap();
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     let mut xdmf_writer = xdmf_writer
         .write_mesh(&node_coords, (&connectivity, &cell_types))
@@ -140,7 +137,7 @@ fn write_xdmf() {
         <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 5.0000000000000000e-1 -5.0000000000000000e-1 2.0000000000000001e-1 -5.0000000000000000e-1 5.0000000000000000e-1 2.0000000000000001e-1 1.5000000000000000e0 -5.0000000000000000e-1 2.0000000000000001e-1 2.5000000000000000e0 5.0000000000000000e-1 2.0000000000000001e-1 5.0000000000000000e-1 1.5000000000000000e0 2.0000000000000001e-1 5.0000000000000000e-1 2.5000000000000000e0 2.0000000000000001e-1 1.5000000000000000e0 2.5000000000000000e0 2.0000000000000001e-1 2.5000000000000000e0 1.5000000000000000e0 2.0000000000000001e-1</DataItem>
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
-    <MetaData Version="0.1.0" Format="Xml"/>
+    <MetaData Version="0.1.0" Format="AsciiInline"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf");
@@ -183,11 +180,8 @@ fn write_xdmf_only_mesh() {
     let tmp_dir = TempDir::new().unwrap();
     let xdmf_file_path = tmp_dir.path().join("test_output");
 
-    let xdmf_writer = TimeSeriesWriter::new_with_options(
-        &xdmf_file_path,
-        &TimeSeriesWriter::options().format(xdmf::Format::XML),
-    )
-    .unwrap();
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     xdmf_writer
         .write_mesh(&node_coords, (&connectivity, &cell_types))
@@ -207,7 +201,7 @@ fn write_xdmf_only_mesh() {
         <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 5.0000000000000000e-1 -5.0000000000000000e-1 2.0000000000000001e-1 -5.0000000000000000e-1 5.0000000000000000e-1 2.0000000000000001e-1 1.5000000000000000e0 -5.0000000000000000e-1 2.0000000000000001e-1 2.5000000000000000e0 5.0000000000000000e-1 2.0000000000000001e-1 5.0000000000000000e-1 1.5000000000000000e0 2.0000000000000001e-1 5.0000000000000000e-1 2.5000000000000000e0 2.0000000000000001e-1 1.5000000000000000e0 2.5000000000000000e0 2.0000000000000001e-1 2.5000000000000000e0 1.5000000000000000e0 2.0000000000000001e-1</DataItem>
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
-    <MetaData Version="0.1.0" Format="Xml"/>
+    <MetaData Version="0.1.0" Format="AsciiInline"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf");
@@ -250,11 +244,8 @@ fn write_xdmf_with_submeshes() {
     let tmp_dir = TempDir::new().unwrap();
     let xdmf_file_path = tmp_dir.path().join("test_output");
 
-    let xdmf_writer = TimeSeriesWriter::new_with_options(
-        &xdmf_file_path,
-        &TimeSeriesWriter::options().format(xdmf::Format::XML),
-    )
-    .unwrap();
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     let point_indx = vec![0, 1, 2];
     let cell_indx = vec![0];

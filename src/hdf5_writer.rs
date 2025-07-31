@@ -6,7 +6,7 @@ use std::{
 use hdf5::{File as H5File, Group as H5Group};
 
 use crate::{
-    DataWriter, Values, WriterFormat,
+    DataStorage, DataWriter, Values,
     xdmf_elements::{attribute, data_item::Format},
 };
 
@@ -38,8 +38,8 @@ impl DataWriter for SingleFileHdf5Writer {
         Format::HDF
     }
 
-    fn writer_format(&self) -> WriterFormat {
-        WriterFormat::Hdf5SingleFile
+    fn writer_format(&self) -> DataStorage {
+        DataStorage::Hdf5SingleFile
     }
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
@@ -151,8 +151,8 @@ impl DataWriter for MultipleFilesHdf5Writer {
         Format::HDF
     }
 
-    fn writer_format(&self) -> WriterFormat {
-        WriterFormat::Hdf5MultipleFiles
+    fn writer_format(&self) -> DataStorage {
+        DataStorage::Hdf5MultipleFiles
     }
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
