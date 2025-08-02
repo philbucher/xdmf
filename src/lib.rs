@@ -434,7 +434,9 @@ impl TimeSeriesDataWriter {
 
         // Write the XDMF file to a temporary file first to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
+        // TODO use BufWriter?
         xdmf.write_to(&mut std::fs::File::create(&temp_xdmf_file_name)?)?;
+        // manually rename "&lt;"" to "<" and "&gt;"" to ">"
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
@@ -469,7 +471,7 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoRe
 
 fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dyn DataWriter>> {
     match data_storage {
-        DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiDataWriter::new(file_name)?)),
+        DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiWriter::new(file_name)?)),
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
         DataStorage::Hdf5SingleFile => {
             #[cfg(feature = "hdf5")]

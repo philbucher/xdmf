@@ -43,3 +43,4 @@ I am a fan of fail early, so I tried to add validations to the data as much as p
 - test with bigger example
 - Mention somewhere in readme that seems that the xdmf is no longer maintained
 - Check docs of connectivity
+- Example with Vector => check how to use Dimension

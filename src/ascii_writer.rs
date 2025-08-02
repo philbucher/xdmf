@@ -1,5 +1,6 @@
 use std::{
-    io::Result as IoResult,
+    fs::File,
+    io::{BufWriter, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
 
@@ -14,13 +15,6 @@ pub(crate) struct AsciiInlineWriter {}
 impl AsciiInlineWriter {
     pub fn new() -> Self {
         Self {}
-    }
-
-    fn values_to_string(&self, data: &Values) -> String {
-        match data {
-            Values::F64(v) => array_to_string_fmt(v),
-            Values::U64(v) => array_to_string_fmt(v),
-        }
     }
 }
 
@@ -41,14 +35,10 @@ impl DataWriter for AsciiInlineWriter {
     fn write_submesh(
         &mut self,
         _name: &str,
-
         point_indices: &[u64],
         cell_indices: &[u64],
     ) -> IoResult<(String, String)> {
-        Ok((
-            array_to_string_fmt(point_indices),
-            array_to_string_fmt(cell_indices),
-        ))
+        unimplemented!()
     }
 
     fn write_data(
@@ -57,18 +47,18 @@ impl DataWriter for AsciiInlineWriter {
         _center: attribute::Center,
         data: &Values,
     ) -> IoResult<String> {
-        Ok(self.values_to_string(data))
+        Ok(values_to_string(data))
     }
 }
 
 /// This writer uses the XML format, but instead of writing the data directly into the xdmf file,
 /// it writes it to a separate file and includes it in the xdmf file using an `xi:include` tag.
-pub(crate) struct AsciiDataWriter {
+pub(crate) struct AsciiWriter {
     txt_files_dir: PathBuf,
     write_time: Option<String>,
 }
 
-impl AsciiDataWriter {
+impl AsciiWriter {
     pub fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
         let txt_files_dir = base_file_name.as_ref().to_path_buf().with_extension("txt");
 
@@ -79,16 +69,9 @@ impl AsciiDataWriter {
             write_time: None,
         })
     }
-
-    fn values_to_string(&self, data: &Values) -> String {
-        match data {
-            Values::F64(v) => array_to_string_fmt(v),
-            Values::U64(v) => array_to_string_fmt(v),
-        }
-    }
 }
 
-impl DataWriter for AsciiDataWriter {
+impl DataWriter for AsciiWriter {
     fn format(&self) -> Format {
         Format::XML
     }
@@ -99,23 +82,33 @@ impl DataWriter for AsciiDataWriter {
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
         // create files for points and cells
-        std::fs::write("coords.txt", array_to_writer_fmt(points))?;
-        std::fs::write("cells.txt", array_to_writer_fmt(cells))?;
-        Ok((xinclude_data("coords.txt"), xinclude_data("cells.txt")))
+        let points_file_name = self.txt_files_dir.join("points.txt");
+        let cells_file_name = self.txt_files_dir.join("cells.txt");
+
+        let mut file_points = BufWriter::new(File::create(&points_file_name)?);
+        let mut file_cells = BufWriter::new(File::create(&cells_file_name)?);
+
+        array_to_writer_fmt(points, &mut file_points)?;
+        array_to_writer_fmt(cells, &mut file_cells)?;
+
+        // explicitly flush the buffers to ensure all data is written and errors are caught
+        file_points.flush()?;
+        file_cells.flush()?;
+
+        Ok((
+            xinclude_data(points_file_name.to_string_lossy().as_ref()),
+            xinclude_data(cells_file_name.to_string_lossy().as_ref()),
+        ))
     }
 
     #[cfg(feature = "unstable-submesh-api")]
     fn write_submesh(
         &mut self,
         _name: &str,
-
         point_indices: &[u64],
         cell_indices: &[u64],
     ) -> IoResult<(String, String)> {
-        Ok((
-            array_to_string_fmt(point_indices),
-            array_to_string_fmt(cell_indices),
-        ))
+        unimplemented!()
     }
 
     fn write_data(
@@ -130,12 +123,16 @@ impl DataWriter for AsciiDataWriter {
             .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
 
         let file_name = self.txt_files_dir.join(format!(
-            "data_t_{}_{}_{name}.txt",
-            time,
+            "data_t_{time}_{}_{name}.txt",
             attribute::center_to_data_tag(center)
         ));
 
-        // TODO write data to file
+        let mut data_file = BufWriter::new(File::create(&file_name)?);
+
+        values_to_writer(data, &mut data_file)?;
+
+        // explicitly flush the buffers to ensure all data is written and errors are caught
+        data_file.flush()?;
 
         Ok(xinclude_data(file_name.to_string_lossy().as_ref()))
     }
@@ -194,7 +191,7 @@ impl_format_number!(u32, "{}");
 impl_format_number!(u64, "{}");
 impl_format_number!(usize, "{}");
 
-/// Generic formatter for arrays of either f64 or i32
+/// Generic formatter for arrays of scalar numeric types
 pub fn array_to_string_fmt<T>(vec: &[T]) -> String
 where
     T: FormatNumber,
@@ -206,14 +203,36 @@ where
 }
 
 /// Generic formatter for arrays of either f64 or i32
-pub fn array_to_writer_fmt<T>(vec: &[T]) -> String
+pub fn array_to_writer_fmt<T, W>(vec: &[T], writer: &mut W) -> IoResult<()>
 where
     T: FormatNumber,
+    W: Write,
 {
-    vec.iter()
-        .map(|elem| elem.format_number())
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut iter = vec.iter().peekable();
+
+    while let Some(elem) = iter.next() {
+        write!(writer, "{}", elem.format_number())?;
+        if iter.peek().is_some() {
+            write!(writer, " ")?;
+        }
+    }
+
+    // final newline
+    writeln!(writer)
+}
+
+fn values_to_string(data: &Values) -> String {
+    match data {
+        Values::F64(v) => array_to_string_fmt(v),
+        Values::U64(v) => array_to_string_fmt(v),
+    }
+}
+
+fn values_to_writer(data: &Values, writer: &mut impl Write) -> IoResult<()> {
+    match data {
+        Values::F64(v) => array_to_writer_fmt(v, writer),
+        Values::U64(v) => array_to_writer_fmt(v, writer),
+    }
 }
 
 #[cfg(test)]

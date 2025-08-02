@@ -17,6 +17,9 @@ pub struct Xdmf {
     #[serde(rename = "@Version")]
     pub version: String,
 
+    #[serde(rename = "@xmlns:xi")]
+    pub xinclude_url: String,
+
     #[serde(rename = "Domain")]
     pub domains: Vec<Domain>,
 
@@ -28,6 +31,7 @@ impl Xdmf {
     pub fn new(domain: Domain) -> Self {
         Self {
             version: "3.0".to_string(),
+            xinclude_url: "http://www.w3.org/2001/XInclude".to_string(),
             domains: vec![domain],
             information: vec![],
         }
