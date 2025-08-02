@@ -26,6 +26,26 @@ pub struct DataItem {
     pub reference: Option<String>,
 }
 
+// <xi:include href="coords.txt" parse="text"/>
+#[derive(Clone, Debug, Serialize)]
+pub struct XInclude {
+    href: String,
+    parse: Option<String>,
+}
+
+impl XInclude {
+    pub fn new(href: String, parse_as_text: bool) -> Self {
+        Self {
+            href,
+            parse: if parse_as_text {
+                Some("text".to_string())
+            } else {
+                None
+            },
+        }
+    }
+}
+
 impl Default for DataItem {
     fn default() -> Self {
         Self {
