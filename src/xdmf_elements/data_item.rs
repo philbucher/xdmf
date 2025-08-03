@@ -79,39 +79,30 @@ impl XInclude {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct DataContent {
-    #[serde(rename = "$value", skip_serializing_if = "String::is_empty")]
-    pub raw: String,
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum DataContent {
+    #[serde(rename = "$value")]
+    Raw(String),
 
-    #[serde(rename = "xi:include", skip_serializing_if = "Option::is_none")]
-    pub xinclude: Option<XInclude>,
+    #[serde(rename = "xi:include")]
+    Include(XInclude),
 }
 
 impl From<String> for DataContent {
     fn from(data: String) -> Self {
-        Self {
-            raw: data,
-            xinclude: None,
-        }
+        Self::Raw(data)
     }
 }
 
 impl From<&str> for DataContent {
     fn from(data: &str) -> Self {
-        Self {
-            raw: data.to_string(),
-            xinclude: None,
-        }
+        Self::Raw(data.to_string())
     }
 }
 
 impl From<XInclude> for DataContent {
     fn from(include: XInclude) -> Self {
-        Self {
-            raw: "".to_string(),
-            xinclude: Some(include),
-        }
+        Self::Include(include)
     }
 }
 
