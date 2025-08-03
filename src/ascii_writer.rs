@@ -7,7 +7,10 @@ use std::{
 use crate::{
     DataStorage, DataWriter,
     values::Values,
-    xdmf_elements::{attribute, data_item::Format},
+    xdmf_elements::{
+        attribute,
+        data_item::{DataContent, Format, XInclude},
+    },
 };
 
 pub(crate) struct AsciiInlineWriter {}
@@ -27,8 +30,15 @@ impl DataWriter for AsciiInlineWriter {
         DataStorage::AsciiInline
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
-        Ok((array_to_string_fmt(points), array_to_string_fmt(cells)))
+    fn write_mesh(
+        &mut self,
+        points: &[f64],
+        cells: &[u64],
+    ) -> IoResult<(DataContent, DataContent)> {
+        Ok((
+            array_to_string_fmt(points).into(),
+            array_to_string_fmt(cells).into(),
+        ))
     }
 
     #[cfg(feature = "unstable-submesh-api")]
@@ -46,8 +56,8 @@ impl DataWriter for AsciiInlineWriter {
         _name: &str,
         _center: attribute::Center,
         data: &Values,
-    ) -> IoResult<String> {
-        Ok(values_to_string(data))
+    ) -> IoResult<DataContent> {
+        Ok(values_to_string(data).into())
     }
 }
 
@@ -80,7 +90,11 @@ impl DataWriter for AsciiWriter {
         DataStorage::Ascii
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
+    fn write_mesh(
+        &mut self,
+        points: &[f64],
+        cells: &[u64],
+    ) -> IoResult<(DataContent, DataContent)> {
         // create files for points and cells
         let points_file_name = self.txt_files_dir.join("points.txt");
         let cells_file_name = self.txt_files_dir.join("cells.txt");
@@ -96,8 +110,8 @@ impl DataWriter for AsciiWriter {
         file_cells.flush()?;
 
         Ok((
-            xinclude_data(points_file_name.to_string_lossy().as_ref()),
-            xinclude_data(cells_file_name.to_string_lossy().as_ref()),
+            XInclude::new(points_file_name.to_string_lossy().as_ref(), true).into(),
+            XInclude::new(cells_file_name.to_string_lossy().as_ref(), true).into(),
         ))
     }
 
@@ -116,7 +130,7 @@ impl DataWriter for AsciiWriter {
         name: &str,
         center: attribute::Center,
         data: &Values,
-    ) -> IoResult<String> {
+    ) -> IoResult<DataContent> {
         let time = self
             .write_time
             .as_ref()
@@ -134,7 +148,7 @@ impl DataWriter for AsciiWriter {
         // explicitly flush the buffers to ensure all data is written and errors are caught
         data_file.flush()?;
 
-        Ok(xinclude_data(file_name.to_string_lossy().as_ref()))
+        Ok(XInclude::new(file_name.to_string_lossy().as_ref(), true).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -156,10 +170,6 @@ impl DataWriter for AsciiWriter {
         self.write_time = None;
         Ok(())
     }
-}
-
-fn xinclude_data(name: &str) -> String {
-    format!("<xi:include href=\"{name}\" parse=\"text\"/>")
 }
 
 pub trait FormatNumber {
@@ -254,8 +264,8 @@ mod tests {
         pretty_assertions::assert_eq!(
             result,
             (
-                "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0".to_string(),
-                "0 1 2 0 2 3".to_string()
+                "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0".into(),
+                "0 1 2 0 2 3".into()
             )
         );
     }
@@ -271,7 +281,7 @@ mod tests {
             .unwrap();
         pretty_assertions::assert_eq!(
             result,
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
+            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0".into()
         );
     }
 }

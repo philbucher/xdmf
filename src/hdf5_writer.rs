@@ -7,7 +7,10 @@ use hdf5::{File as H5File, Group as H5Group};
 
 use crate::{
     DataStorage, DataWriter, Values,
-    xdmf_elements::{attribute, data_item::Format},
+    xdmf_elements::{
+        attribute,
+        data_item::{DataContent, Format},
+    },
 };
 
 const MESH: &str = "mesh";
@@ -42,7 +45,11 @@ impl DataWriter for SingleFileHdf5Writer {
         DataStorage::Hdf5SingleFile
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
+    fn write_mesh(
+        &mut self,
+        points: &[f64],
+        cells: &[u64],
+    ) -> IoResult<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
             return Err(std::io::Error::other("Mesh was already written"));
         }
@@ -55,8 +62,8 @@ impl DataWriter for SingleFileHdf5Writer {
         let (data_name_points, data_name_cells) = write_mesh(&mesh_group, points, cells)?;
 
         Ok((
-            full_path(&self.h5_file, &data_name_points),
-            full_path(&self.h5_file, &data_name_cells),
+            full_path(&self.h5_file, &data_name_points).into(),
+            full_path(&self.h5_file, &data_name_cells).into(),
         ))
     }
 
@@ -75,7 +82,7 @@ impl DataWriter for SingleFileHdf5Writer {
         name: &str,
         center: attribute::Center,
         data: &Values,
-    ) -> IoResult<String> {
+    ) -> IoResult<DataContent> {
         let time = self
             .write_time
             .as_ref()
@@ -103,7 +110,7 @@ impl DataWriter for SingleFileHdf5Writer {
             data,
         )?;
 
-        Ok(full_path(&self.h5_file, &data_path))
+        Ok(full_path(&self.h5_file, &data_path).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -159,15 +166,19 @@ impl DataWriter for MultipleFilesHdf5Writer {
         DataStorage::Hdf5MultipleFiles
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
+    fn write_mesh(
+        &mut self,
+        points: &[f64],
+        cells: &[u64],
+    ) -> IoResult<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
 
         let (data_name_points, data_name_cells) = write_mesh(&h5_file, points, cells)?;
 
         Ok((
-            full_path(&h5_file, &data_name_points),
-            full_path(&h5_file, &data_name_cells),
+            full_path(&h5_file, &data_name_points).into(),
+            full_path(&h5_file, &data_name_cells).into(),
         ))
     }
 
@@ -186,7 +197,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         name: &str,
         center: attribute::Center,
         data: &Values,
-    ) -> IoResult<String> {
+    ) -> IoResult<DataContent> {
         // also double check that the name does not already exist
 
         let data_file = self
@@ -209,7 +220,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
             data,
         )?;
 
-        Ok(full_path(data_file, &data_path))
+        Ok(full_path(data_file, &data_path).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -500,11 +511,11 @@ mod tests {
 
         assert_eq!(
             points_path,
-            h5_file.to_string_lossy().to_string() + ":mesh/points"
+            (h5_file.to_string_lossy().to_string() + ":mesh/points").into()
         );
         assert_eq!(
             cells_path,
-            h5_file.to_string_lossy().to_string() + ":mesh/cells"
+            (h5_file.to_string_lossy().to_string() + ":mesh/cells").into()
         );
 
         // Ensure the file is closed before reading.
@@ -545,11 +556,11 @@ mod tests {
 
         assert_eq!(
             points_path,
-            mesh_file.to_string_lossy().to_string() + ":points"
+            (mesh_file.to_string_lossy().to_string() + ":points").into()
         );
         assert_eq!(
             cells_path,
-            mesh_file.to_string_lossy().to_string() + ":cells"
+            (mesh_file.to_string_lossy().to_string() + ":cells").into()
         );
 
         // read back the data to verify
@@ -595,11 +606,13 @@ mod tests {
 
         assert_eq!(
             data_path_points,
-            h5_file.to_string_lossy().to_string() + ":data/t_12.258/point_data/dummy_point_data"
+            (h5_file.to_string_lossy().to_string() + ":data/t_12.258/point_data/dummy_point_data")
+                .into()
         );
         assert_eq!(
             data_path_cells,
-            h5_file.to_string_lossy().to_string() + ":data/t_12.258/cell_data/some_cell_data"
+            (h5_file.to_string_lossy().to_string() + ":data/t_12.258/cell_data/some_cell_data")
+                .into()
         );
 
         // read back the data to verify
@@ -659,11 +672,11 @@ mod tests {
 
         assert_eq!(
             data_path_points,
-            data_file.to_string_lossy().to_string() + ":point_data/dummy_point_data"
+            (data_file.to_string_lossy().to_string() + ":point_data/dummy_point_data").into()
         );
         assert_eq!(
             data_path_cells,
-            data_file.to_string_lossy().to_string() + ":cell_data/some_cell_data"
+            (data_file.to_string_lossy().to_string() + ":cell_data/some_cell_data").into()
         );
 
         // read back the data to verify

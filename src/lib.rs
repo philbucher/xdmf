@@ -7,7 +7,7 @@ use std::{
 use serde::Serialize;
 use xdmf_elements::{
     Information, Xdmf, attribute,
-    data_item::{DataItem, NumberType},
+    data_item::{DataContent, DataItem, NumberType},
     dimensions::Dimensions,
     geometry::{Geometry, GeometryType},
     grid::{CollectionType, Grid, GridType, Time},
@@ -40,7 +40,8 @@ pub(crate) trait DataWriter {
 
     fn data_storage(&self) -> DataStorage;
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> IoResult<(String, String)>;
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64])
+    -> IoResult<(DataContent, DataContent)>;
 
     #[cfg(feature = "unstable-submesh-api")]
     fn write_submesh(
@@ -55,7 +56,7 @@ pub(crate) trait DataWriter {
         name: &str,
         center: attribute::Center,
         data: &Values,
-    ) -> IoResult<String>;
+    ) -> IoResult<DataContent>;
 
     fn write_data_initialize(&mut self, _time: &str) -> IoResult<()> {
         Ok(())
@@ -125,7 +126,7 @@ impl TimeSeriesWriter {
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
             dimensions: Some(Dimensions(vec![points.len() / 3, 3])),
-            data: points_data.into(),
+            data: points_data,
             number_type: Some(NumberType::Float),
             precision: Some(8), // Default precision for f64
             format: Some(self.writer.format()),
@@ -136,7 +137,7 @@ impl TimeSeriesWriter {
             name: Some("connectivity".to_string()),
             dimensions: Some(Dimensions(vec![prepared_cells.len()])),
             number_type: Some(NumberType::UInt),
-            data: cells_data.into(),
+            data: cells_data,
             format: Some(self.writer.format()),
             precision: Some(8),
             reference: None,
@@ -360,7 +361,7 @@ impl TimeSeriesDataWriter {
                         number_type: Some(vals.number_type()),
                         format: Some(format),
                         precision: Some(vals.precision()),
-                        data: self.writer.write_data(data_name, center, vals)?.into(),
+                        data: self.writer.write_data(data_name, center, vals)?,
                         reference: None,
                     };
 
