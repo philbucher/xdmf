@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn dimensions_serialize() {
         #[derive(Serialize)]
-        pub(crate) struct XmlRoot<T>
+        struct XmlRoot<T>
         where
             T: Serialize,
         {

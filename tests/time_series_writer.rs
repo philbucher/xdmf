@@ -76,7 +76,7 @@ fn write_xdmf() {
     }
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0">
+<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="time_series" GridType="Collection" CollectionType="Temporal">
             <Grid Name="time_series-t0" GridType="Uniform">
@@ -189,7 +189,7 @@ fn write_xdmf_only_mesh() {
         .unwrap();
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0">
+<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="mesh" GridType="Uniform">
             <Geometry GeometryType="XYZ">

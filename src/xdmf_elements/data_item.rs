@@ -19,31 +19,11 @@ pub struct DataItem {
     #[serde(rename = "@Precision", skip_serializing_if = "Option::is_none")]
     pub precision: Option<u8>,
 
-    #[serde(rename = "$value")]
-    pub data: String,
+    #[serde(flatten)]
+    pub data: DataContent,
 
     #[serde(rename = "@Reference", skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
-}
-
-// <xi:include href="coords.txt" parse="text"/>
-#[derive(Clone, Debug, Serialize)]
-pub struct XInclude {
-    href: String,
-    parse: Option<String>,
-}
-
-impl XInclude {
-    pub fn new(href: String, parse_as_text: bool) -> Self {
-        Self {
-            href,
-            parse: if parse_as_text {
-                Some("text".to_string())
-            } else {
-                None
-            },
-        }
-    }
 }
 
 impl Default for DataItem {
@@ -54,7 +34,7 @@ impl Default for DataItem {
             number_type: Some(NumberType::default()),
             format: Some(Format::default()),
             precision: Some(4),
-            data: String::new(),
+            data: String::new().into(),
             reference: None,
         }
     }
@@ -72,8 +52,65 @@ impl DataItem {
                 "{}[@Name=\"{}\"]",
                 source_path,
                 source.name.clone().unwrap_or("MISSING".to_string())
-            ),
+            )
+            .into(),
             reference: Some("XML".to_string()),
+        }
+    }
+}
+
+// <xi:include href="coords.txt" parse="text"/>
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename = "xi:include")]
+pub struct XInclude {
+    #[serde(rename = "@href")]
+    file_path: String,
+
+    #[serde(rename = "@parse", skip_serializing_if = "Option::is_none")]
+    parse: Option<String>,
+}
+
+impl XInclude {
+    pub fn new(file_path: impl ToString, include_as_text: bool) -> Self {
+        Self {
+            file_path: file_path.to_string(),
+            parse: include_as_text.then(|| "text".to_string()), // xml is default
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DataContent {
+    #[serde(rename = "$value", skip_serializing_if = "String::is_empty")]
+    pub raw: String,
+
+    #[serde(rename = "xi:include", skip_serializing_if = "Option::is_none")]
+    pub xinclude: Option<XInclude>,
+}
+
+impl From<String> for DataContent {
+    fn from(data: String) -> Self {
+        Self {
+            raw: data,
+            xinclude: None,
+        }
+    }
+}
+
+impl From<&str> for DataContent {
+    fn from(data: &str) -> Self {
+        Self {
+            raw: data.to_string(),
+            xinclude: None,
+        }
+    }
+}
+
+impl From<XInclude> for DataContent {
+    fn from(include: XInclude) -> Self {
+        Self {
+            raw: "".to_string(),
+            xinclude: Some(include),
         }
     }
 }
@@ -102,6 +139,12 @@ mod tests {
 
     use super::*;
 
+    #[derive(Serialize)]
+    struct XmlRoot {
+        #[serde(rename = "DataItem")]
+        data_item: DataItem,
+    }
+
     #[test]
     fn data_item_default() {
         let default_item = DataItem::default();
@@ -110,7 +153,7 @@ mod tests {
         assert_eq!(default_item.number_type, Some(NumberType::Float));
         assert_eq!(default_item.format, Some(Format::XML));
         assert_eq!(default_item.precision, Some(4));
-        assert_eq!(default_item.data, String::new());
+        assert_eq!(default_item.data, String::new().into());
         assert!(default_item.reference.is_none());
     }
 
@@ -132,7 +175,7 @@ mod tests {
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
             precision: Some(8),
-            data: "custom_data".to_string(),
+            data: "custom_data".to_string().into(),
             reference: None,
         };
         assert_eq!(custom_item.name, Some("custom_data_item".to_string()));
@@ -140,7 +183,7 @@ mod tests {
         assert_eq!(custom_item.number_type, Some(NumberType::Int));
         assert_eq!(custom_item.format, Some(Format::HDF));
         assert_eq!(custom_item.precision, Some(8));
-        assert_eq!(custom_item.data, "custom_data");
+        assert_eq!(custom_item.data, "custom_data".into());
         assert!(custom_item.reference.is_none());
     }
 
@@ -160,7 +203,7 @@ mod tests {
         assert!(ref_item.precision.is_none());
         assert_eq!(
             ref_item.data,
-            "/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]"
+            "/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]".into()
         );
         assert_eq!(ref_item.reference, Some("XML".to_string()));
     }
@@ -173,13 +216,18 @@ mod tests {
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
             precision: Some(8),
-            data: "custom_data".to_string(),
+            data: "custom_data".to_string().into(),
             reference: None,
         };
 
         pretty_assertions::assert_eq!(
-            to_string(&data_item).unwrap(),
-            "<DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>"
+            to_string(&XmlRoot {
+                data_item: data_item
+            })
+            .unwrap(),
+            "<XmlRoot>\
+            <DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>\
+            </XmlRoot>"
         );
     }
 
@@ -190,11 +238,64 @@ mod tests {
             ..Default::default()
         };
 
-        let ref_item = DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
+        let ref_item: DataItem =
+            DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
 
         pretty_assertions::assert_eq!(
-            to_string(&ref_item).unwrap(),
-            "<DataItem Reference=\"XML\">/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]</DataItem>"
+            to_string(&XmlRoot {
+                data_item: ref_item
+            })
+            .unwrap(),
+            "<XmlRoot>\
+            <DataItem Reference=\"XML\">/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]</DataItem>\
+            </XmlRoot>"
+        );
+    }
+
+    #[test]
+    fn data_item_include_serialize() {
+        let custom_item = DataItem {
+            name: Some("custom_data_item".to_string()),
+            dimensions: Some(Dimensions(vec![2, 3])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::HDF),
+            precision: Some(8),
+            data: XInclude::new("coords.txt".to_string(), true).into(),
+            reference: None,
+        };
+        assert_eq!(custom_item.name, Some("custom_data_item".to_string()));
+        assert_eq!(custom_item.dimensions, Some(Dimensions(vec![2, 3])));
+        assert_eq!(custom_item.number_type, Some(NumberType::Int));
+        assert_eq!(custom_item.format, Some(Format::HDF));
+        assert_eq!(custom_item.precision, Some(8));
+        assert_eq!(
+            custom_item.data,
+            XInclude::new("coords.txt".to_string(), true).into()
+        );
+        assert!(custom_item.reference.is_none());
+
+        pretty_assertions::assert_eq!(
+            to_string(&XmlRoot {
+                data_item: custom_item
+            })
+            .unwrap(),
+            "<XmlRoot>\
+                <DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">\
+                    <xi:include href=\"coords.txt\" parse=\"text\"/>\
+                </DataItem>\
+            </XmlRoot>"
+        );
+    }
+
+    #[test]
+    fn xinclude_serialize() {
+        pretty_assertions::assert_eq!(
+            to_string(&XInclude::new("coords.txt".to_string(), false)).unwrap(),
+            "<xi:include href=\"coords.txt\"/>"
+        );
+        pretty_assertions::assert_eq!(
+            to_string(&XInclude::new("coords.txt".to_string(), true)).unwrap(),
+            "<xi:include href=\"coords.txt\" parse=\"text\"/>"
         );
     }
 }

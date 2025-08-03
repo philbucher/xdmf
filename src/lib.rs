@@ -125,7 +125,7 @@ impl TimeSeriesWriter {
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
             dimensions: Some(Dimensions(vec![points.len() / 3, 3])),
-            data: points_data,
+            data: points_data.into(),
             number_type: Some(NumberType::Float),
             precision: Some(8), // Default precision for f64
             format: Some(self.writer.format()),
@@ -136,7 +136,7 @@ impl TimeSeriesWriter {
             name: Some("connectivity".to_string()),
             dimensions: Some(Dimensions(vec![prepared_cells.len()])),
             number_type: Some(NumberType::UInt),
-            data: cells_data,
+            data: cells_data.into(),
             format: Some(self.writer.format()),
             precision: Some(8),
             reference: None,
@@ -360,7 +360,7 @@ impl TimeSeriesDataWriter {
                         number_type: Some(vals.number_type()),
                         format: Some(format),
                         precision: Some(vals.precision()),
-                        data: self.writer.write_data(data_name, center, vals)?,
+                        data: self.writer.write_data(data_name, center, vals)?.into(),
                         reference: None,
                     };
 
