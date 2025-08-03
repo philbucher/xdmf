@@ -65,7 +65,7 @@ impl DataWriter for AsciiInlineWriter {
 /// it writes it to a separate file and includes it in the xdmf file using an `xi:include` tag.
 pub(crate) struct AsciiWriter {
     txt_files_dir: PathBuf,
-    file_name: PathBuf,
+    folder_name: PathBuf,
     write_time: Option<String>,
 }
 
@@ -83,7 +83,7 @@ impl AsciiWriter {
         crate::mpi_safe_create_dir_all(&txt_files_dir)?;
 
         Ok(Self {
-            file_name: PathBuf::from(raw_file_name),
+            folder_name: raw_file_name.into(),
             txt_files_dir,
             write_time: None,
         })
@@ -122,11 +122,15 @@ impl DataWriter for AsciiWriter {
 
         Ok((
             XInclude::new(
-                self.file_name.join(points_file_name).to_string_lossy(),
+                self.folder_name.join(points_file_name).to_string_lossy(),
                 true,
             )
             .into(),
-            XInclude::new(self.file_name.join(cells_file_name).to_string_lossy(), true).into(),
+            XInclude::new(
+                self.folder_name.join(cells_file_name).to_string_lossy(),
+                true,
+            )
+            .into(),
         ))
     }
 
@@ -163,7 +167,11 @@ impl DataWriter for AsciiWriter {
         // explicitly flush the buffers to ensure all data is written and errors are caught
         data_file.flush()?;
 
-        Ok(XInclude::new(self.file_name.join(data_file_name).to_string_lossy(), true).into())
+        Ok(XInclude::new(
+            self.folder_name.join(data_file_name).to_string_lossy(),
+            true,
+        )
+        .into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
