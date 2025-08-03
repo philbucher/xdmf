@@ -65,6 +65,7 @@ impl DataWriter for AsciiInlineWriter {
 /// it writes it to a separate file and includes it in the xdmf file using an `xi:include` tag.
 pub(crate) struct AsciiWriter {
     txt_files_dir: PathBuf,
+    file_name: PathBuf,
     write_time: Option<String>,
 }
 
@@ -72,9 +73,17 @@ impl AsciiWriter {
     pub fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
         let txt_files_dir = base_file_name.as_ref().to_path_buf().with_extension("txt");
 
+        let raw_file_name = txt_files_dir.file_name().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Base file name must have a valid file name",
+            )
+        })?;
+
         crate::mpi_safe_create_dir_all(&txt_files_dir)?;
 
         Ok(Self {
+            file_name: PathBuf::from(raw_file_name),
             txt_files_dir,
             write_time: None,
         })
@@ -96,11 +105,13 @@ impl DataWriter for AsciiWriter {
         cells: &[u64],
     ) -> IoResult<(DataContent, DataContent)> {
         // create files for points and cells
-        let points_file_name = self.txt_files_dir.join("points.txt");
-        let cells_file_name = self.txt_files_dir.join("cells.txt");
+        let points_file_name = "points.txt";
+        let cells_file_name = "cells.txt";
 
-        let mut file_points = BufWriter::new(File::create(&points_file_name)?);
-        let mut file_cells = BufWriter::new(File::create(&cells_file_name)?);
+        let mut file_points =
+            BufWriter::new(File::create(self.txt_files_dir.join(points_file_name))?);
+        let mut file_cells =
+            BufWriter::new(File::create(self.txt_files_dir.join(cells_file_name))?);
 
         array_to_writer_fmt(points, &mut file_points)?;
         array_to_writer_fmt(cells, &mut file_cells)?;
@@ -110,8 +121,12 @@ impl DataWriter for AsciiWriter {
         file_cells.flush()?;
 
         Ok((
-            XInclude::new(points_file_name.to_string_lossy().as_ref(), true).into(),
-            XInclude::new(cells_file_name.to_string_lossy().as_ref(), true).into(),
+            XInclude::new(
+                self.file_name.join(points_file_name).to_string_lossy(),
+                true,
+            )
+            .into(),
+            XInclude::new(self.file_name.join(cells_file_name).to_string_lossy(), true).into(),
         ))
     }
 
@@ -136,19 +151,19 @@ impl DataWriter for AsciiWriter {
             .as_ref()
             .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
 
-        let file_name = self.txt_files_dir.join(format!(
+        let data_file_name = format!(
             "data_t_{time}_{}_{name}.txt",
             attribute::center_to_data_tag(center)
-        ));
+        );
 
-        let mut data_file = BufWriter::new(File::create(&file_name)?);
+        let mut data_file = BufWriter::new(File::create(self.txt_files_dir.join(&data_file_name))?);
 
         values_to_writer(data, &mut data_file)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
         data_file.flush()?;
 
-        Ok(XInclude::new(file_name.to_string_lossy().as_ref(), true).into())
+        Ok(XInclude::new(self.file_name.join(data_file_name).to_string_lossy(), true).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
