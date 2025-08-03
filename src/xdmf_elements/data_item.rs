@@ -212,10 +212,7 @@ mod tests {
         };
 
         pretty_assertions::assert_eq!(
-            to_string(&XmlRoot {
-                data_item: data_item
-            })
-            .unwrap(),
+            to_string(&XmlRoot { data_item }).unwrap(),
             "<XmlRoot>\
             <DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>\
             </XmlRoot>"
@@ -229,8 +226,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ref_item: DataItem =
-            DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
+        let ref_item = DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
 
         pretty_assertions::assert_eq!(
             to_string(&XmlRoot {
