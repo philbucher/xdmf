@@ -459,8 +459,8 @@ mod tests {
             "Writing data was not initialized"
         );
 
-        writer.write_data_initialize("0.0").unwrap();
-        assert!(writer.write_time.is_some());
+        writer.write_data_initialize("1250.9").unwrap();
+        assert_eq!(writer.write_time.clone().unwrap(), "1250.9");
 
         let res_init = writer.write_data_initialize("0.0");
         assert_eq!(
@@ -469,6 +469,7 @@ mod tests {
         );
 
         writer.write_data_finalize().unwrap();
+        assert!(writer.write_time.is_none());
     }
 
     #[test]

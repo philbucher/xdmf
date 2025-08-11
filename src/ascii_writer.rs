@@ -271,13 +271,14 @@ fn values_to_writer(data: &Values, writer: &mut impl Write) -> IoResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xdmf_elements::data_item::XInclude;
 
     #[test]
     fn format_number_all_types() {
         // floating point numbers
-        let num: f32 = 3.1415904;
+        let num: f32 = 3.141_590_4;
         assert_eq!(num.format_number(), "3.1415904e0");
-        let num: f64 = 1.23456789;
+        let num: f64 = 1.234_567_89;
         assert_eq!(num.format_number(), "1.2345678899999999e0");
 
         // signed integer types
@@ -287,9 +288,9 @@ mod tests {
         assert_eq!(num.format_number(), "-32768");
         let num: i32 = 42;
         assert_eq!(num.format_number(), "42");
-        let num: i64 = -1234567890123456789;
+        let num: i64 = -1_234_567_890_123_456_789;
         assert_eq!(num.format_number(), "-1234567890123456789");
-        let num: isize = -987654321;
+        let num: isize = -987_654_321;
         assert_eq!(num.format_number(), "-987654321");
 
         // unsigned integer types
@@ -297,32 +298,72 @@ mod tests {
         assert_eq!(num.format_number(), "255");
         let num: u16 = 65535;
         assert_eq!(num.format_number(), "65535");
-        let num: u32 = 4294967295;
+        let num: u32 = 4_294_967_295;
         assert_eq!(num.format_number(), "4294967295");
         let num: u64 = 1000;
         assert_eq!(num.format_number(), "1000");
-        let num: usize = 123456789;
+        let num: usize = 123_456_789;
         assert_eq!(num.format_number(), "123456789");
     }
 
     #[test]
     fn array_to_string_fmt_multiple_types() {
-        unimplemented!()
+        let vec_f64 = vec![1.0, 2.0, 3.0];
+        let result_f64 = array_to_string_fmt(&vec_f64);
+        assert_eq!(
+            result_f64,
+            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
+        );
+
+        let vec_u64 = vec![1_u64, 2, 3];
+        let result_u64 = array_to_string_fmt(&vec_u64);
+        assert_eq!(result_u64, "1 2 3");
     }
 
     #[test]
     fn array_to_writer_fmt_multiple_types() {
-        unimplemented!()
+        let vec_f64 = vec![1.0, 2.0, 3.0];
+        let mut buffer = Vec::new();
+        array_to_writer_fmt(&vec_f64, &mut buffer).unwrap();
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0\n"
+        );
+
+        let vec_u64 = vec![1_u64, 2, 3];
+        let mut buffer = Vec::new();
+        array_to_writer_fmt(&vec_u64, &mut buffer).unwrap();
+        assert_eq!(String::from_utf8(buffer).unwrap(), "1 2 3\n");
     }
 
     #[test]
     fn values_to_string_multiple_types() {
-        unimplemented!()
+        let data_f64 = Values::F64(vec![1.0, 2.0, 3.0]);
+        let result_f64 = values_to_string(&data_f64);
+        assert_eq!(
+            result_f64,
+            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
+        );
+
+        let data_u64 = Values::U64(vec![1_u64, 2, 3]);
+        let result_u64 = values_to_string(&data_u64);
+        assert_eq!(result_u64, "1 2 3");
     }
 
     #[test]
     fn values_to_writer_multiple_types() {
-        unimplemented!()
+        let data_f64 = Values::F64(vec![1.0, 2.0, 3.0]);
+        let mut buffer = Vec::new();
+        values_to_writer(&data_f64, &mut buffer).unwrap();
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0\n"
+        );
+
+        let data_u64 = Values::U64(vec![1_u64, 2, 3]);
+        let mut buffer = Vec::new();
+        values_to_writer(&data_u64, &mut buffer).unwrap();
+        assert_eq!(String::from_utf8(buffer).unwrap(), "1 2 3\n");
     }
 
     #[test]
@@ -380,8 +421,8 @@ mod tests {
             "Writing data was not initialized"
         );
 
-        writer.write_data_initialize("0.0").unwrap();
-        assert!(writer.write_time.is_some());
+        writer.write_data_initialize("120.05").unwrap();
+        assert_eq!(writer.write_time.clone().unwrap(), "120.05");
 
         let res_init = writer.write_data_initialize("0.0");
         assert_eq!(
@@ -390,6 +431,7 @@ mod tests {
         );
 
         writer.write_data_finalize().unwrap();
+        assert!(writer.write_time.is_none());
     }
 
     #[test]
@@ -420,16 +462,21 @@ mod tests {
         assert!(points_file.exists());
         assert!(cells_file.exists());
 
-        assert_eq!(points_path, ("test.h5/mesh.h5:points").into());
-        assert_eq!(cells_path, ("test.h5/mesh.h5:cells").into());
+        assert_eq!(
+            points_path,
+            XInclude::new("test.txt/points.txt", true).into()
+        );
+        assert_eq!(cells_path, XInclude::new("test.txt/cells.txt", true).into());
 
         // read back the data to verify
-        // let h5_file = H5File::open(&mesh_file).unwrap();
-        // let points_data: Vec<f64> = h5_file.dataset("points").unwrap().read().unwrap().to_vec();
-        // let cells_data: Vec<u64> = h5_file.dataset("cells").unwrap().read().unwrap().to_vec();
+        let points_data = std::fs::read_to_string(&points_file).unwrap();
+        let cells_data = std::fs::read_to_string(&cells_file).unwrap();
 
-        // assert_approx_eq!(&[f64], &points, &points_data);
-        // assert_eq!(&cells, &cells_data);
+        assert_eq!(
+            points_data,
+            "0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0\n"
+        );
+        assert_eq!(cells_data, "0 1 2\n");
     }
 
     #[test]
@@ -438,23 +485,33 @@ mod tests {
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = AsciiWriter::new(file_name).unwrap();
         let write_time = "12.258";
-        let data_file = writer
-            .txt_files_dir
-            .join(format!("data_t_{write_time}.txt"));
-        assert!(!data_file.exists());
+        let point_data_name = "dummy_point_data";
+        let cell_data_name = "some_cell_data";
+        let data_file_points = writer.txt_files_dir.join(format!(
+            "data_t_{write_time}_point_data_{point_data_name}.txt"
+        ));
+        let data_file_cells = writer.txt_files_dir.join(format!(
+            "data_t_{write_time}_cell_data_{cell_data_name}.txt"
+        ));
+        assert!(!data_file_points.exists());
+        assert!(!data_file_cells.exists());
 
         writer.write_data_initialize(write_time).unwrap();
-        assert!(data_file.exists());
+        assert!(!data_file_points.exists());
+        assert!(!data_file_cells.exists());
 
         // write points data
         let data_points = vec![0.0, 1.0, 2.0];
         let data_path_points = writer
             .write_data(
-                "dummy_point_data",
+                point_data_name,
                 attribute::Center::Node,
-                &Values::F64(data_points.clone()),
+                &Values::F64(data_points),
             )
             .unwrap();
+
+        assert!(data_file_points.exists());
+        assert!(!data_file_cells.exists());
 
         // write cell data
         let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
@@ -462,38 +519,38 @@ mod tests {
             .write_data(
                 "some_cell_data",
                 attribute::Center::Cell,
-                &Values::F64(data_cells.clone()),
+                &Values::F64(data_cells),
             )
             .unwrap();
+        assert!(data_file_points.exists());
+        assert!(data_file_cells.exists());
 
         writer.write_data_finalize().unwrap();
-        assert!(data_file.exists());
 
         assert_eq!(
             data_path_points,
-            ("test.h5/data_t_12.258.h5:point_data/dummy_point_data").into()
+            XInclude::new(
+                "test.txt/data_t_12.258_point_data_dummy_point_data.txt",
+                true
+            )
+            .into()
         );
         assert_eq!(
             data_path_cells,
-            ("test.h5/data_t_12.258.h5:cell_data/some_cell_data").into()
+            XInclude::new("test.txt/data_t_12.258_cell_data_some_cell_data.txt", true).into()
         );
 
         // read back the data to verify
-        // let h5_file = H5File::open(&data_file).unwrap();
-        // let points_data: Vec<f64> = h5_file
-        //     .dataset("point_data/dummy_point_data")
-        //     .unwrap()
-        //     .read()
-        //     .unwrap()
-        //     .to_vec();
-        // let cells_data: Vec<f64> = h5_file
-        //     .dataset("cell_data/some_cell_data")
-        //     .unwrap()
-        //     .read()
-        //     .unwrap()
-        //     .to_vec();
+        let points_data = std::fs::read_to_string(&data_file_points).unwrap();
+        let cells_data = std::fs::read_to_string(&data_file_cells).unwrap();
 
-        // assert_approx_eq!(&[f64], &data_points, &points_data);
-        // assert_approx_eq!(&[f64], &data_cells, &cells_data);
+        assert_eq!(
+            points_data,
+            "0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0\n"
+        );
+        assert_eq!(
+            cells_data,
+            "-9.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 5.5869999999999997e1\n"
+        );
     }
 }
