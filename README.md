@@ -5,6 +5,8 @@ For unstructured meshes (although might also work for others)
 
 xdmf readers: <https://discourse.paraview.org/t/xmdf-reader-names-xdmf2-reader/4756>
 
+node ordering is same as for [vtk](https://www.vtk.org/wp-content/uploads/2015/04/file-formats.pdf)
+
 ## Example
 
 ### TimeSeriesWriter: Which data storage should be used?
@@ -44,6 +46,6 @@ I am a fan of fail early, so I tried to add validations to the data as much as p
 - check h5 file flushing
 - test with bigger example
 - Mention somewhere in readme that seems that the xdmf is no longer maintained
-- Check docs of connectivity
 - Example with Vector => check how to use Dimension
 - Disallow some chars in names, e.g. to avoid issues in xml and hdf
+- add CI for checking docs

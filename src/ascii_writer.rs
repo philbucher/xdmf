@@ -273,12 +273,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format() {
-        assert_eq!(AsciiInlineWriter::new().format(), Format::XML);
+    fn format_number_all_types() {
+        // floating point numbers
+        let num: f32 = 3.1415904;
+        assert_eq!(num.format_number(), "3.1415904e0");
+        let num: f64 = 1.23456789;
+        assert_eq!(num.format_number(), "1.2345678899999999e0");
+
+        // signed integer types
+        let num: i8 = -5;
+        assert_eq!(num.format_number(), "-5");
+        let num: i16 = -32768;
+        assert_eq!(num.format_number(), "-32768");
+        let num: i32 = 42;
+        assert_eq!(num.format_number(), "42");
+        let num: i64 = -1234567890123456789;
+        assert_eq!(num.format_number(), "-1234567890123456789");
+        let num: isize = -987654321;
+        assert_eq!(num.format_number(), "-987654321");
+
+        // unsigned integer types
+        let num: u8 = 255;
+        assert_eq!(num.format_number(), "255");
+        let num: u16 = 65535;
+        assert_eq!(num.format_number(), "65535");
+        let num: u32 = 4294967295;
+        assert_eq!(num.format_number(), "4294967295");
+        let num: u64 = 1000;
+        assert_eq!(num.format_number(), "1000");
+        let num: usize = 123456789;
+        assert_eq!(num.format_number(), "123456789");
     }
 
     #[test]
-    fn write_mesh() {
+    fn array_to_string_fmt_multiple_types() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn array_to_writer_fmt_multiple_types() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn values_to_string_multiple_types() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn values_to_writer_multiple_types() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn ascii_inline_writer_write_mesh() {
         let mut writer = AsciiInlineWriter::new();
         let points = vec![1., 2., 3., 4., 5., 6.];
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
@@ -294,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn write_data_vec_f64() {
+    fn ascii_inline_writer_write_data_vec_f64() {
         let mut writer = AsciiInlineWriter::new();
         let raw_data = vec![1.0, 2.0, 3.0];
         let data = raw_data.into();
@@ -306,5 +354,146 @@ mod tests {
             result,
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0".into()
         );
+    }
+
+    #[test]
+    fn ascii_writer_write_data_init_fin() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let mut writer = AsciiWriter::new(file_name).unwrap();
+
+        assert!(writer.write_time.is_none());
+
+        let res_fin = writer.write_data_finalize();
+        assert_eq!(
+            res_fin.unwrap_err().to_string(),
+            "Writing data was not initialized"
+        );
+
+        let res_write = writer.write_data(
+            "test_data",
+            attribute::Center::Node,
+            &Values::F64(vec![1.0, 2.0]),
+        );
+        assert_eq!(
+            res_write.unwrap_err().to_string(),
+            "Writing data was not initialized"
+        );
+
+        writer.write_data_initialize("0.0").unwrap();
+        assert!(writer.write_time.is_some());
+
+        let res_init = writer.write_data_initialize("0.0");
+        assert_eq!(
+            res_init.unwrap_err().to_string(),
+            "Writing data was already initialized"
+        );
+
+        writer.write_data_finalize().unwrap();
+    }
+
+    #[test]
+    fn ascii_writer_new() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let writer = AsciiWriter::new(&file_name).unwrap();
+        let exp_dir_name = file_name.with_extension("txt");
+        assert_eq!(writer.txt_files_dir, exp_dir_name);
+        assert!(writer.txt_files_dir.exists());
+        assert!(writer.txt_files_dir.is_dir());
+        assert!(writer.write_time.is_none());
+    }
+
+    #[test]
+    fn ascii_writer_write_mesh() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let mut writer = AsciiWriter::new(file_name).unwrap();
+        let points_file = writer.txt_files_dir.join("points.txt");
+        let cells_file = writer.txt_files_dir.join("cells.txt");
+        assert!(!points_file.exists());
+        assert!(!cells_file.exists());
+
+        let points = vec![0.0, 1.0, 2.0];
+        let cells = vec![0, 1, 2];
+        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        assert!(points_file.exists());
+        assert!(cells_file.exists());
+
+        assert_eq!(points_path, ("test.h5/mesh.h5:points").into());
+        assert_eq!(cells_path, ("test.h5/mesh.h5:cells").into());
+
+        // read back the data to verify
+        // let h5_file = H5File::open(&mesh_file).unwrap();
+        // let points_data: Vec<f64> = h5_file.dataset("points").unwrap().read().unwrap().to_vec();
+        // let cells_data: Vec<u64> = h5_file.dataset("cells").unwrap().read().unwrap().to_vec();
+
+        // assert_approx_eq!(&[f64], &points, &points_data);
+        // assert_eq!(&cells, &cells_data);
+    }
+
+    #[test]
+    fn ascii_writer_write_data() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let mut writer = AsciiWriter::new(file_name).unwrap();
+        let write_time = "12.258";
+        let data_file = writer
+            .txt_files_dir
+            .join(format!("data_t_{write_time}.txt"));
+        assert!(!data_file.exists());
+
+        writer.write_data_initialize(write_time).unwrap();
+        assert!(data_file.exists());
+
+        // write points data
+        let data_points = vec![0.0, 1.0, 2.0];
+        let data_path_points = writer
+            .write_data(
+                "dummy_point_data",
+                attribute::Center::Node,
+                &Values::F64(data_points.clone()),
+            )
+            .unwrap();
+
+        // write cell data
+        let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
+        let data_path_cells = writer
+            .write_data(
+                "some_cell_data",
+                attribute::Center::Cell,
+                &Values::F64(data_cells.clone()),
+            )
+            .unwrap();
+
+        writer.write_data_finalize().unwrap();
+        assert!(data_file.exists());
+
+        assert_eq!(
+            data_path_points,
+            ("test.h5/data_t_12.258.h5:point_data/dummy_point_data").into()
+        );
+        assert_eq!(
+            data_path_cells,
+            ("test.h5/data_t_12.258.h5:cell_data/some_cell_data").into()
+        );
+
+        // read back the data to verify
+        // let h5_file = H5File::open(&data_file).unwrap();
+        // let points_data: Vec<f64> = h5_file
+        //     .dataset("point_data/dummy_point_data")
+        //     .unwrap()
+        //     .read()
+        //     .unwrap()
+        //     .to_vec();
+        // let cells_data: Vec<f64> = h5_file
+        //     .dataset("cell_data/some_cell_data")
+        //     .unwrap()
+        //     .read()
+        //     .unwrap()
+        //     .to_vec();
+
+        // assert_approx_eq!(&[f64], &data_points, &points_data);
+        // assert_approx_eq!(&[f64], &data_cells, &cells_data);
     }
 }
