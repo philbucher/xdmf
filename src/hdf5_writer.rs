@@ -29,6 +29,10 @@ impl SingleFileHdf5Writer {
     pub(crate) fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
         let h5_file_name_full = file_name.as_ref().to_path_buf().with_extension("h5");
 
+        if let Some(parent) = h5_file_name_full.parent() {
+            crate::mpi_safe_create_dir_all(parent)?;
+        }
+
         let h5_file_name = h5_file_name_full.file_name().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -158,13 +162,6 @@ impl MultipleFilesHdf5Writer {
     pub(crate) fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
         let h5_files_dir = base_file_name.as_ref().to_path_buf().with_extension("h5");
 
-        let raw_file_name = h5_files_dir.file_name().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Base file name must have a valid file name",
-            )
-        })?;
-
         crate::mpi_safe_create_dir_all(&h5_files_dir)?;
 
         Ok(Self {
@@ -193,7 +190,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
         let (data_name_points, data_name_cells) = write_mesh(&h5_file, points, cells)?;
 
-        let rel_file_name = parent_and_file(&file_name)
+        let rel_file_name = parent_and_filename(&file_name)
             .ok_or_else(|| std::io::Error::other("Could not get parent and file name"))?;
 
         Ok((
@@ -240,7 +237,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
             data,
         )?;
 
-        let rel_file_name = parent_and_file(&data_file.filename())
+        let rel_file_name = parent_and_filename(data_file.filename())
             .ok_or_else(|| std::io::Error::other("Could not get parent and file name"))?;
 
         Ok(full_path(&rel_file_name, &data_path).into())
@@ -311,7 +308,7 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
     Ok(data_set.name())
 }
 
-fn parent_and_file(path: impl AsRef<Path>) -> Option<PathBuf> {
+fn parent_and_filename(path: impl AsRef<Path>) -> Option<PathBuf> {
     let path = path.as_ref();
     let parent = path.parent()?.file_name()?;
     let file_name = path.file_name()?;
@@ -335,19 +332,26 @@ mod tests {
 
     use super::*;
 
-    // #[test]
-    // fn full_path_works() {
-    //     let tmp_dir = temp_dir::TempDir::new().unwrap();
-    //     let file_name = tmp_dir.path().join("test.h5");
-    //     let h5_file = H5File::create(&file_name).unwrap();
+    #[test]
+    fn full_path_works() {
+        let file_name = Path::new("some/random/path/test.h5");
+        let data_name = "/test_group/test_data";
 
-    //     let data_name = "/test_group/test_data";
-    //     let full_path = full_path(&h5_file, data_name);
-    //     assert_eq!(
-    //         full_path,
-    //         file_name.to_string_lossy().to_string() + ":test_group/test_data"
-    //     );
-    // }
+        assert_eq!(
+            full_path(file_name, data_name),
+            file_name.to_string_lossy().to_string() + ":test_group/test_data"
+        );
+    }
+
+    #[test]
+    fn parent_and_filename_works() {
+        assert_eq!(
+            parent_and_filename(Path::new("some/random/path/test.h5")).unwrap(),
+            PathBuf::from("path/test.h5")
+        );
+
+        assert!(parent_and_filename(Path::new("test.h5")).is_none(),);
+    }
 
     #[test]
     fn write_mesh_works() {
@@ -434,7 +438,7 @@ mod tests {
     #[test]
     fn single_files_hdf5_writer_write_data_init_fin() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = SingleFileHdf5Writer::new(file_name).unwrap();
 
         assert!(writer.write_time.is_none());
@@ -470,7 +474,7 @@ mod tests {
     #[test]
     fn mutliple_files_hdf5_writer_write_data_init_fin() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(&file_name).unwrap();
         assert!(writer.h5_data_file.is_none());
 
@@ -513,17 +517,18 @@ mod tests {
     #[test]
     fn single_file_hdf5_writer_new() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let writer = SingleFileHdf5Writer::new(&file_name).unwrap();
         let exp_file_name = file_name.with_extension("h5");
         assert!(exp_file_name.exists());
         assert_eq!(writer.h5_file.filename(), exp_file_name.to_string_lossy());
+        assert_eq!(writer.h5_file_name, exp_file_name.file_name().unwrap());
     }
 
     #[test]
     fn mutliple_files_hdf5_writer_new() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let writer = MultipleFilesHdf5Writer::new(&file_name).unwrap();
         let exp_dir_name = file_name.with_extension("h5");
         assert_eq!(writer.h5_files_dir, exp_dir_name);
@@ -535,7 +540,7 @@ mod tests {
     #[test]
     fn single_file_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = SingleFileHdf5Writer::new(&file_name).unwrap();
         let h5_file = file_name.with_extension("h5");
 
@@ -543,14 +548,8 @@ mod tests {
         let cells = vec![0, 1, 2];
         let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
 
-        assert_eq!(
-            points_path,
-            (h5_file.to_string_lossy().to_string() + ":mesh/points").into()
-        );
-        assert_eq!(
-            cells_path,
-            (h5_file.to_string_lossy().to_string() + ":mesh/cells").into()
-        );
+        assert_eq!(points_path, ("test.h5:mesh/points").into());
+        assert_eq!(cells_path, ("test.h5:mesh/cells").into());
 
         // Ensure the file is closed before reading.
         // Seems to work also without, but better to be explicit.
@@ -578,7 +577,7 @@ mod tests {
     #[test]
     fn mutliple_files_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(file_name).unwrap();
         let mesh_file = writer.h5_files_dir.join("mesh.h5");
         assert!(!mesh_file.exists());
@@ -588,14 +587,8 @@ mod tests {
         let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
         assert!(mesh_file.exists());
 
-        assert_eq!(
-            points_path,
-            (mesh_file.to_string_lossy().to_string() + ":points").into()
-        );
-        assert_eq!(
-            cells_path,
-            (mesh_file.to_string_lossy().to_string() + ":cells").into()
-        );
+        assert_eq!(points_path, ("test.h5/mesh.h5:points").into());
+        assert_eq!(cells_path, ("test.h5/mesh.h5:cells").into());
 
         // read back the data to verify
         let h5_file = H5File::open(&mesh_file).unwrap();
@@ -609,7 +602,7 @@ mod tests {
     #[test]
     fn single_file_hdf5_writer_write_data() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = SingleFileHdf5Writer::new(&file_name).unwrap();
         let h5_file = file_name.with_extension("h5");
         let write_time = "12.258";
@@ -640,13 +633,11 @@ mod tests {
 
         assert_eq!(
             data_path_points,
-            (h5_file.to_string_lossy().to_string() + ":data/t_12.258/point_data/dummy_point_data")
-                .into()
+            ("test.h5:data/t_12.258/point_data/dummy_point_data").into()
         );
         assert_eq!(
             data_path_cells,
-            (h5_file.to_string_lossy().to_string() + ":data/t_12.258/cell_data/some_cell_data")
-                .into()
+            ("test.h5:data/t_12.258/cell_data/some_cell_data").into()
         );
 
         // read back the data to verify
@@ -672,7 +663,7 @@ mod tests {
     #[test]
     fn mutliple_files_hdf5_writer_write_data() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("test.xdmf");
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(file_name).unwrap();
         let write_time = "12.258";
         let data_file = writer.h5_files_dir.join(format!("data_t_{write_time}.h5"));
@@ -706,11 +697,11 @@ mod tests {
 
         assert_eq!(
             data_path_points,
-            (data_file.to_string_lossy().to_string() + ":point_data/dummy_point_data").into()
+            ("test.h5/data_t_12.258.h5:point_data/dummy_point_data").into()
         );
         assert_eq!(
             data_path_cells,
-            (data_file.to_string_lossy().to_string() + ":cell_data/some_cell_data").into()
+            ("test.h5/data_t_12.258.h5:cell_data/some_cell_data").into()
         );
 
         // read back the data to verify
