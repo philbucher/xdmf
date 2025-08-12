@@ -70,20 +70,20 @@ pub(crate) struct AsciiWriter {
 }
 
 impl AsciiWriter {
-    pub fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
-        let txt_files_dir = base_file_name.as_ref().to_path_buf().with_extension("txt");
+    pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
+        let txt_files_dir = file_name.as_ref().to_path_buf().with_extension("txt");
 
-        let raw_file_name = txt_files_dir.file_name().ok_or_else(|| {
+        let folder_name = txt_files_dir.file_name().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Base file name must have a valid file name",
+                "Input file name must have a valid file name",
             )
         })?;
 
         crate::mpi_safe_create_dir_all(&txt_files_dir)?;
 
         Ok(Self {
-            folder_name: raw_file_name.into(),
+            folder_name: folder_name.into(),
             txt_files_dir,
             write_time: None,
         })
@@ -444,6 +444,7 @@ mod tests {
         assert!(writer.txt_files_dir.exists());
         assert!(writer.txt_files_dir.is_dir());
         assert!(writer.write_time.is_none());
+        assert_eq!(writer.folder_name, PathBuf::from("test.txt"));
     }
 
     #[test]

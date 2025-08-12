@@ -36,7 +36,7 @@ impl SingleFileHdf5Writer {
         let h5_file_name = h5_file_name_full.file_name().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Base file name must have a valid file name",
+                "Input file name must have a valid file name",
             )
         })?;
 
@@ -159,8 +159,15 @@ pub(crate) struct MultipleFilesHdf5Writer {
 }
 
 impl MultipleFilesHdf5Writer {
-    pub(crate) fn new(base_file_name: impl AsRef<Path>) -> IoResult<Self> {
-        let h5_files_dir = base_file_name.as_ref().to_path_buf().with_extension("h5");
+    pub(crate) fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
+        let h5_files_dir = file_name.as_ref().to_path_buf().with_extension("h5");
+
+        h5_files_dir.file_name().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Input file name must have a valid file name",
+            )
+        })?;
 
         crate::mpi_safe_create_dir_all(&h5_files_dir)?;
 
