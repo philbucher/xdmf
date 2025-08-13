@@ -20,6 +20,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Check Docs
+      run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
+
     - name: Check formatting
       run: |
         rustup component add rustfmt --toolchain nightly
