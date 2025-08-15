@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{BufWriter, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
@@ -164,6 +164,7 @@ impl TimeSeriesWriter {
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
             attributes: BTreeMap::new(),
+            written_steps: HashSet::new(),
         };
 
         ts_writer.write()?;
@@ -322,17 +323,14 @@ pub struct TimeSeriesDataWriter {
     grid: Grid,
     data_items: Vec<DataItem>,
     attributes: BTreeMap<String, Vec<attribute::Attribute>>,
+    written_steps: HashSet<String>,
 }
 
 impl TimeSeriesDataWriter {
     /// Write data for a specific time step.
     /// Accepts str for time to avoid dealing with formatting, thus leaving it to the user.
     // TODOs:
-    // - check for unique time steps
-    // - assert dimensions of points and cells match
-    // - check that the data is not empty
     // - maybe write data as ref in attribute, to make cloning cheaper. Really only matters for XML format, so unsure if worth it.
-    // - check if time is not "", and it can be converted to a float
     /// # Errors
     ///
     /// TODO
@@ -342,6 +340,62 @@ impl TimeSeriesDataWriter {
         point_data: Option<&DataMap>,
         cell_data: Option<&DataMap>,
     ) -> IoResult<()> {
+        // check if time can be parsed as a float
+        if time.parse::<f64>().is_err() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Time must be a valid float",
+            ));
+        }
+
+        // check if the time step has already been written
+        if !self.written_steps.insert(time.to_string()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Time step '{time}' has already been written"),
+            ));
+        }
+
+        // check if some data is provided
+        if (point_data.unwrap_or(&BTreeMap::new()).len()
+            + cell_data.unwrap_or(&BTreeMap::new()).len())
+            == 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "At least one of point_data or cell_data must be provided",
+            ));
+        }
+
+        // check dimensions of point_data and cell_data
+        if let Some(point_data) = point_data {
+            let num_points = self.grid.num_points();
+            for (name, data) in point_data {
+                if let Some(size_per_point) = data.0.size() {
+                    // attribute has a fixed size per point, e.g. scalar, vector, tensor
+                    let exp_size = num_points * size_per_point;
+                    if data.1.len() != exp_size {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("Point data '{name}' must have 1 dimension, found: {exp_size}"),
+                        ));
+                    }
+                } else {
+                    // attribute has variable size, e.g. matrix (but must be same size for all points)
+                    // check that the number of values is a multiple of the number of points
+                    if data.1.len() < num_points || data.1.len() % num_points != 0 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "Point data '{name}' must have 1 dimension, found: {:?}",
+                                data.1.dimensions()
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
         self.writer.write_data_initialize(time)?;
         let format = self.writer.format();
 

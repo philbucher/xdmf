@@ -38,6 +38,10 @@ impl Values {
             Self::U64(v) => Dimensions(vec![v.len()]),
         }
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.dimensions().0.iter().product()
+    }
 }
 
 #[cfg(test)]
@@ -54,6 +58,7 @@ mod tests {
         assert_eq!(values.number_type(), NumberType::Float);
         assert_eq!(values.precision(), 8);
         assert_eq!(values.dimensions(), Dimensions(vec![6]));
+        assert_eq!(values.len(), 6);
     }
 
     #[test]
@@ -65,5 +70,6 @@ mod tests {
         assert_eq!(values.number_type(), NumberType::UInt);
         assert_eq!(values.precision(), 8);
         assert_eq!(values.dimensions(), Dimensions(vec![6]));
+        assert_eq!(values.len(), 6);
     }
 }
