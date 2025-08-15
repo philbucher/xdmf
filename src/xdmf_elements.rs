@@ -54,6 +54,12 @@ impl Default for Xdmf {
     }
 }
 
+/// Stores application-specific metadata that doesn't fit into the standard data model.
+///
+/// The `Information` element is designed to hold additional, system- or code-specific
+/// details that can be safely ignored by other components.
+///
+/// See <https://www.xdmf.org/index.php/XDMF_Model_and_Format.html#Information>
 #[derive(Debug, Serialize)]
 pub struct Information {
     #[serde(rename = "@Name")]

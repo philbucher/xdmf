@@ -42,10 +42,8 @@ I am a fan of fail early, so I tried to add validations to the data as much as p
 
 - Add docs to at least public API
 - More integration tests, should also serve as examples
-- Perhaps a real work example comparing to vtk/vtu?
 - check h5 file flushing
 - test with bigger example
 - Mention somewhere in readme that seems that the xdmf is no longer maintained
 - Example with Vector => check how to use Dimension
 - Disallow some chars in names, e.g. to avoid issues in xml and hdf
-- add CI for checking docs

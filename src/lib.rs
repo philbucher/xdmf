@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    io::Result as IoResult,
+    io::{BufWriter, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
 
@@ -435,9 +435,10 @@ impl TimeSeriesDataWriter {
 
         // Write the XDMF file to a temporary file first to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
-        // TODO use BufWriter?
-        xdmf.write_to(&mut std::fs::File::create(&temp_xdmf_file_name)?)?;
-        // manually rename "&lt;"" to "<" and "&gt;"" to ">"
+
+        let mut xdmf_file = BufWriter::new(std::fs::File::create(&temp_xdmf_file_name)?);
+        xdmf.write_to(&mut xdmf_file)?;
+        xdmf_file.flush()?;
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
