@@ -233,40 +233,58 @@ mod tests {
                     vtk.export_be(&out_file).unwrap();
                 }
                 OutputType::VtkXmlUncompressed => {
-                    vtk.try_into_xml_format(vtkio::xml::Compressor::None, 0)
-                        .unwrap()
-                        .export(&out_file)
-                        .unwrap();
+                    std::fs::write(
+                        &out_file,
+                        vtk.try_into_xml_format(vtkio::xml::Compressor::None, 0)
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 }
                 OutputType::VtkXmlCompressedZlib5 => {
-                    vtk.try_into_xml_format(vtkio::xml::Compressor::ZLib, 5)
-                        .unwrap()
-                        .export(&out_file)
-                        .unwrap();
+                    std::fs::write(
+                        &out_file,
+                        vtk.try_into_xml_format(vtkio::xml::Compressor::ZLib, 5)
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 }
                 OutputType::VtkXmlCompressedZlib1 => {
-                    vtk.try_into_xml_format(vtkio::xml::Compressor::ZLib, 1)
-                        .unwrap()
-                        .export(&out_file)
-                        .unwrap();
+                    std::fs::write(
+                        &out_file,
+                        vtk.try_into_xml_format(vtkio::xml::Compressor::ZLib, 1)
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 }
                 OutputType::VtkXmlCompressedLZ4 => {
-                    vtk.try_into_xml_format(vtkio::xml::Compressor::LZ4, 1)
-                        .unwrap()
-                        .export(&out_file)
-                        .unwrap();
+                    std::fs::write(
+                        &out_file,
+                        vtk.try_into_xml_format(vtkio::xml::Compressor::LZ4, 1)
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 }
                 OutputType::VtkXmlCompressedLZMA1 => {
-                    vtk.try_into_xml_format(vtkio::xml::Compressor::LZMA, 1)
-                        .unwrap()
-                        .export(&out_file)
-                        .unwrap();
+                    std::fs::write(
+                        &out_file,
+                        vtk.try_into_xml_format(vtkio::xml::Compressor::LZMA, 1)
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 }
                 OutputType::VtkXmlCompressedLZMA5 => {
-                    vtk.try_into_xml_format(vtkio::xml::Compressor::LZMA, 5)
-                        .unwrap()
-                        .export(&out_file)
-                        .unwrap();
+                    std::fs::write(
+                        &out_file,
+                        vtk.try_into_xml_format(vtkio::xml::Compressor::LZMA, 5)
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 }
                 _ => {
                     panic!("Unsupported VTK type: {:?}", self.output_type);
@@ -394,7 +412,7 @@ mod tests {
         let num_cells = connectivity.len() / 8;
 
         Vtk {
-            version: Version::new(),
+            version: Version { major: 4, minor: 2 },
             byte_order: ByteOrder::native(),
             title: String::from("vtk output"),
             file_path: None,
