@@ -454,7 +454,7 @@ impl TimeSeriesDataWriter {
         }
 
         // check if the time step has already been written
-        if self.attributes.contains_key(&time.to_string()) {
+        if self.attributes.contains_key(time) {
             return Err(IoError::new(
                 InvalidInput,
                 format!("Time step '{time}' has already been written"),
@@ -472,40 +472,47 @@ impl TimeSeriesDataWriter {
             ));
         }
 
-        // check dimensions of point_data and cell_data
-        if let Some(point_data) = point_data {
-            for (name, data) in point_data {
-                if let Some(size_per_point) = data.0.size() {
-                    // attribute has a fixed size per point, e.g. scalar, vector, tensor
-                    let exp_size = self.num_points * size_per_point;
-                    if data.1.len() != exp_size {
-                        return Err(IoError::new(
-                            InvalidInput,
-                            format!(
-                                "Size of point data '{name}' must be {}, but is {}",
-                                exp_size,
-                                data.1.len()
-                            ),
-                        ));
-                    }
-                } else {
-                    // attribute has variable size, e.g. matrix (but must be same size for all points)
-                    // check that the number of values is a multiple of the number of points
-                    if data.1.len() < self.num_points || data.1.len() % self.num_points != 0 {
-                        return Err(IoError::new(
-                            InvalidInput,
-                            format!(
-                                "Size of matrix point data '{name}' must multiple of number of points ({}), but is {}",
-                                self.num_points,
-                                data.1.len()
-                            ),
-                        ));
+        // check sizes of point_data and cell_data
+        fn check_data_size(
+            data_input: Option<&DataMap>,
+            num_entities: usize,
+            label: &str,
+        ) -> IoResult<()> {
+            if let Some(data_map) = data_input {
+                for (name, data) in data_map {
+                    if let Some(size_per_entity) = data.0.size() {
+                        // attribute has a fixed size per entity, e.g. scalar, vector, tensor
+                        let exp_size = num_entities * size_per_entity;
+                        if data.1.len() != exp_size {
+                            return Err(IoError::new(
+                                InvalidInput,
+                                format!(
+                                    "Size of {label} data '{name}' must be {}, but is {}",
+                                    exp_size,
+                                    data.1.len()
+                                ),
+                            ));
+                        }
+                    } else {
+                        // attribute has variable size, e.g. matrix (but must be same size for all entities)
+                        // check that the number of values is a multiple of the number of entities
+                        if data.1.len() < num_entities || data.1.len() % num_entities != 0 {
+                            return Err(IoError::new(
+                                InvalidInput,
+                                format!(
+                                    "Size of matrix {label} data '{name}' must multiple of number of {label}s ({num_entities}), but is {}",
+                                    data.1.len()
+                                ),
+                            ));
+                        }
                     }
                 }
             }
+            Ok(())
         }
 
-        Ok(())
+        check_data_size(point_data, self.num_points, "point")?;
+        check_data_size(cell_data, self.num_cells, "cell")
     }
 }
 
@@ -1044,6 +1051,89 @@ mod tests {
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of matrix point data 'point_data_mat' must multiple of number of points (10), but is 29"
+        );
+    }
+
+    #[test]
+    fn test_validate_data_wrong_cell_data_sizes() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_CELLS: usize = 4;
+
+        // write mesh
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; 10 * 3],
+                (&[0, 2, 3, 4], &[CellType::Vertex; NUM_CELLS]),
+            )
+            .unwrap();
+
+        // scalar cell data
+        let cell_data_scalar = vec![(
+            "cell_data_sca".to_string(),
+            (AttributeType::Scalar, vec![5.0; NUM_CELLS - 1].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", None, Some(&cell_data_scalar));
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of cell data 'cell_data_sca' must be 4, but is 3"
+        );
+
+        // vector cell data
+        let cell_data_vector = vec![(
+            "cell_data_vec".to_string(),
+            (AttributeType::Vector, vec![5.0; NUM_CELLS * 2].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", None, Some(&cell_data_vector));
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of cell data 'cell_data_vec' must be 12, but is 8"
+        );
+
+        // Tensor cell data
+        let cell_data_tensor = vec![(
+            "cell_data_ten".to_string(),
+            (AttributeType::Tensor, vec![5.0; NUM_CELLS * 3].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", None, Some(&cell_data_tensor));
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of cell data 'cell_data_ten' must be 36, but is 12"
+        );
+
+        // Tensor6 cell data
+        let cell_data_tensor6 = vec![(
+            "cell_data_ten6".to_string(),
+            (AttributeType::Tensor6, vec![5.0; NUM_CELLS * 3].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", None, Some(&cell_data_tensor6));
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of cell data 'cell_data_ten6' must be 24, but is 12"
+        );
+
+        // Matrix cell data
+        let cell_data_matrix = vec![(
+            "cell_data_mat".to_string(),
+            (AttributeType::Matrix, vec![5.0; NUM_CELLS * 3 - 1].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", None, Some(&cell_data_matrix));
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of matrix cell data 'cell_data_mat' must multiple of number of cells (4), but is 11"
         );
     }
 }
