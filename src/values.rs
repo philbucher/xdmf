@@ -1,4 +1,7 @@
-use crate::xdmf_elements::{data_item::NumberType, dimensions::Dimensions};
+use crate::{
+    DataAttribute,
+    xdmf_elements::{data_item::NumberType, dimensions::Dimensions},
+};
 
 pub enum Values {
     F64(Vec<f64>),
@@ -32,15 +35,24 @@ impl Values {
         }
     }
 
-    pub(crate) fn dimensions(&self) -> Dimensions {
-        match self {
-            Self::F64(v) => Dimensions(vec![v.len()]),
-            Self::U64(v) => Dimensions(vec![v.len()]),
+    pub(crate) fn dimensions(&self, attribute: DataAttribute) -> Dimensions {
+        match attribute {
+            DataAttribute::Scalar => match self {
+                Self::F64(v) => Dimensions(vec![v.len()]),
+                Self::U64(v) => Dimensions(vec![v.len()]),
+            },
+            _ => match self {
+                Self::F64(v) => Dimensions(vec![v.len() / attribute.size(), attribute.size()]),
+                Self::U64(v) => Dimensions(vec![v.len() / attribute.size(), attribute.size()]),
+            },
         }
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.dimensions().0.iter().product()
+        match self {
+            Self::F64(v) => v.len(),
+            Self::U64(v) => v.len(),
+        }
     }
 }
 
@@ -57,7 +69,22 @@ mod tests {
 
         assert_eq!(values.number_type(), NumberType::Float);
         assert_eq!(values.precision(), 8);
-        assert_eq!(values.dimensions(), Dimensions(vec![6]));
+        assert_eq!(
+            values.dimensions(DataAttribute::Scalar),
+            Dimensions(vec![6])
+        );
+        assert_eq!(
+            values.dimensions(DataAttribute::Vector),
+            Dimensions(vec![2, 3])
+        );
+        assert_eq!(
+            values.dimensions(DataAttribute::Tensor6),
+            Dimensions(vec![1, 6])
+        );
+        assert_eq!(
+            values.dimensions(DataAttribute::Matrix(3, 2)),
+            Dimensions(vec![1, 6])
+        );
         assert_eq!(values.len(), 6);
     }
 
@@ -69,7 +96,10 @@ mod tests {
 
         assert_eq!(values.number_type(), NumberType::UInt);
         assert_eq!(values.precision(), 8);
-        assert_eq!(values.dimensions(), Dimensions(vec![6]));
+        assert_eq!(
+            values.dimensions(DataAttribute::Scalar),
+            Dimensions(vec![6])
+        );
         assert_eq!(values.len(), 6);
     }
 }

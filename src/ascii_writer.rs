@@ -153,7 +153,7 @@ impl DataWriter for AsciiWriter {
         let time = self
             .write_time
             .as_ref()
-            .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
+            .ok_or_else(|| IoError::other("Writing data was not initialized"))?;
 
         let data_file_name = format!(
             "data_t_{time}_{}_{name}.txt",
@@ -176,9 +176,7 @@ impl DataWriter for AsciiWriter {
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
         if self.write_time.is_some() {
-            return Err(std::io::Error::other(
-                "Writing data was already initialized",
-            ));
+            return Err(IoError::other("Writing data was already initialized"));
         }
 
         self.write_time = Some(time.to_string());
@@ -187,7 +185,7 @@ impl DataWriter for AsciiWriter {
 
     fn write_data_finalize(&mut self) -> IoResult<()> {
         if self.write_time.is_none() {
-            return Err(std::io::Error::other("Writing data was not initialized"));
+            return Err(IoError::other("Writing data was not initialized"));
         }
 
         self.write_time = None;

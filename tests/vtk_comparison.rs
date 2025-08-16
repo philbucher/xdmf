@@ -155,7 +155,7 @@ mod tests {
 
             let point_data = vec![(
                 "pressure".to_string(),
-                (xdmf::AttributeType::Scalar, data.to_vec().into()),
+                (xdmf::DataAttribute::Scalar, data.to_vec().into()),
             )]
             .into_iter()
             .collect();

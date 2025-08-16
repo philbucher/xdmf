@@ -30,7 +30,7 @@ pub struct Xdmf {
 impl Xdmf {
     pub fn new(domain: Domain) -> Self {
         Self {
-            version: "3.0".to_string(),
+            version: "2.0".to_string(),
             xinclude_url: "http://www.w3.org/2001/XInclude".to_string(),
             domains: vec![domain],
             information: vec![],
@@ -157,7 +157,7 @@ mod tests {
         let domain = Domain::default();
         let xdmf = Xdmf::new(domain);
 
-        assert_eq!(xdmf.version, "3.0");
+        assert_eq!(xdmf.version, "2.0");
         assert_eq!(xdmf.domains.len(), 1);
     }
 
@@ -168,7 +168,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(xdmf.version, "3.0");
+        assert_eq!(xdmf.version, "2.0");
         assert_eq!(xdmf.domains.len(), 1);
         assert_eq!(xdmf.information.len(), 1);
         assert_eq!(xdmf.information[0].name, "the_name");
@@ -179,7 +179,7 @@ mod tests {
     fn xdmf_default() {
         let xdmf = Xdmf::default();
 
-        assert_eq!(xdmf.version, "3.0");
+        assert_eq!(xdmf.version, "2.0");
         assert_eq!(xdmf.domains.len(), 1);
     }
 
@@ -189,7 +189,7 @@ mod tests {
 
         pretty_assertions::assert_eq!(
             to_string(&xdmf).unwrap(),
-            "<Xdmf Version=\"3.0\" xmlns:xi=\"http://www.w3.org/2001/XInclude\"><Domain/></Xdmf>"
+            "<Xdmf Version=\"2.0\" xmlns:xi=\"http://www.w3.org/2001/XInclude\"><Domain/></Xdmf>"
         );
     }
 

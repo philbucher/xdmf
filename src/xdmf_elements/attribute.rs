@@ -27,18 +27,6 @@ pub enum AttributeType {
     Matrix,
 }
 
-impl AttributeType {
-    pub fn size(&self) -> Option<usize> {
-        match self {
-            Self::Scalar => Some(1),
-            Self::Vector => Some(3),
-            Self::Tensor => Some(9),
-            Self::Tensor6 => Some(6),
-            Self::Matrix => None, // Matrix size is not fixed
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum Center {
     #[default]

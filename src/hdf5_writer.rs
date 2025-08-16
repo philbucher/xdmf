@@ -40,7 +40,7 @@ impl SingleFileHdf5Writer {
             )
         })?;
 
-        let h5_file = H5File::create(&h5_file_name_full).map_err(std::io::Error::other)?;
+        let h5_file = H5File::create(&h5_file_name_full).map_err(IoError::other)?;
 
         Ok(Self {
             h5_file,
@@ -65,13 +65,10 @@ impl DataWriter for SingleFileHdf5Writer {
         cells: &[u64],
     ) -> IoResult<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
-            return Err(std::io::Error::other("Mesh was already written"));
+            return Err(IoError::other("Mesh was already written"));
         }
 
-        let mesh_group = self
-            .h5_file
-            .create_group(MESH)
-            .map_err(std::io::Error::other)?;
+        let mesh_group = self.h5_file.create_group(MESH).map_err(IoError::other)?;
 
         let (data_name_points, data_name_cells) = write_mesh(&mesh_group, points, cells)?;
 
@@ -100,7 +97,7 @@ impl DataWriter for SingleFileHdf5Writer {
         let time = self
             .write_time
             .as_ref()
-            .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
+            .ok_or_else(|| IoError::other("Writing data was not initialized"))?;
 
         let group_name = &format!(
             "{}/t_{time}/{}",
@@ -112,14 +109,11 @@ impl DataWriter for SingleFileHdf5Writer {
         if !self.h5_file.link_exists(group_name) {
             self.h5_file
                 .create_group(group_name)
-                .map_err(std::io::Error::other)?;
+                .map_err(IoError::other)?;
         }
 
         let data_path = write_values(
-            &self
-                .h5_file
-                .group(group_name)
-                .map_err(std::io::Error::other)?,
+            &self.h5_file.group(group_name).map_err(IoError::other)?,
             name,
             data,
         )?;
@@ -129,9 +123,7 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
         if self.write_time.is_some() {
-            return Err(std::io::Error::other(
-                "Writing data was already initialized",
-            ));
+            return Err(IoError::other("Writing data was already initialized"));
         }
 
         self.write_time = Some(time.to_string());
@@ -139,7 +131,7 @@ impl DataWriter for SingleFileHdf5Writer {
     }
     fn write_data_finalize(&mut self) -> IoResult<()> {
         if self.write_time.is_none() {
-            return Err(std::io::Error::other("Writing data was not initialized"));
+            return Err(IoError::other("Writing data was not initialized"));
         }
 
         self.write_time = None;
@@ -148,7 +140,7 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn flush(&mut self) -> IoResult<()> {
         // Flush the HDF5 file
-        self.h5_file.flush().map_err(std::io::Error::other)
+        self.h5_file.flush().map_err(IoError::other)
     }
 }
 
@@ -193,12 +185,12 @@ impl DataWriter for MultipleFilesHdf5Writer {
         cells: &[u64],
     ) -> IoResult<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
-        let h5_file = H5File::create(&file_name).map_err(std::io::Error::other)?;
+        let h5_file = H5File::create(&file_name).map_err(IoError::other)?;
 
         let (data_name_points, data_name_cells) = write_mesh(&h5_file, points, cells)?;
 
         let rel_file_name = parent_and_filename(&file_name)
-            .ok_or_else(|| std::io::Error::other("Could not get parent and file name"))?;
+            .ok_or_else(|| IoError::other("Could not get parent and file name"))?;
 
         Ok((
             full_path(&rel_file_name, &data_name_points).into(),
@@ -227,45 +219,41 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let data_file = self
             .h5_data_file
             .as_ref()
-            .ok_or_else(|| std::io::Error::other("Writing data was not initialized"))?;
+            .ok_or_else(|| IoError::other("Writing data was not initialized"))?;
 
         let group_name = attribute::center_to_data_tag(center);
 
         // Create the group if it does not exist
         if !data_file.link_exists(group_name) {
-            data_file
-                .create_group(group_name)
-                .map_err(std::io::Error::other)?;
+            data_file.create_group(group_name).map_err(IoError::other)?;
         }
 
         let data_path = write_values(
-            &data_file.group(group_name).map_err(std::io::Error::other)?,
+            &data_file.group(group_name).map_err(IoError::other)?,
             name,
             data,
         )?;
 
         let rel_file_name = parent_and_filename(data_file.filename())
-            .ok_or_else(|| std::io::Error::other("Could not get parent and file name"))?;
+            .ok_or_else(|| IoError::other("Could not get parent and file name"))?;
 
         Ok(full_path(&rel_file_name, &data_path).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
         if self.h5_data_file.is_some() {
-            return Err(std::io::Error::other(
-                "Writing data was already initialized",
-            ));
+            return Err(IoError::other("Writing data was already initialized"));
         }
 
         let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
-        self.h5_data_file = Some(H5File::create(&file_name).map_err(std::io::Error::other)?);
+        self.h5_data_file = Some(H5File::create(&file_name).map_err(IoError::other)?);
 
         Ok(())
     }
 
     fn write_data_finalize(&mut self) -> IoResult<()> {
         if self.h5_data_file.is_none() {
-            return Err(std::io::Error::other("Writing data was not initialized"));
+            return Err(IoError::other("Writing data was not initialized"));
         }
 
         // TODO check if this flushes the file etc
@@ -279,19 +267,17 @@ fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<(Strin
         .new_dataset::<f64>()
         .shape(points.len())
         .create(POINTS)
-        .map_err(std::io::Error::other)?;
+        .map_err(IoError::other)?;
 
-    dataset_points
-        .write(points)
-        .map_err(std::io::Error::other)?;
+    dataset_points.write(points).map_err(IoError::other)?;
 
     let dataset_cells = group
         .new_dataset::<u64>()
         .shape(cells.len())
         .create(CELLS)
-        .map_err(std::io::Error::other)?;
+        .map_err(IoError::other)?;
 
-    dataset_cells.write(cells).map_err(std::io::Error::other)?;
+    dataset_cells.write(cells).map_err(IoError::other)?;
 
     Ok((dataset_points.name(), dataset_cells.name()))
 }
@@ -303,13 +289,13 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
     };
 
     let data_set = data_set
-        .shape(vals.dimensions().0)
+        .shape(vals.dimensions(crate::DataAttribute::Scalar).0)
         .create(dataset_name)
-        .map_err(std::io::Error::other)?;
+        .map_err(IoError::other)?;
 
     match vals {
-        Values::F64(v) => data_set.write(v).map_err(std::io::Error::other)?,
-        Values::U64(v) => data_set.write(v).map_err(std::io::Error::other)?,
+        Values::F64(v) => data_set.write(v).map_err(IoError::other)?,
+        Values::U64(v) => data_set.write(v).map_err(IoError::other)?,
     };
 
     Ok(data_set.name())

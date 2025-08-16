@@ -23,9 +23,9 @@ pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use values::Values;
-pub use xdmf_elements::{CellType, attribute::AttributeType, data_item::Format};
+pub use xdmf_elements::{CellType, data_item::Format};
 
-pub type DataMap = BTreeMap<String, (AttributeType, Values)>;
+pub type DataMap = BTreeMap<String, (DataAttribute, Values)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum DataStorage {
@@ -84,6 +84,39 @@ pub const fn is_hdf5_enabled() -> bool {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DataAttribute {
+    Scalar,
+    Vector,
+    Tensor,
+    Tensor6,
+    Matrix(usize, usize), // Matrix with specified rows and columns
+}
+
+impl DataAttribute {
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Scalar => 1,
+            Self::Vector => 3,
+            Self::Tensor => 9,
+            Self::Tensor6 => 6,
+            Self::Matrix(n, m) => n * m,
+        }
+    }
+}
+
+impl From<DataAttribute> for attribute::AttributeType {
+    fn from(data_attr: DataAttribute) -> Self {
+        match data_attr {
+            DataAttribute::Scalar => Self::Scalar,
+            DataAttribute::Vector => Self::Vector,
+            DataAttribute::Tensor => Self::Tensor,
+            DataAttribute::Tensor6 => Self::Matrix, // writen as Matrix to get detected as symmetric tensor
+            DataAttribute::Matrix(_, _) => Self::Matrix,
+        }
+    }
+}
+
 pub struct TimeSeriesWriter {
     xdmf_file_name: PathBuf,
     writer: Box<dyn DataWriter>,
@@ -94,7 +127,7 @@ impl TimeSeriesWriter {
     ///
     /// TODO
     pub fn new(file_name: impl AsRef<Path>, data_storage: DataStorage) -> IoResult<Self> {
-        let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf");
+        let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf2");
 
         // create the parent directory if it does not exist
         if let Some(parent) = xdmf_file_name.parent() {
@@ -344,16 +377,13 @@ impl TimeSeriesDataWriter {
         let mut new_attributes = Vec::new();
 
         let mut create_attributes =
-            |data_map: Option<&BTreeMap<String, (AttributeType, Values)>>,
-
-             center: attribute::Center|
-             -> IoResult<()> {
+            |data_map: Option<&DataMap>, center: attribute::Center| -> IoResult<()> {
                 for (data_name, data) in data_map.unwrap_or(&BTreeMap::new()) {
                     let vals = &data.1;
 
                     let data_item = DataItem {
                         name: None,
-                        dimensions: Some(vals.dimensions()),
+                        dimensions: Some(vals.dimensions(data.0)),
                         number_type: Some(vals.number_type()),
                         format: Some(format),
                         precision: Some(vals.precision()),
@@ -363,7 +393,7 @@ impl TimeSeriesDataWriter {
 
                     let attribute = attribute::Attribute {
                         name: data_name.clone(),
-                        attribute_type: data.0,
+                        attribute_type: data.0.into(),
                         center,
                         data_items: vec![data_item],
                     };
@@ -480,31 +510,17 @@ impl TimeSeriesDataWriter {
         ) -> IoResult<()> {
             if let Some(data_map) = data_input {
                 for (name, data) in data_map {
-                    if let Some(size_per_entity) = data.0.size() {
-                        // attribute has a fixed size per entity, e.g. scalar, vector, tensor
-                        let exp_size = num_entities * size_per_entity;
-                        if data.1.len() != exp_size {
-                            return Err(IoError::new(
-                                InvalidInput,
-                                format!(
-                                    "Size of {label} data '{name}' must be {}, but is {}",
-                                    exp_size,
-                                    data.1.len()
-                                ),
-                            ));
-                        }
-                    } else {
-                        // attribute has variable size, e.g. matrix (but must be same size for all entities)
-                        // check that the number of values is a multiple of the number of entities
-                        if data.1.len() < num_entities || data.1.len() % num_entities != 0 {
-                            return Err(IoError::new(
-                                InvalidInput,
-                                format!(
-                                    "Size of matrix {label} data '{name}' must multiple of number of {label}s ({num_entities}), but is {}",
-                                    data.1.len()
-                                ),
-                            ));
-                        }
+                    // attribute has a fixed size per entity, e.g. scalar, vector, tensor
+                    let exp_size = num_entities * data.0.size();
+                    if data.1.len() != exp_size {
+                        return Err(IoError::new(
+                            InvalidInput,
+                            format!(
+                                "Size of {label} data '{name}' must be {}, but is {}",
+                                exp_size,
+                                data.1.len()
+                            ),
+                        ));
                     }
                 }
             }
@@ -554,7 +570,7 @@ fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dy
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                Err(std::io::Error::other(
+                Err(IoError::other(
                     "Using Hdf5SingleFile DataStorage requires the hdf5 feature.",
                 ))
             }
@@ -568,7 +584,7 @@ fn create_writer(file_name: &Path, data_storage: DataStorage) -> IoResult<Box<dy
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                Err(std::io::Error::other(
+                Err(IoError::other(
                     "Using Hdf5MultipleFiles DataStorage requires the hdf5 feature.",
                 ))
             }
@@ -880,7 +896,10 @@ mod tests {
         let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
 
         assert!(xdmf_folder.exists());
-        assert_eq!(writer.xdmf_file_name, xdmf_file_path.with_extension("xdmf"));
+        assert_eq!(
+            writer.xdmf_file_name,
+            xdmf_file_path.with_extension("xdmf2")
+        );
     }
 
     #[test]
@@ -926,7 +945,7 @@ mod tests {
 
         let point_data = vec![(
             "point_data1".to_string(),
-            (AttributeType::Scalar, vec![5.0; NUM_POINTS].into()),
+            (DataAttribute::Scalar, vec![5.0; NUM_POINTS].into()),
         )]
         .into_iter()
         .collect();
@@ -991,7 +1010,7 @@ mod tests {
         // scalar point data
         let point_data_scalar = vec![(
             "point_data_sca".to_string(),
-            (AttributeType::Scalar, vec![5.0; NUM_POINTS - 1].into()),
+            (DataAttribute::Scalar, vec![5.0; NUM_POINTS - 1].into()),
         )]
         .into_iter()
         .collect();
@@ -1004,7 +1023,7 @@ mod tests {
         // vector point data
         let point_data_vector = vec![(
             "point_data_vec".to_string(),
-            (AttributeType::Vector, vec![5.0; NUM_POINTS * 2].into()),
+            (DataAttribute::Vector, vec![5.0; NUM_POINTS * 2].into()),
         )]
         .into_iter()
         .collect();
@@ -1017,7 +1036,7 @@ mod tests {
         // Tensor point data
         let point_data_tensor = vec![(
             "point_data_ten".to_string(),
-            (AttributeType::Tensor, vec![5.0; NUM_POINTS * 3].into()),
+            (DataAttribute::Tensor, vec![5.0; NUM_POINTS * 3].into()),
         )]
         .into_iter()
         .collect();
@@ -1030,7 +1049,7 @@ mod tests {
         // Tensor6 point data
         let point_data_tensor6 = vec![(
             "point_data_ten6".to_string(),
-            (AttributeType::Tensor6, vec![5.0; NUM_POINTS * 3].into()),
+            (DataAttribute::Tensor6, vec![5.0; NUM_POINTS * 3].into()),
         )]
         .into_iter()
         .collect();
@@ -1043,14 +1062,17 @@ mod tests {
         // Matrix point data
         let point_data_matrix = vec![(
             "point_data_mat".to_string(),
-            (AttributeType::Matrix, vec![5.0; NUM_POINTS * 3 - 1].into()),
+            (
+                DataAttribute::Matrix(2, 1),
+                vec![5.0; NUM_POINTS * 3 - 1].into(),
+            ),
         )]
         .into_iter()
         .collect();
         let res = writer.write_data("0.0", Some(&point_data_matrix), None);
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of matrix point data 'point_data_mat' must multiple of number of points (10), but is 29"
+            "Size of point data 'point_data_mat' must be 20, but is 29"
         );
     }
 
@@ -1074,7 +1096,7 @@ mod tests {
         // scalar cell data
         let cell_data_scalar = vec![(
             "cell_data_sca".to_string(),
-            (AttributeType::Scalar, vec![5.0; NUM_CELLS - 1].into()),
+            (DataAttribute::Scalar, vec![5.0; NUM_CELLS - 1].into()),
         )]
         .into_iter()
         .collect();
@@ -1087,7 +1109,7 @@ mod tests {
         // vector cell data
         let cell_data_vector = vec![(
             "cell_data_vec".to_string(),
-            (AttributeType::Vector, vec![5.0; NUM_CELLS * 2].into()),
+            (DataAttribute::Vector, vec![5.0; NUM_CELLS * 2].into()),
         )]
         .into_iter()
         .collect();
@@ -1100,7 +1122,7 @@ mod tests {
         // Tensor cell data
         let cell_data_tensor = vec![(
             "cell_data_ten".to_string(),
-            (AttributeType::Tensor, vec![5.0; NUM_CELLS * 3].into()),
+            (DataAttribute::Tensor, vec![5.0; NUM_CELLS * 3].into()),
         )]
         .into_iter()
         .collect();
@@ -1113,7 +1135,7 @@ mod tests {
         // Tensor6 cell data
         let cell_data_tensor6 = vec![(
             "cell_data_ten6".to_string(),
-            (AttributeType::Tensor6, vec![5.0; NUM_CELLS * 3].into()),
+            (DataAttribute::Tensor6, vec![5.0; NUM_CELLS * 3].into()),
         )]
         .into_iter()
         .collect();
@@ -1126,14 +1148,17 @@ mod tests {
         // Matrix cell data
         let cell_data_matrix = vec![(
             "cell_data_mat".to_string(),
-            (AttributeType::Matrix, vec![5.0; NUM_CELLS * 3 - 1].into()),
+            (
+                DataAttribute::Matrix(2, 1),
+                vec![5.0; NUM_CELLS * 3 - 1].into(),
+            ),
         )]
         .into_iter()
         .collect();
         let res = writer.write_data("0.0", None, Some(&cell_data_matrix));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of matrix cell data 'cell_data_mat' must multiple of number of cells (4), but is 11"
+            "Size of cell data 'cell_data_mat' must be 8, but is 11"
         );
     }
 }

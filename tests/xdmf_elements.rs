@@ -43,7 +43,7 @@ fn basic_grid() {
     writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="Grid_1" GridType="Uniform">
             <Geometry GeometryType="XYZ">
@@ -151,7 +151,7 @@ fn hierarchical_tree_grid() {
     writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="hierarchical_tree_grid" GridType="Tree">
             <Grid Name="grid_level_1" GridType="Tree">
@@ -228,7 +228,7 @@ fn mixed_grid() {
     writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="Grid_1" GridType="Uniform">
             <Geometry GeometryType="XYZ">
@@ -332,7 +332,7 @@ fn spatial_collection_grid() {
     writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="spatial_collection_grid" GridType="Collection" CollectionType="Spatial">
             <Grid Name="sub_grid_1" GridType="Uniform">
@@ -537,7 +537,7 @@ fn temporal_collection_grid() {
     writer.write_serializable(XDMF_TAG, &xdmf).unwrap();
 
     let expected_xdmf = r#"
-<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
     <Domain>
         <Grid Name="temporal_collection_grid" GridType="Collection" CollectionType="Temporal">
             <Grid Name="Grid_t1" GridType="Uniform">
