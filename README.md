@@ -3,7 +3,7 @@
 This crate does ...
 For unstructured meshes (although might also work for others)
 
-xdmf readers: <https://discourse.paraview.org/t/xmdf-reader-names-xdmf2-reader/4756>
+xdmf readers: <https://discourse.paraview.org/t/xmdf-reader-names-xdmf2-reader/4756> => using "xdmf2" file extension to use this reader
 
 node ordering is same as for [vtk](https://www.vtk.org/wp-content/uploads/2015/04/file-formats.pdf)
 
