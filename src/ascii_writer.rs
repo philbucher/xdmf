@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufWriter, Result as IoResult, Write},
+    io::{BufWriter, Error as IoError, ErrorKind::InvalidFilename, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
 
@@ -74,8 +74,8 @@ impl AsciiWriter {
         let txt_files_dir = file_name.as_ref().to_path_buf().with_extension("txt");
 
         let folder_name = txt_files_dir.file_name().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            IoError::new(
+                InvalidFilename,
                 "Input file name must have a valid file name",
             )
         })?;

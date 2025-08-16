@@ -1,6 +1,6 @@
 use std::{
-    collections::{BTreeMap, HashSet},
-    io::{BufWriter, Result as IoResult, Write},
+    collections::BTreeMap,
+    io::{BufWriter, Error as IoError, ErrorKind::InvalidInput, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
 
@@ -164,7 +164,8 @@ impl TimeSeriesWriter {
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
             attributes: BTreeMap::new(),
-            written_steps: HashSet::new(),
+            num_points: points.len() / 3,
+            num_cells,
         };
 
         ts_writer.write()?;
@@ -231,18 +232,12 @@ pub struct SubMesh {
 fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> IoResult<()> {
     // at least one point is required
     if points.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "At least one point is required",
-        ));
+        return Err(IoError::new(InvalidInput, "At least one point is required"));
     }
 
     // check that points are a multiple of 3 (x, y, z)
     if points.len() % 3 != 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Points must have 3 dimensions",
-        ));
+        return Err(IoError::new(InvalidInput, "Points must have 3 dimensions"));
     }
 
     // check cells connectivity indices
@@ -250,8 +245,8 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
 
     if let Some(&max_index) = max_connectivity_index {
         if max_index as usize >= points.len() / 3 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            return Err(IoError::new(
+                InvalidInput,
                 format!(
                     "Connectivity indices out of bounds for the given points, max index: {}, but number of points is {}",
                     max_index,
@@ -264,8 +259,8 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     // check that the number of connectivities matches the expected number based on the cell types
     let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
     if exp_num_points != cells.0.len() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(IoError::new(
+            InvalidInput,
             format!(
                 "Size of connectivities not match the expected number based on the cell types: {} != {}",
                 cells.0.len(),
@@ -323,7 +318,8 @@ pub struct TimeSeriesDataWriter {
     grid: Grid,
     data_items: Vec<DataItem>,
     attributes: BTreeMap<String, Vec<attribute::Attribute>>,
-    written_steps: HashSet<String>,
+    num_points: usize,
+    num_cells: usize,
 }
 
 impl TimeSeriesDataWriter {
@@ -340,61 +336,7 @@ impl TimeSeriesDataWriter {
         point_data: Option<&DataMap>,
         cell_data: Option<&DataMap>,
     ) -> IoResult<()> {
-        // check if time can be parsed as a float
-        if time.parse::<f64>().is_err() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Time must be a valid float",
-            ));
-        }
-
-        // check if the time step has already been written
-        if !self.written_steps.insert(time.to_string()) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Time step '{time}' has already been written"),
-            ));
-        }
-
-        // check if some data is provided
-        if (point_data.unwrap_or(&BTreeMap::new()).len()
-            + cell_data.unwrap_or(&BTreeMap::new()).len())
-            == 0
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "At least one of point_data or cell_data must be provided",
-            ));
-        }
-
-        // check dimensions of point_data and cell_data
-        if let Some(point_data) = point_data {
-            let num_points = self.grid.num_points();
-            for (name, data) in point_data {
-                if let Some(size_per_point) = data.0.size() {
-                    // attribute has a fixed size per point, e.g. scalar, vector, tensor
-                    let exp_size = num_points * size_per_point;
-                    if data.1.len() != exp_size {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!("Point data '{name}' must have 1 dimension, found: {exp_size}"),
-                        ));
-                    }
-                } else {
-                    // attribute has variable size, e.g. matrix (but must be same size for all points)
-                    // check that the number of values is a multiple of the number of points
-                    if data.1.len() < num_points || data.1.len() % num_points != 0 {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "Point data '{name}' must have 1 dimension, found: {:?}",
-                                data.1.dimensions()
-                            ),
-                        ));
-                    }
-                }
-            }
-        }
+        self.validate_data(time, point_data, cell_data)?;
 
         self.writer.write_data_initialize(time)?;
         let format = self.writer.format();
@@ -496,6 +438,75 @@ impl TimeSeriesDataWriter {
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
+
+    fn validate_data(
+        &self,
+        time: &str,
+        point_data: Option<&DataMap>,
+        cell_data: Option<&DataMap>,
+    ) -> IoResult<()> {
+        // check if time can be parsed as a float
+        if time.parse::<f64>().is_err() {
+            return Err(IoError::new(
+                InvalidInput,
+                format!("Time must be a valid float, and not '{time}'"),
+            ));
+        }
+
+        // check if the time step has already been written
+        if self.attributes.contains_key(&time.to_string()) {
+            return Err(IoError::new(
+                InvalidInput,
+                format!("Time step '{time}' has already been written"),
+            ));
+        }
+
+        // check if some data is provided
+        if (point_data.unwrap_or(&BTreeMap::new()).len()
+            + cell_data.unwrap_or(&BTreeMap::new()).len())
+            == 0
+        {
+            return Err(IoError::new(
+                InvalidInput,
+                "At least one of point_data or cell_data must be provided",
+            ));
+        }
+
+        // check dimensions of point_data and cell_data
+        if let Some(point_data) = point_data {
+            for (name, data) in point_data {
+                if let Some(size_per_point) = data.0.size() {
+                    // attribute has a fixed size per point, e.g. scalar, vector, tensor
+                    let exp_size = self.num_points * size_per_point;
+                    if data.1.len() != exp_size {
+                        return Err(IoError::new(
+                            InvalidInput,
+                            format!(
+                                "Size of point data '{name}' must be {}, but is {}",
+                                exp_size,
+                                data.1.len()
+                            ),
+                        ));
+                    }
+                } else {
+                    // attribute has variable size, e.g. matrix (but must be same size for all points)
+                    // check that the number of values is a multiple of the number of points
+                    if data.1.len() < self.num_points || data.1.len() % self.num_points != 0 {
+                        return Err(IoError::new(
+                            InvalidInput,
+                            format!(
+                                "Size of matrix point data '{name}' must multiple of number of points ({}), but is {}",
+                                self.num_points,
+                                data.1.len()
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Create directories in a way that is safe for MPI applications.
@@ -510,7 +521,7 @@ impl TimeSeriesDataWriter {
 pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoResult<()> {
     if !&path.as_ref().exists() {
         std::fs::create_dir_all(&path).map_err(|e| {
-            std::io::Error::new(
+            IoError::new(
                 e.kind(),
                 format!("Failed to create directory {path:?}: {e}"),
             )
@@ -887,5 +898,152 @@ mod tests {
 
         // Check that the directory was created
         assert!(dirs_to_create.exists());
+    }
+
+    #[test]
+    fn test_validate_data() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_POINTS: usize = 10;
+
+        // write mesh
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; NUM_POINTS * 3],
+                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+            )
+            .unwrap();
+
+        let point_data = vec![(
+            "point_data1".to_string(),
+            (AttributeType::Scalar, vec![5.0; NUM_POINTS].into()),
+        )]
+        .into_iter()
+        .collect();
+
+        // Valid time step
+        writer.write_data("0.1", Some(&point_data), None).unwrap();
+
+        // Missing data
+        let exp_err_missing_data = "At least one of point_data or cell_data must be provided";
+
+        // neither point_data nor cell_data provided
+        let res = writer.write_data("1.0", None, None);
+        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
+
+        // (empty) point_data provided, but cell_data is None
+        let res = writer.write_data("1.0", Some(&BTreeMap::new()), None);
+        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
+
+        // (empty) cell_data provided, but point_data is None
+        let res = writer.write_data("1.0", None, Some(&BTreeMap::new()));
+        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
+
+        // Invalid time step (already exists)
+        let res = writer.write_data("0.1", Some(&point_data), None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Time step '0.1' has already been written"
+        );
+
+        // Invalid time step (not a float)
+        let res = writer.write_data("invalid_time", None, None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Time must be a valid float, and not 'invalid_time'"
+        );
+
+        // Invalid time step (empty)
+        let res = writer.write_data("", None, None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Time must be a valid float, and not ''"
+        );
+    }
+
+    #[test]
+    fn test_validate_data_wrong_point_data_sizes() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_POINTS: usize = 10;
+
+        // write mesh
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; NUM_POINTS * 3],
+                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+            )
+            .unwrap();
+
+        // scalar point data
+        let point_data_scalar = vec![(
+            "point_data_sca".to_string(),
+            (AttributeType::Scalar, vec![5.0; NUM_POINTS - 1].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", Some(&point_data_scalar), None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of point data 'point_data_sca' must be 10, but is 9"
+        );
+
+        // vector point data
+        let point_data_vector = vec![(
+            "point_data_vec".to_string(),
+            (AttributeType::Vector, vec![5.0; NUM_POINTS * 2].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", Some(&point_data_vector), None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of point data 'point_data_vec' must be 30, but is 20"
+        );
+
+        // Tensor point data
+        let point_data_tensor = vec![(
+            "point_data_ten".to_string(),
+            (AttributeType::Tensor, vec![5.0; NUM_POINTS * 3].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", Some(&point_data_tensor), None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of point data 'point_data_ten' must be 90, but is 30"
+        );
+
+        // Tensor6 point data
+        let point_data_tensor6 = vec![(
+            "point_data_ten6".to_string(),
+            (AttributeType::Tensor6, vec![5.0; NUM_POINTS * 3].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", Some(&point_data_tensor6), None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of point data 'point_data_ten6' must be 60, but is 30"
+        );
+
+        // Matrix point data
+        let point_data_matrix = vec![(
+            "point_data_mat".to_string(),
+            (AttributeType::Matrix, vec![5.0; NUM_POINTS * 3 - 1].into()),
+        )]
+        .into_iter()
+        .collect();
+        let res = writer.write_data("0.0", Some(&point_data_matrix), None);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Size of matrix point data 'point_data_mat' must multiple of number of points (10), but is 29"
+        );
     }
 }

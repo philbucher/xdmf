@@ -30,11 +30,11 @@ pub enum AttributeType {
 impl AttributeType {
     pub fn size(&self) -> Option<usize> {
         match self {
-            AttributeType::Scalar => Some(1),
-            AttributeType::Vector => Some(3),
-            AttributeType::Tensor => Some(9),
-            AttributeType::Tensor6 => Some(6),
-            AttributeType::Matrix => None, // Matrix size is not fixed
+            Self::Scalar => Some(1),
+            Self::Vector => Some(3),
+            Self::Tensor => Some(9),
+            Self::Tensor6 => Some(6),
+            Self::Matrix => None, // Matrix size is not fixed
         }
     }
 }

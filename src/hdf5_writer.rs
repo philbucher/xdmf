@@ -1,5 +1,5 @@
 use std::{
-    io::Result as IoResult,
+    io::{Error as IoError, ErrorKind::InvalidFilename, Result as IoResult},
     path::{Path, PathBuf},
 };
 
@@ -34,8 +34,8 @@ impl SingleFileHdf5Writer {
         }
 
         let h5_file_name = h5_file_name_full.file_name().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            IoError::new(
+                InvalidFilename,
                 "Input file name must have a valid file name",
             )
         })?;
@@ -163,8 +163,8 @@ impl MultipleFilesHdf5Writer {
         let h5_files_dir = file_name.as_ref().to_path_buf().with_extension("h5");
 
         h5_files_dir.file_name().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            IoError::new(
+                InvalidFilename,
                 "Input file name must have a valid file name",
             )
         })?;
