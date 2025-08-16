@@ -244,16 +244,17 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     let max_connectivity_index = cells.0.iter().max();
 
     if let Some(&max_index) = max_connectivity_index
-        && max_index as usize >= points.len() / 3 {
-            return Err(IoError::new(
-                InvalidInput,
-                format!(
-                    "Connectivity indices out of bounds for the given points, max index: {}, but number of points is {}",
-                    max_index,
-                    points.len() / 3
-                ),
-            ));
-        }
+        && max_index as usize >= points.len() / 3
+    {
+        return Err(IoError::new(
+            InvalidInput,
+            format!(
+                "Connectivity indices out of bounds for the given points, max index: {}, but number of points is {}",
+                max_index,
+                points.len() / 3
+            ),
+        ));
+    }
 
     // check that the number of connectivities matches the expected number based on the cell types
     let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
