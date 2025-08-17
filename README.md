@@ -13,8 +13,9 @@ node ordering is same as for [vtk](https://www.vtk.org/wp-content/uploads/2015/0
 
 The xdmf format allows to separate the storing of light and heavy data. Different data storage methods are implemented for the latter:
 
+- `Ascii`: This format stores the heavy data in ascii text files.
 - `AsciiInline`: This format stores the heavy data together with the light data in the xml file. This is only recommended for testing or little data, since its neither fast nor space efficient. It however is the only method that stores everything in one single file
-- `XdmfH5Single`: The heavy data is stored in a single hdf5 file. This is the recommended format unless special requirements exist
+- `XdmfH5Single`: The heavy data is stored in a single hdf5 file. This is the **recommended format** unless special requirements exist.
 - `XdmfH5Multiple`: The heavy data is stored in a multiple hdf5 files, one for each time step (and mesh). This creates more files and usually only makes sense when the data is accessed concurrently while its being written.
 
 ## Comparison with vtk/vtu

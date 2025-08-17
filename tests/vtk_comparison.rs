@@ -151,12 +151,19 @@ mod tests {
         }
 
         fn write_step(&mut self, time: f64, data: &[f64]) {
+            let vec_data: Vec<f64> = (0..data.len() * 3).map(|j| (j % 3) as f64).collect();
             let start = Instant::now();
 
-            let point_data = vec![(
-                "pressure".to_string(),
-                (xdmf::DataAttribute::Scalar, data.to_vec().into()),
-            )]
+            let point_data = vec![
+                (
+                    "pressure".to_string(),
+                    (xdmf::DataAttribute::Scalar, data.to_vec().into()),
+                ),
+                (
+                    "velocity".to_string(),
+                    (xdmf::DataAttribute::Vector, vec_data.to_vec().into()),
+                ),
+            ]
             .into_iter()
             .collect();
 
@@ -214,23 +221,24 @@ mod tests {
         }
 
         fn write_step(&mut self, time: f64, data: &[f64]) {
+            let vec_data: Vec<f64> = (0..data.len() * 3).map(|j| (j % 3) as f64).collect();
             let start = Instant::now();
 
             let vtk = create_vtk(
                 self.coordinates.clone(),
                 self.connectivity.clone(),
-                data, // Placeholder for pressure
-                      // 0,    // Placeholder for velocity
+                data,      // Placeholder for pressure
+                &vec_data, // Placeholder for velocity
             );
 
-            let out_file = self.wdir.join(format!("output_{time}.vtk"));
+            let out_file = self.wdir.join(format!("output_{time}.vtu"));
 
             match self.output_type {
                 OutputType::VtkAscii => {
-                    vtk.export_ascii(&out_file).unwrap();
+                    vtk.export_ascii(out_file.with_extension("vtk")).unwrap();
                 }
                 OutputType::VtkBinary => {
-                    vtk.export_be(&out_file).unwrap();
+                    vtk.export_be(out_file.with_extension("vtk")).unwrap();
                 }
                 OutputType::VtkXmlUncompressed => {
                     std::fs::write(
@@ -383,7 +391,7 @@ mod tests {
                 print!(".");
                 std::io::stdout().flush().unwrap(); // Forces print to appear immediately
 
-                let time = step as f64 * 0.1;
+                let time = (step + 1) as f64 * 0.1;
                 let data: Vec<f64> = (0..NUM_NODES_X * NUM_NODES_Y * NUM_NODES_Z)
                     .map(|i| (i as f64 + time) / 1000.0)
                     .collect();
@@ -399,7 +407,12 @@ mod tests {
         }
     }
 
-    fn create_vtk(coordinates: Vec<f64>, connectivity: Vec<usize>, pressure: &[f64]) -> Vtk {
+    fn create_vtk(
+        coordinates: Vec<f64>,
+        connectivity: Vec<usize>,
+        pressure: &[f64],
+        velocity: &[f64],
+    ) -> Vtk {
         let vertices: Vec<u32> = connectivity
             .chunks(8)
             .flat_map(|chunk| {
@@ -412,7 +425,7 @@ mod tests {
         let num_cells = connectivity.len() / 8;
 
         Vtk {
-            version: Version { major: 4, minor: 2 },
+            version: Version { major: 2, minor: 2 },
             byte_order: ByteOrder::native(),
             title: String::from("vtk output"),
             file_path: None,
@@ -435,14 +448,14 @@ mod tests {
                                 data: IOBuffer::F64(pressure.to_vec()),
                             }],
                         },
-                        // Attribute::Field {
-                        //     name: String::from("FieldData"),
-                        //     data_array: vec![FieldArray {
-                        //         name: String::from("Velocity"),
-                        //         elem: 1,
-                        //         data: is_ghost,
-                        //     }],
-                        // },
+                        Attribute::Field {
+                            name: String::from("FieldData"),
+                            data_array: vec![FieldArray {
+                                name: String::from("Velocity"),
+                                elem: 3,
+                                data: IOBuffer::F64(velocity.to_vec()),
+                            }],
+                        },
                     ],
                     cell: vec![],
                 },
