@@ -41,14 +41,6 @@ pub(crate) trait DataWriter {
     fn write_mesh(&mut self, points: &[f64], cells: &[u64])
     -> IoResult<(DataContent, DataContent)>;
 
-    #[cfg(feature = "unstable-submesh-api")]
-    fn write_submesh(
-        &mut self,
-        name: &str,
-        point_indices: &[u64],
-        cell_indices: &[u64],
-    ) -> IoResult<(String, String)>;
-
     fn write_data(
         &mut self,
         name: &str,

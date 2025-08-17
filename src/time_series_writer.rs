@@ -104,60 +104,6 @@ impl TimeSeriesWriter {
 
         Ok(ts_writer)
     }
-
-    // TODO check if indices are within bounds of points and cells
-    // TODO use SpatialCollection when submeshes are used
-    // TODO each tolologytype can only appear once, otherwise indexing for submeshes will be wrong
-    #[cfg(feature = "unstable-submesh-api")]
-    pub fn write_mesh_and_submeshes(
-        self,
-        points: &[f64],
-        cells: (&[u64], &[CellType]),
-        submeshes: &BTreeMap<String, SubMesh>,
-    ) -> IoResult<TimeSeriesDataWriter> {
-        let mut ts = self.write_mesh(points, cells)?;
-
-        let format = ts.writer.format();
-
-        for (submesh_name, submesh) in submeshes {
-            let name_points = format!("{submesh_name}_points");
-            let name_cells = format!("{submesh_name}_cells");
-
-            let (points_data, cells_data) = ts.writer.write_submesh(
-                submesh_name,
-                &submesh.point_indices,
-                &submesh.cell_indices,
-            )?;
-
-            ts.xdmf.domains[0].data_items.push(DataItem {
-                data: points_data,
-                name: Some(name_points),
-                dimensions: Some(Dimensions(vec![submesh.point_indices.len()])),
-                number_type: Some(NumberType::UInt),
-                format: Some(format),
-                precision: Some(8),
-                reference: None,
-            });
-
-            ts.xdmf.domains[0].data_items.push(DataItem {
-                data: cells_data,
-                name: Some(name_cells),
-                dimensions: Some(Dimensions(vec![submesh.cell_indices.len()])),
-                number_type: Some(NumberType::UInt),
-                format: Some(format),
-                precision: Some(8),
-                reference: None,
-            });
-        }
-
-        Ok(ts)
-    }
-}
-
-#[cfg(feature = "unstable-submesh-api")]
-pub struct SubMesh {
-    pub point_indices: Vec<u64>,
-    pub cell_indices: Vec<u64>,
 }
 
 // Validate that the points and cells are valid

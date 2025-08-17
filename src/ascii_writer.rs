@@ -41,16 +41,6 @@ impl DataWriter for AsciiInlineWriter {
         ))
     }
 
-    #[cfg(feature = "unstable-submesh-api")]
-    fn write_submesh(
-        &mut self,
-        _name: &str,
-        point_indices: &[u64],
-        cell_indices: &[u64],
-    ) -> IoResult<(String, String)> {
-        unimplemented!()
-    }
-
     fn write_data(
         &mut self,
         _name: &str,
@@ -132,16 +122,6 @@ impl DataWriter for AsciiWriter {
             )
             .into(),
         ))
-    }
-
-    #[cfg(feature = "unstable-submesh-api")]
-    fn write_submesh(
-        &mut self,
-        _name: &str,
-        point_indices: &[u64],
-        cell_indices: &[u64],
-    ) -> IoResult<(String, String)> {
-        unimplemented!()
     }
 
     fn write_data(

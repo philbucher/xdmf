@@ -78,16 +78,6 @@ impl DataWriter for SingleFileHdf5Writer {
         ))
     }
 
-    #[cfg(feature = "unstable-submesh-api")]
-    fn write_submesh(
-        &mut self,
-        _name: &str,
-        _point_indices: &[u64],
-        _cell_indices: &[u64],
-    ) -> IoResult<(String, String)> {
-        unimplemented!()
-    }
-
     fn write_data(
         &mut self,
         name: &str,
@@ -196,16 +186,6 @@ impl DataWriter for MultipleFilesHdf5Writer {
             full_path(&rel_file_name, &data_name_points).into(),
             full_path(&rel_file_name, &data_name_cells).into(),
         ))
-    }
-
-    #[cfg(feature = "unstable-submesh-api")]
-    fn write_submesh(
-        &mut self,
-        _name: &str,
-        _point_indices: &[u64],
-        _cell_indices: &[u64],
-    ) -> IoResult<(String, String)> {
-        unimplemented!()
     }
 
     fn write_data(
