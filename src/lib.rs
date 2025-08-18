@@ -117,6 +117,7 @@ pub enum DataAttribute {
     Tensor,
     Tensor6,
     Matrix(usize, usize), // Matrix with specified rows and columns
+    Generic(usize),       // Generic data with specified size
 }
 
 impl DataAttribute {
@@ -127,6 +128,7 @@ impl DataAttribute {
             Self::Tensor => 9,
             Self::Tensor6 => 6,
             Self::Matrix(n, m) => n * m,
+            Self::Generic(size) => *size,
         }
     }
 }
@@ -139,6 +141,7 @@ impl From<DataAttribute> for attribute::AttributeType {
             DataAttribute::Tensor => Self::Tensor,
             DataAttribute::Tensor6 => Self::Matrix, // writen as Matrix to get detected as symmetric tensor
             DataAttribute::Matrix(_, _) => Self::Matrix,
+            DataAttribute::Generic(_) => Self::Matrix,
         }
     }
 }
@@ -196,5 +199,29 @@ mod tests {
 
         // Check that the directory was created
         assert!(dirs_to_create.exists());
+    }
+
+    #[test]
+    fn test_data_attribute() {
+        let scalar = DataAttribute::Scalar;
+        let vector = DataAttribute::Vector;
+        let tensor = DataAttribute::Tensor;
+        let tensor6 = DataAttribute::Tensor6;
+        let matrix = DataAttribute::Matrix(3, 3);
+        let generic = DataAttribute::Generic(5);
+
+        assert_eq!(scalar.size(), 1);
+        assert_eq!(vector.size(), 3);
+        assert_eq!(tensor.size(), 9);
+        assert_eq!(tensor6.size(), 6);
+        assert_eq!(matrix.size(), 9);
+        assert_eq!(generic.size(), 5);
+
+        assert_eq!(attribute::AttributeType::Scalar, scalar.into());
+        assert_eq!(attribute::AttributeType::Vector, vector.into());
+        assert_eq!(attribute::AttributeType::Tensor, tensor.into());
+        assert_eq!(attribute::AttributeType::Matrix, tensor6.into());
+        assert_eq!(attribute::AttributeType::Matrix, matrix.into());
+        assert_eq!(attribute::AttributeType::Matrix, generic.into());
     }
 }

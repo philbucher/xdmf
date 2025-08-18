@@ -56,7 +56,7 @@ fn basic_grid() {
     </Domain>
 </Xdmf>"#;
 
-    pretty_assertions::assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
+    pretty_assertions::assert_eq!(expected_xdmf, String::from_utf8(buffer).unwrap());
 
     // write to file
     // let mut file_writer =
@@ -184,7 +184,7 @@ fn hierarchical_tree_grid() {
     </Domain>
 </Xdmf>"#;
 
-    pretty_assertions::assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
+    pretty_assertions::assert_eq!(expected_xdmf, String::from_utf8(buffer).unwrap());
 
     // write to file
     // let mut file_writer = Writer::new_with_indent(
@@ -241,7 +241,7 @@ fn mixed_grid() {
     </Domain>
 </Xdmf>"#;
 
-    pretty_assertions::assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
+    pretty_assertions::assert_eq!(expected_xdmf, String::from_utf8(buffer).unwrap());
 
     // write to file
     // let mut file_writer =
@@ -363,7 +363,7 @@ fn spatial_collection_grid() {
     </Domain>
 </Xdmf>"#;
 
-    pretty_assertions::assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
+    pretty_assertions::assert_eq!(expected_xdmf, String::from_utf8(buffer).unwrap());
 
     // write to file
     // let mut file_writer = Writer::new_with_indent(
@@ -591,7 +591,7 @@ fn temporal_collection_grid() {
     </Domain>
 </Xdmf>"#;
 
-    pretty_assertions::assert_eq!(String::from_utf8(buffer).unwrap(), expected_xdmf);
+    pretty_assertions::assert_eq!(expected_xdmf, String::from_utf8(buffer).unwrap());
 
     // write to file
     // let mut file_writer = Writer::new_with_indent(
