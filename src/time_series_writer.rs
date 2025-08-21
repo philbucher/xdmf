@@ -28,6 +28,8 @@ impl TimeSeriesWriter {
     pub fn new(file_name: impl AsRef<Path>, data_storage: DataStorage) -> IoResult<Self> {
         let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf2");
 
+        validate_file_name(&xdmf_file_name)?;
+
         // create the parent directory if it does not exist
         if let Some(parent) = xdmf_file_name.parent() {
             mpi_safe_create_dir_all(parent)?;
@@ -347,34 +349,84 @@ impl TimeSeriesDataWriter {
             ));
         }
 
-        // check sizes of point_data and cell_data
-        fn check_data_size(
-            data_input: Option<&DataMap>,
-            num_entities: usize,
-            label: &str,
-        ) -> IoResult<()> {
-            if let Some(data_map) = data_input {
-                for (name, data) in data_map {
-                    // attribute has a fixed size per entity, e.g. scalar, vector, tensor
-                    let exp_size = num_entities * data.0.size();
-                    if data.1.len() != exp_size {
-                        return Err(IoError::new(
-                            InvalidInput,
-                            format!(
-                                "Size of {label} data '{name}' must be {}, but is {}",
-                                exp_size,
-                                data.1.len()
-                            ),
-                        ));
-                    }
-                }
-            }
-            Ok(())
-        }
-
         check_data_size(point_data, self.num_points, "point")?;
-        check_data_size(cell_data, self.num_cells, "cell")
+        check_data_size(cell_data, self.num_cells, "cell")?;
+
+        // check that names do not contain forbidden characters
+        validate_data_name(point_data, "point")?;
+        validate_data_name(cell_data, "cell")
     }
+}
+
+// check sizes of point_data and cell_data
+fn check_data_size(data_input: Option<&DataMap>, num_entities: usize, label: &str) -> IoResult<()> {
+    if let Some(data_map) = data_input {
+        for (name, data) in data_map {
+            let exp_size = num_entities * data.0.size();
+            if data.1.len() != exp_size {
+                return Err(IoError::new(
+                    InvalidInput,
+                    format!(
+                        "Size of {label}-data '{name}' must be {}, but is {}",
+                        exp_size,
+                        data.1.len()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_data_name(data_input: Option<&DataMap>, label: &str) -> IoResult<()> {
+    if let Some(data_map) = data_input {
+        for name in data_map.keys() {
+            if !is_valid_data_name(name) {
+                return Err(IoError::new(
+                    InvalidInput,
+                    format!(
+                        "Data name '{name}' of {label}-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes",
+                    ),
+                ));
+            };
+        }
+    }
+    Ok(())
+}
+
+fn is_valid_data_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Validate the file name for the XDMF file.
+fn validate_file_name(file_name: &Path) -> IoResult<()> {
+    // Ensure it's valid UTF-8
+    let Some(name) = file_name.to_str() else {
+        return Err(IoError::new(InvalidInput, "File name must be valid UTF-8"));
+    };
+
+    if name.is_empty() {
+        return Err(IoError::new(InvalidInput, "File name must not be empty"));
+    }
+
+    let invalid_chars = ['?', '/', '\\', '\0', ':', '*', '"', '<', '>', '|'];
+
+    // Check for invalid characters
+    if name.chars().any(|c| invalid_chars.contains(&c)) {
+        return Err(IoError::new(
+            InvalidInput,
+            format!(
+                "File name '{name}' cannot contain the following characters: {invalid_chars:?}"
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -803,7 +855,7 @@ mod tests {
         let res = writer.write_data("0.0", Some(&point_data_scalar), None);
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of point data 'point_data_sca' must be 10, but is 9"
+            "Size of point-data 'point_data_sca' must be 10, but is 9"
         );
 
         // vector point data
@@ -816,7 +868,7 @@ mod tests {
         let res = writer.write_data("0.0", Some(&point_data_vector), None);
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of point data 'point_data_vec' must be 30, but is 20"
+            "Size of point-data 'point_data_vec' must be 30, but is 20"
         );
 
         // Tensor point data
@@ -829,7 +881,7 @@ mod tests {
         let res = writer.write_data("0.0", Some(&point_data_tensor), None);
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of point data 'point_data_ten' must be 90, but is 30"
+            "Size of point-data 'point_data_ten' must be 90, but is 30"
         );
 
         // Tensor6 point data
@@ -842,7 +894,7 @@ mod tests {
         let res = writer.write_data("0.0", Some(&point_data_tensor6), None);
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of point data 'point_data_ten6' must be 60, but is 30"
+            "Size of point-data 'point_data_ten6' must be 60, but is 30"
         );
 
         // Matrix point data
@@ -858,7 +910,7 @@ mod tests {
         let res = writer.write_data("0.0", Some(&point_data_matrix), None);
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of point data 'point_data_mat' must be 20, but is 29"
+            "Size of point-data 'point_data_mat' must be 20, but is 29"
         );
     }
 
@@ -889,7 +941,7 @@ mod tests {
         let res = writer.write_data("0.0", None, Some(&cell_data_scalar));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of cell data 'cell_data_sca' must be 4, but is 3"
+            "Size of cell-data 'cell_data_sca' must be 4, but is 3"
         );
 
         // vector cell data
@@ -902,7 +954,7 @@ mod tests {
         let res = writer.write_data("0.0", None, Some(&cell_data_vector));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of cell data 'cell_data_vec' must be 12, but is 8"
+            "Size of cell-data 'cell_data_vec' must be 12, but is 8"
         );
 
         // Tensor cell data
@@ -915,7 +967,7 @@ mod tests {
         let res = writer.write_data("0.0", None, Some(&cell_data_tensor));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of cell data 'cell_data_ten' must be 36, but is 12"
+            "Size of cell-data 'cell_data_ten' must be 36, but is 12"
         );
 
         // Tensor6 cell data
@@ -928,7 +980,7 @@ mod tests {
         let res = writer.write_data("0.0", None, Some(&cell_data_tensor6));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of cell data 'cell_data_ten6' must be 24, but is 12"
+            "Size of cell-data 'cell_data_ten6' must be 24, but is 12"
         );
 
         // Matrix cell data
@@ -944,7 +996,81 @@ mod tests {
         let res = writer.write_data("0.0", None, Some(&cell_data_matrix));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Size of cell data 'cell_data_mat' must be 8, but is 11"
+            "Size of cell-data 'cell_data_mat' must be 8, but is 11"
+        );
+    }
+
+    #[test]
+    fn test_validate_data_names() {
+        let data = vec![(
+            "cell_data_ten".to_string(),
+            (DataAttribute::Scalar, vec![0.0; 1].into()),
+        )]
+        .into_iter()
+        .collect();
+
+        validate_data_name(Some(&data), "cell").unwrap();
+
+        let data_invalid_name = vec![(
+            "cell[_data]_ten".to_string(),
+            (DataAttribute::Scalar, vec![0.0; 1].into()),
+        )]
+        .into_iter()
+        .collect();
+
+        let res = validate_data_name(Some(&data_invalid_name), "point");
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Data name 'cell[_data]_ten' of point-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes"
+        );
+    }
+
+    #[test]
+    fn test_is_valid_data_name() {
+        assert!(is_valid_data_name("valid_name"));
+        assert!(is_valid_data_name("valid-name"));
+        assert!(is_valid_data_name("valid_name_123"));
+        assert!(!is_valid_data_name("")); // empty name
+        assert!(!is_valid_data_name("invalid name")); // space
+        assert!(!is_valid_data_name("invalid@name")); // special character
+        assert!(!is_valid_data_name("invalid#name")); // special character
+        assert!(!is_valid_data_name("invalid$name")); // special character
+        assert!(!is_valid_data_name("invalid%name")); // special character
+        assert!(!is_valid_data_name("invalid^name")); // special character
+        assert!(!is_valid_data_name("invalid&name")); // special character
+        assert!(!is_valid_data_name("invalid*name")); // special character
+        assert!(!is_valid_data_name("invalid(name")); // special character
+        assert!(!is_valid_data_name("invalid)name")); // special character
+        assert!(!is_valid_data_name("invalid+name")); // special character
+        assert!(!is_valid_data_name("invalid=name")); // special character
+        assert!(!is_valid_data_name("invalid{name")); // special character
+        assert!(!is_valid_data_name("invalid}name")); // special character
+        assert!(!is_valid_data_name("invalid[name")); // special character
+        assert!(!is_valid_data_name("invalid]name")); // special character
+        assert!(!is_valid_data_name("invalid|name")); // special character
+        assert!(!is_valid_data_name("invalid:name")); // special character
+        assert!(!is_valid_data_name("invalid;name")); // special character
+        assert!(!is_valid_data_name("invalid'")); // single quote
+        assert!(!is_valid_data_name("invalid\"name")); // double quote
+        assert!(!is_valid_data_name("invalid,name")); // comma
+        assert!(!is_valid_data_name("invalid.name")); // dot
+        assert!(!is_valid_data_name("invalid?name")); // question mark
+        assert!(!is_valid_data_name("invalid/name")); // forward slash
+        assert!(!is_valid_data_name("invalid\\name")); // backslash
+        assert!(!is_valid_data_name("invalid\0name")); // null-char
+    }
+
+    #[test]
+    fn test_validate_file_name() {
+        validate_file_name(Path::new("asdf.txt")).unwrap();
+        validate_file_name(Path::new("valid-name.txt")).unwrap();
+        validate_file_name(Path::new("valid_name.txt")).unwrap();
+        validate_file_name(Path::new("valid_name-123.txt")).unwrap();
+
+        let res = validate_file_name(Path::new("valid_name:123.txt"));
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "File name 'valid_name:123.txt' cannot contain the following characters: ['?', '/', '\\\\', '\\0', ':', '*', '\"', '<', '>', '|']"
         );
     }
 }
