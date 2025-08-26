@@ -3,7 +3,7 @@
 //! The mesh is written only once and then referenced in each time step.
 //! This is a significant advantage over VTK based formats, making it more efficient both in terms of storage size as well as write speed.
 //!
-//! The concept is insipred by the TimeSeriesWriter of [meshio](https://github.com/nschloe/meshio)
+//! The concept is insipred by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
     collections::BTreeMap,
@@ -23,12 +23,21 @@ use crate::{
     },
 };
 
+/// Writer for time series data in XDMF format.
 pub struct TimeSeriesWriter {
     xdmf_file_name: PathBuf,
     writer: Box<dyn DataWriter>,
 }
 
 impl TimeSeriesWriter {
+    /// Create a new `TimeSeriesWriter`.
+    /// ```rust
+    /// use xdmf::TimeSeriesWriter;
+    /// let xdmf_writer = TimeSeriesWriter::new(
+    ///     "name_xdmf_file",
+    ///     xdmf::DataStorage::AsciiInline
+    /// ).expect("failed to create XDMF writer");
+    /// ```
     pub fn new(file_name: impl AsRef<Path>, data_storage: DataStorage) -> IoResult<Self> {
         let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf2");
 
@@ -45,6 +54,24 @@ impl TimeSeriesWriter {
         })
     }
 
+    /// Writes the mesh to the XDMF file, returning a `TimeSeriesDataWriter` for writing time steps.
+    ///
+    /// Sizes of the inputs are validated to ensure consistency with the mesh and defined cell types.
+    /// ```rust
+    /// use xdmf::TimeSeriesWriter;
+    /// let xdmf_writer = TimeSeriesWriter::new(
+    ///     "xdmf_write_mesh",
+    ///     xdmf::DataStorage::AsciiInline
+    /// ).expect("failed to create XDMF writer");
+    ///
+    /// // define 3 points and 2 cells (a line and a triangle)
+    /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    /// let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+    /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
+    ///
+    /// // write the mesh
+    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types));
+    /// ```
     pub fn write_mesh(
         mut self,
         points: &[f64],
@@ -193,6 +220,7 @@ fn prepare_cells(cells: (&[u64], &[CellType])) -> Vec<u64> {
     cells_with_types
 }
 
+/// Writer for time series data in XDMF format. Can be used after writing the mesh with `TimeSeriesWriter::write_mesh`.
 pub struct TimeSeriesDataWriter {
     xdmf_file_name: PathBuf,
     writer: Box<dyn DataWriter>,
@@ -204,10 +232,45 @@ pub struct TimeSeriesDataWriter {
 }
 
 impl TimeSeriesDataWriter {
-    /// Write data for a specific time step.
+    /// Write point and cell data for a specific time step.
+    ///
     /// Accepts str for time to avoid dealing with formatting, thus leaving it to the user.
-    // TODOs:
-    // - maybe write data as ref in attribute, to make cloning cheaper. Really only matters for XML format, so unsure if worth it.
+    /// Sizes of the data arrays are validated to ensure consistency with the mesh and defined dat types.
+    /// ```rust
+    /// use xdmf::TimeSeriesWriter;
+    /// let xdmf_writer = TimeSeriesWriter::new(
+    ///     "xdmf_write_data",
+    ///     xdmf::DataStorage::AsciiInline
+    /// ).expect("failed to create XDMF writer");
+    ///
+    /// // define 3 points and 2 cells (a line and a triangle)
+    /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    /// let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+    /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
+    ///
+    /// // write the mesh
+    /// let mut time_series_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types)).expect("failed to write mesh");
+    ///
+    /// // define some point and cell data for time step 0.0
+    /// let point_data = vec![(
+    ///        "point_data".to_string(),
+    ///        (xdmf::DataAttribute::Vector, vec![0.0; 9].into()),
+    ///    )]
+    ///    .into_iter()
+    ///    .collect();
+    ///
+    /// let cell_data = vec![(
+    ///        "cell_data".to_string(),
+    ///        (xdmf::DataAttribute::Scalar, vec![0.0, 1.0].into()),
+    ///    )]
+    ///    .into_iter()
+    ///    .collect();
+    ///
+    /// // write the data for time step 0.0
+    /// time_series_writer
+    ///        .write_data("0.0", Some(&point_data), Some(&cell_data))
+    ///        .expect("failed to write time step data");
+    /// ```
     pub fn write_data(
         &mut self,
         time: &str,
@@ -412,7 +475,7 @@ fn validate_file_name(file_name: &Path) -> IoResult<()> {
         return Err(IoError::new(InvalidInput, "File name must not be empty"));
     }
 
-    let invalid_chars = ['?', '/', '\\', '\0', ':', '*', '"', '<', '>', '|'];
+    let invalid_chars = ['?', '\0', ':', '*', '"', '<', '>', '|'];
 
     // Check for invalid characters
     if name.chars().any(|c| invalid_chars.contains(&c)) {
@@ -1068,7 +1131,7 @@ mod tests {
         let res = validate_file_name(Path::new("valid_name:123.txt"));
         assert_eq!(
             res.unwrap_err().to_string(),
-            "File name 'valid_name:123.txt' cannot contain the following characters: ['?', '/', '\\\\', '\\0', ':', '*', '\"', '<', '>', '|']"
+            "File name 'valid_name:123.txt' cannot contain the following characters: ['?', '\\0', ':', '*', '\"', '<', '>', '|']"
         );
     }
 }
