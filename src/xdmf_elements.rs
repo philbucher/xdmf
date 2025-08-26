@@ -48,9 +48,9 @@ impl Xdmf {
         }
     }
 
-    /// # Errors
+    /// Write the serialized XDMF to the given writer.
     ///
-    /// TODO
+    /// "Pretty-printing" with 4 spaces for indentation is used to format the output, making it human-readable.
     pub fn write_to(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         let mut file_writer = quick_xml::Writer::new_with_indent(writer, b' ', 4);
         file_writer

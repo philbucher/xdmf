@@ -70,7 +70,7 @@ impl DataItem {
     }
 }
 
-/// Used to include data from an external file using XInclude
+/// Used to include data from an external file using `XInclude`
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename = "xi:include")]
 pub struct XInclude {
@@ -84,7 +84,7 @@ pub struct XInclude {
 }
 
 impl XInclude {
-    /// Create a new XInclude instance
+    /// Create a new `XInclude` instance
     pub fn new(file_path: impl ToString, include_as_text: bool) -> Self {
         Self {
             file_path: file_path.to_string(),

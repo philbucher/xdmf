@@ -1,3 +1,10 @@
+//! This module contains functionalities for writing a series of time steps to XDMF.
+//!
+//! The mesh is written only once and then referenced in each time step.
+//! This is a significant advantage over VTK based formats, making it more efficient both in terms of storage size as well as write speed.
+//!
+//! The concept is insipred by the TimeSeriesWriter of [meshio](https://github.com/nschloe/meshio)
+
 use std::{
     collections::BTreeMap,
     io::{BufWriter, Error as IoError, ErrorKind::InvalidInput, Result as IoResult, Write},
@@ -22,9 +29,6 @@ pub struct TimeSeriesWriter {
 }
 
 impl TimeSeriesWriter {
-    /// # Errors
-    ///
-    /// TODO
     pub fn new(file_name: impl AsRef<Path>, data_storage: DataStorage) -> IoResult<Self> {
         let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf2");
 
@@ -41,9 +45,6 @@ impl TimeSeriesWriter {
         })
     }
 
-    /// # Errors
-    ///
-    /// TODO
     pub fn write_mesh(
         mut self,
         points: &[f64],
@@ -207,9 +208,6 @@ impl TimeSeriesDataWriter {
     /// Accepts str for time to avoid dealing with formatting, thus leaving it to the user.
     // TODOs:
     // - maybe write data as ref in attribute, to make cloning cheaper. Really only matters for XML format, so unsure if worth it.
-    /// # Errors
-    ///
-    /// TODO
     pub fn write_data(
         &mut self,
         time: &str,

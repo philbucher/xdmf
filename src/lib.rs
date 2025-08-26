@@ -172,9 +172,6 @@ impl From<DataAttribute> for attribute::AttributeType {
 ///
 /// For more details check the [reference](https://github.com/KratosMultiphysics/Kratos/pull/9247).
 /// Its a battle-tested solution tested with > 1000 processes
-/// # Errors
-///
-/// TODO
 pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoResult<()> {
     if !&path.as_ref().exists() {
         std::fs::create_dir_all(&path).map_err(|e| {
