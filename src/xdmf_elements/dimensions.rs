@@ -1,5 +1,8 @@
+//! Implementation of the `Dimensions` struct and its serialization, used to specify the shape of data arrays.
+
 use serde::Serialize;
 
+/// Represents the dimensions of a data array in XDMF format.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dimensions(pub Vec<usize>);
 

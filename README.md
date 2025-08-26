@@ -1,6 +1,6 @@
 # xdmf
 
-This crate does ...
+This crate implements the [xdmf](https://www.xdmf.org) file format
 For unstructured meshes (although might also work for others)
 
 xdmf readers: <https://discourse.paraview.org/t/xmdf-reader-names-xdmf2-reader/4756> => using "xdmf2" file extension to use this reader
@@ -41,7 +41,6 @@ I am a fan of fail early, so I tried to add validations to the data as much as p
 
 ## TODO
 
-- Add docs to at least public API
 - check h5 file flushing
 - test with bigger example
 - Mention somewhere in readme that seems that the xdmf is no longer maintained

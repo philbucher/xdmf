@@ -1,10 +1,15 @@
+//! This module contains the wrapper type for using a common interface for different data types.
+
 use crate::{
     DataAttribute,
     xdmf_elements::{data_item::NumberType, dimensions::Dimensions},
 };
 
+/// Wrapper around different types of data, used to provide a unified interface.
 pub enum Values {
+    /// vector of f64 values
     F64(Vec<f64>),
+    /// vector of u64 values
     U64(Vec<u64>),
 }
 

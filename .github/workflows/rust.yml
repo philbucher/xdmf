@@ -41,5 +41,4 @@ jobs:
         cargo test --no-default-features
 
     - name: Check Docs
-      # -D missing_docs => add to check if public items are documented
-      run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
+      run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items

@@ -1,40 +1,60 @@
+//! This module contains the Attribute element, which defines values associated with the mesh.
+
 use serde::Serialize;
 
 use super::data_item::DataItem;
 
+/// The Attribute element defines values associated with the mesh.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Attribute {
     #[serde(rename = "@Name")]
+    #[doc(hidden)]
     pub name: String,
 
     #[serde(rename = "@AttributeType")]
+    #[doc(hidden)]
     pub attribute_type: AttributeType,
 
     #[serde(rename = "@Center")]
+    #[doc(hidden)]
     pub center: Center,
 
     #[serde(rename = "DataItem")]
+    #[doc(hidden)]
     pub data_items: Vec<DataItem>,
 }
 
+/// Type of the data (scalar, vector, tensor, etc.)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum AttributeType {
     #[default]
+    #[doc(hidden)]
     Scalar,
+    #[doc(hidden)]
     Vector,
+    #[doc(hidden)]
     Tensor,
+    #[doc(hidden)]
     Tensor6,
+    #[doc(hidden)]
     Matrix,
 }
 
+/// Specifies where the attribute data is centered, e.g., on nodes or cells.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum Center {
     #[default]
+    #[doc(hidden)]
     Node,
+    #[doc(hidden)]
     Edge,
+    #[doc(hidden)]
     Face,
+    #[doc(hidden)]
     Cell,
+    #[doc(hidden)]
     Grid,
+    #[doc(hidden)]
     Other,
 }
 pub(crate) fn center_to_data_tag(center: Center) -> &'static str {

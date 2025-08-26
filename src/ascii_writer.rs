@@ -1,3 +1,5 @@
+//! Implementations of writers for ASCII data storage (inline and in separate files).
+
 use std::{
     fs::File,
     io::{BufWriter, Error as IoError, ErrorKind::InvalidFilename, Result as IoResult, Write},

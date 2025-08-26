@@ -1,41 +1,57 @@
+//! This module contains the Grid element, which specifies (a port of) the computational domain.
+
 use serde::Serialize;
 
 use super::{attribute::Attribute, geometry::Geometry, topology::Topology};
 
+/// Definition of a grid, can be a uniform grid, or a composition of grids.
 #[derive(Clone, Debug, Serialize)]
 pub struct Grid {
     #[serde(rename = "@Name")]
+    #[doc(hidden)]
     pub name: String,
 
     #[serde(rename = "@GridType")]
+    #[doc(hidden)]
     pub grid_type: GridType,
 
     #[serde(rename = "@CollectionType", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub collection_type: Option<CollectionType>,
 
     #[serde(rename = "Geometry", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub geometry: Option<Geometry>,
 
     #[serde(rename = "Topology", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub topology: Option<Topology>,
 
     #[serde(rename = "Grid", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub grids: Option<Vec<Grid>>,
 
     #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub time: Option<Time>,
 
     #[serde(rename = "Attribute", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub attributes: Option<Vec<Attribute>>,
 }
 
+/// The Time element is a child of the Grid element and specifies the temporal information for the grid.
+///
+///  Represented as string, such that the user has to make the decision about formatting.
 #[derive(Clone, Debug, Serialize)]
 pub struct Time {
     #[serde(rename = "@Value")]
+    #[doc(hidden)]
     pub value: String,
 }
 
 impl Time {
+    /// Create a new time instance
     pub fn new(value: impl ToString) -> Self {
         Self {
             value: value.to_string(),
@@ -44,6 +60,7 @@ impl Time {
 }
 
 impl Grid {
+    /// Create a new uniform grid
     pub fn new_uniform(name: impl ToString, geometry: Geometry, topology: Topology) -> Self {
         Self {
             name: name.to_string(),
@@ -57,6 +74,7 @@ impl Grid {
         }
     }
 
+    /// Create a new collection grid
     pub fn new_collection(
         name: impl ToString,
         collection_type: CollectionType,
@@ -74,6 +92,7 @@ impl Grid {
         }
     }
 
+    /// Create a new tree grid
     pub fn new_tree(name: impl ToString, grids: Option<Vec<Self>>) -> Self {
         Self {
             name: name.to_string(),
@@ -88,19 +107,27 @@ impl Grid {
     }
 }
 
+/// Type of the grid, can be a single uniform grid, a collection of grids, or a hierarchical tree of grids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum GridType {
     #[default]
+    #[doc(hidden)]
     Uniform,
+    #[doc(hidden)]
     Collection,
+    #[doc(hidden)]
     Tree,
+    #[doc(hidden)]
     SubSet,
 }
 
+/// Specifies the type of collection when `GridType` is `Collection`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum CollectionType {
     #[default]
+    #[doc(hidden)]
     Spatial,
+    #[doc(hidden)]
     Temporal,
 }
 

@@ -1,3 +1,5 @@
+//! Implementations of writers for HDF5 data storage (single and multiple files).
+
 use std::{
     io::{Error as IoError, ErrorKind::InvalidFilename, Result as IoResult},
     path::{Path, PathBuf},

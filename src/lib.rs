@@ -1,3 +1,6 @@
+//! A library for writing XDMF files, which are commonly used in scientific simulations for visualizing datasets on meshes, for example with [Paraview](https://www.paraview.org/).
+//!
+//! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
 use std::{
     collections::BTreeMap,
     io::{Error as IoError, Result as IoResult},
@@ -23,16 +26,23 @@ pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
 pub use values::Values;
 pub use xdmf_elements::CellType;
 
+/// Map for data, relates name to attribtue and values
 pub type DataMap = BTreeMap<String, (DataAttribute, Values)>;
 
+/// Type of storage used for the heavy data (e.g. ASCII or HDF5)
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum DataStorage {
+    /// store the data in ASCII format, each set of data is stored in a separate file.
     Ascii,
+    /// store the data in ASCII format, but inline in the XDMF file. This is only recommended for small datasets.
     AsciiInline,
+    /// store the data in HDF5 format, all data in a single HDF5 file.
     Hdf5SingleFile,
+    /// store the data in HDF5 format, one file per time step.
     Hdf5MultipleFiles,
 }
 
+/// this trait defines the interface used to write the heavy data
 pub(crate) trait DataWriter {
     fn format(&self) -> Format;
 
@@ -62,6 +72,7 @@ pub(crate) trait DataWriter {
     }
 }
 
+/// Create a writer for the heavy data, based on the chosen data storage.
 pub(crate) fn create_writer(
     file_name: &Path,
     data_storage: DataStorage,
@@ -110,14 +121,21 @@ pub const fn is_hdf5_enabled() -> bool {
     }
 }
 
+/// Type of the data (scalar, vector, tensor, etc.)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DataAttribute {
+    /// single value
     Scalar,
+    /// 3D vector (3 components)
     Vector,
+    /// 2nd order tensor in 3D (9 components)
     Tensor,
+    /// Symmetric 2nd order tensor in 3D (6 components)
     Tensor6,
-    Matrix(usize, usize), // Matrix with specified rows and columns
-    Generic(usize),       // Generic data with specified size
+    /// Matrix with specified number of rows and columns
+    Matrix(usize, usize),
+    /// Generic data with specified size
+    Generic(usize),
 }
 
 impl DataAttribute {
@@ -147,10 +165,12 @@ impl From<DataAttribute> for attribute::AttributeType {
 }
 
 /// Create directories in a way that is safe for MPI applications.
-/// This function will create the directory if it does not exist, and wait for it to appear
+///
+/// This function will create the directory if it does not exist, and wait for it to appear in the filesystem.
 /// This is particularly needed on systems such as clusters with slow filesystems, to ensure that
 /// all processes can see the created directory before proceeding.
-/// See <https://github.com/KratosMultiphysics/Kratos/pull/9247> where this was taken from
+///
+/// For more details check the [reference](https://github.com/KratosMultiphysics/Kratos/pull/9247).
 /// Its a battle-tested solution tested with > 1000 processes
 /// # Errors
 ///

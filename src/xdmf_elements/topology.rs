@@ -1,23 +1,36 @@
+//! This module contains the Topology element, which describes how points are connected to form elements.
+
 use serde::Serialize;
 
 use super::data_item::DataItem;
 
+/// Described the topology of the mesh, i.e. how the points are connected to form elements.
+/// Check the documentation [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html#Topology).
 #[derive(Clone, Debug, Serialize)]
 pub struct Topology {
     #[serde(rename = "@TopologyType")]
+    #[doc(hidden)]
     pub topology_type: TopologyType,
 
     #[serde(rename = "@NumberOfElements")]
+    #[doc(hidden)]
     pub number_of_elements: String,
 
     #[serde(rename = "DataItem")]
+    #[doc(hidden)]
     pub data_item: DataItem,
 }
 
+/// Type of topology of the mesh.
+/// Either a uniform type for all elements, or mixed for different element types.
+/// Note: currently only the mixed type is used. Using a uniform type limits applicability but reduces file size slightly.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TopologyType {
+    #[doc(hidden)]
     Mixed,
+    #[doc(hidden)]
     Triangle,
+    #[doc(hidden)]
     Quadrilateral,
 }
 

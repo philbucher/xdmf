@@ -1,3 +1,7 @@
+//! This module contains the main XDMF elements along with their serialization logic.
+//!
+//! The official documentaion for these can be found [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
+
 use serde::Serialize;
 
 pub mod attribute;
@@ -10,24 +14,31 @@ pub mod topology;
 use data_item::DataItem;
 use grid::Grid;
 
+/// Name of the root element of an XDMF file.
 pub const XDMF_TAG: &str = "Xdmf";
 
+/// The root element of an XDMF file. Specifies basic information and holds the domain(s).
 #[derive(Debug, Serialize)]
 pub struct Xdmf {
     #[serde(rename = "@Version")]
+    #[doc(hidden)]
     pub version: String,
 
     #[serde(rename = "@xmlns:xi")]
+    #[doc(hidden)]
     pub xinclude_url: String,
 
     #[serde(rename = "Domain")]
+    #[doc(hidden)]
     pub domains: Vec<Domain>,
 
     #[serde(rename = "Information", skip_serializing_if = "Vec::is_empty")]
+    #[doc(hidden)]
     pub information: Vec<Information>,
 }
 
 impl Xdmf {
+    /// Create a new XDMF instance with a single domain
     pub fn new(domain: Domain) -> Self {
         Self {
             version: "2.0".to_string(),
@@ -63,13 +74,16 @@ impl Default for Xdmf {
 #[derive(Debug, Serialize)]
 pub struct Information {
     #[serde(rename = "@Name")]
+    #[doc(hidden)]
     pub name: String,
 
     #[serde(rename = "@Value")]
+    #[doc(hidden)]
     pub value: String,
 }
 
 impl Information {
+    /// Create a new information instance
     pub fn new(name: impl ToString, value: impl ToString) -> Self {
         Self {
             name: name.to_string(),
@@ -78,16 +92,20 @@ impl Information {
     }
 }
 
+/// Top level container for grids, represents a computational domain.
 #[derive(Debug, Default, Serialize)]
 pub struct Domain {
     #[serde(rename = "Grid")]
+    #[doc(hidden)]
     pub grids: Vec<Grid>,
 
     #[serde(rename = "DataItem", skip_serializing_if = "Vec::is_empty")]
+    #[doc(hidden)]
     pub data_items: Vec<DataItem>,
 }
 
 impl Domain {
+    /// Create a new domain with a single grid
     pub fn new(grid: Grid) -> Self {
         Self {
             grids: vec![grid],
@@ -96,31 +114,54 @@ impl Domain {
     }
 }
 
+/// Cell types as defined in the VTK file format.
+///
+/// See <https://vtk.org/wp-content/uploads/2015/04/file-formats.pdf> for details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CellType {
+    #[doc(hidden)]
     Vertex = 1,
+    #[doc(hidden)]
     Edge = 2,
+    #[doc(hidden)]
     Triangle = 4,
+    #[doc(hidden)]
     Quadrilateral = 5,
+    #[doc(hidden)]
     Tetrahedron = 6,
+    #[doc(hidden)]
     Pyramid = 7,
+    #[doc(hidden)]
     Wedge = 8,
+    #[doc(hidden)]
     Hexahedron = 9,
+    #[doc(hidden)]
     Edge3 = 34,
+    #[doc(hidden)]
     Quadrilateral9 = 35,
+    #[doc(hidden)]
     Triangle6 = 36,
+    #[doc(hidden)]
     Quadrilateral8 = 37,
+    #[doc(hidden)]
     Tetrahedron10 = 38,
+    #[doc(hidden)]
     Pyramid13 = 39,
+    #[doc(hidden)]
     Wedge15 = 40,
+    #[doc(hidden)]
     Wedge18 = 41,
+    #[doc(hidden)]
     Hexahedron20 = 48,
+    #[doc(hidden)]
     Hexahedron24 = 49,
+    #[doc(hidden)]
     Hexahedron27 = 50,
 }
 
 impl CellType {
+    /// The number of points for the given cell type.
     pub fn num_points(&self) -> usize {
         match self {
             Self::Vertex => 1,

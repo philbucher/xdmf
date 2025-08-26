@@ -1,28 +1,38 @@
+//! This module contains the core datastructure used to specify data storage in XDMF files.
+
 use serde::Serialize;
 
 use super::dimensions::Dimensions;
 
+/// Core datastructure to define how, where, and in which format data is stored.
 #[derive(Clone, Debug, Serialize)]
 pub struct DataItem {
     #[serde(rename = "@Name", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub name: Option<String>,
 
     #[serde(rename = "@Dimensions", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub dimensions: Option<Dimensions>,
 
     #[serde(rename = "@NumberType", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub number_type: Option<NumberType>,
 
     #[serde(rename = "@Format", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub format: Option<Format>,
 
     #[serde(rename = "@Precision", skip_serializing_if = "Option::is_none")]
+    /// Precision of the data, in bits (e.g. 4 for f32, 8 for f64)
     pub precision: Option<u8>,
 
     #[serde(flatten)]
+    #[doc(hidden)]
     pub data: DataContent,
 
     #[serde(rename = "@Reference", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     pub reference: Option<String>,
 }
 
@@ -41,6 +51,7 @@ impl Default for DataItem {
 }
 
 impl DataItem {
+    /// Create a new data item that references another data item
     pub fn new_reference(source: &Self, source_path: &str) -> Self {
         Self {
             name: None,
@@ -59,18 +70,21 @@ impl DataItem {
     }
 }
 
-// <xi:include href="coords.txt" parse="text"/>
+/// Used to include data from an external file using XInclude
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename = "xi:include")]
 pub struct XInclude {
     #[serde(rename = "@href")]
+    #[doc(hidden)]
     file_path: String,
 
     #[serde(rename = "@parse", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
     parse: Option<String>,
 }
 
 impl XInclude {
+    /// Create a new XInclude instance
     pub fn new(file_path: impl ToString, include_as_text: bool) -> Self {
         Self {
             file_path: file_path.to_string(),
@@ -79,12 +93,15 @@ impl XInclude {
     }
 }
 
+/// Specifies where (ascii) data is stored, either inline or in an external file.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum DataContent {
     #[serde(rename = "$value")]
+    /// Store the data as raw text
     Raw(String),
 
     #[serde(rename = "xi:include")]
+    /// Store the data in an external file and include it using [XInclude](https://www.w3.org/TR/xinclude/)
     Include(XInclude),
 }
 
@@ -106,21 +123,31 @@ impl From<XInclude> for DataContent {
     }
 }
 
+/// Specifies the type of data stored, such as f64 or i32.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum NumberType {
     #[default]
+    #[doc(hidden)]
     Float,
+    #[doc(hidden)]
     Int,
+    #[doc(hidden)]
     UInt,
+    #[doc(hidden)]
     Char,
+    #[doc(hidden)]
     UChar,
 }
 
+/// The format in which the heavy data is stored.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum Format {
     #[default]
+    #[doc(hidden)]
     XML,
+    #[doc(hidden)]
     HDF,
+    #[doc(hidden)]
     Binary,
 }
 
