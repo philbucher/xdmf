@@ -15,7 +15,7 @@ hdf5 = ["dep:hdf5"]
 
 [dependencies]
 hdf5 = { package = "hdf5-metno", version = "0.10.1", optional = true }
-quick-xml = { version = "0.37.5", features = ["serialize"] }
+quick-xml = { version = "0.38", features = ["serialize"] }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]

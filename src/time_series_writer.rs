@@ -266,10 +266,12 @@ impl TimeSeriesDataWriter {
     ///    .into_iter()
     ///    .collect();
     ///
-    /// // write the data for time step 0.0
-    /// time_series_writer
-    ///        .write_data("0.0", Some(&point_data), Some(&cell_data))
-    ///        .expect("failed to write time step data");
+    /// // write the data for 10 time steps
+    /// for i in 0..10 {
+    ///    time_series_writer
+    ///.write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+    ///.expect("failed to write time step data");
+    /// }
     /// ```
     pub fn write_data(
         &mut self,
