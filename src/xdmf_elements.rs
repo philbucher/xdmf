@@ -2,7 +2,7 @@
 //!
 //! The official documentaion for these can be found [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub mod attribute;
 pub mod data_item;
@@ -18,7 +18,7 @@ use grid::Grid;
 pub const XDMF_TAG: &str = "Xdmf";
 
 /// The root element of an XDMF file. Specifies basic information and holds the domain(s).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Xdmf {
     #[serde(rename = "@Version")]
     #[doc(hidden)]
@@ -71,7 +71,7 @@ impl Default for Xdmf {
 /// details that can be safely ignored by other components.
 ///
 /// See <https://www.xdmf.org/index.php/XDMF_Model_and_Format.html#Information>
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Information {
     #[serde(rename = "@Name")]
     #[doc(hidden)]
@@ -93,7 +93,7 @@ impl Information {
 }
 
 /// Top level container for grids, represents a computational domain.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Domain {
     #[serde(rename = "Grid")]
     #[doc(hidden)]

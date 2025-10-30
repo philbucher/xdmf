@@ -1,11 +1,11 @@
 //! This module contains the core datastructure used to specify data storage in XDMF files.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::dimensions::Dimensions;
 
 /// Core datastructure to define how, where, and in which format data is stored.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataItem {
     #[serde(rename = "@Name", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]
@@ -71,7 +71,7 @@ impl DataItem {
 }
 
 /// Used to include data from an external file using `XInclude`
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "xi:include")]
 pub struct XInclude {
     #[serde(rename = "@href")]
@@ -94,7 +94,7 @@ impl XInclude {
 }
 
 /// Specifies where (ascii) data is stored, either inline or in an external file.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DataContent {
     #[serde(rename = "$value")]
     /// Store the data as raw text
@@ -124,7 +124,7 @@ impl From<XInclude> for DataContent {
 }
 
 /// Specifies the type of data stored, such as f64 or i32.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum NumberType {
     #[default]
     #[doc(hidden)]
@@ -140,7 +140,7 @@ pub enum NumberType {
 }
 
 /// The format in which the heavy data is stored.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Format {
     #[default]
     #[doc(hidden)]

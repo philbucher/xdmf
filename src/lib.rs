@@ -8,7 +8,7 @@ use std::{
     str::FromStr,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use xdmf_elements::{
     attribute,
     data_item::{DataContent, Format},
@@ -31,7 +31,7 @@ pub use xdmf_elements::CellType;
 pub type DataMap = BTreeMap<String, (DataAttribute, Values)>;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DataStorage {
     /// store the data in ASCII format, each set of data is stored in a separate file.
     Ascii,
