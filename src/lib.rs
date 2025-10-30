@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     io::{Error as IoError, Result as IoResult},
     path::Path,
+    str::FromStr,
 };
 
 use serde::Serialize;
@@ -40,6 +41,24 @@ pub enum DataStorage {
     Hdf5SingleFile,
     /// store the data in HDF5 format, one file per time step.
     Hdf5MultipleFiles,
+}
+
+impl FromStr for DataStorage {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ascii" => Ok(Self::Ascii),
+            "asciiinline" | "ascii_inline" | "ascii-inline" => Ok(Self::AsciiInline),
+            "hdf5singlefile" | "hdf5_single_file" | "hdf5-single-file" => Ok(Self::Hdf5SingleFile),
+            "hdf5multiplefiles" | "hdf5_multiple_files" | "hdf5-multiple-files" => {
+                Ok(Self::Hdf5MultipleFiles)
+            }
+            _ => Err(format!(
+                "Invalid DataStorage variant: '{s}'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+            )),
+        }
+    }
 }
 
 /// this trait defines the interface used to write the heavy data
@@ -240,5 +259,68 @@ mod tests {
         assert_eq!(attribute::AttributeType::Matrix, tensor6.into());
         assert_eq!(attribute::AttributeType::Matrix, matrix.into());
         assert_eq!(attribute::AttributeType::Matrix, generic.into());
+    }
+
+    #[test]
+    fn test_data_storage_from_str() {
+        // Test exact case matches
+        assert_eq!("ascii".parse::<DataStorage>().unwrap(), DataStorage::Ascii);
+        assert_eq!("Ascii".parse::<DataStorage>().unwrap(), DataStorage::Ascii);
+        assert_eq!("ASCII".parse::<DataStorage>().unwrap(), DataStorage::Ascii);
+
+        // Test AsciiInline variants
+        assert_eq!(
+            "asciiinline".parse::<DataStorage>().unwrap(),
+            DataStorage::AsciiInline
+        );
+        assert_eq!(
+            "ascii_inline".parse::<DataStorage>().unwrap(),
+            DataStorage::AsciiInline
+        );
+        assert_eq!(
+            "ascii-inline".parse::<DataStorage>().unwrap(),
+            DataStorage::AsciiInline
+        );
+
+        // Test Hdf5SingleFile variants
+        assert_eq!(
+            "hdf5singlefile".parse::<DataStorage>().unwrap(),
+            DataStorage::Hdf5SingleFile
+        );
+        assert_eq!(
+            "hdf5_single_file".parse::<DataStorage>().unwrap(),
+            DataStorage::Hdf5SingleFile
+        );
+        assert_eq!(
+            "Hdf5-Single-File".parse::<DataStorage>().unwrap(),
+            DataStorage::Hdf5SingleFile
+        );
+
+        // Test Hdf5MultipleFiles variants
+        assert_eq!(
+            "hdf5multiplefiles".parse::<DataStorage>().unwrap(),
+            DataStorage::Hdf5MultipleFiles
+        );
+        assert_eq!(
+            "hdf5_multiple_files".parse::<DataStorage>().unwrap(),
+            DataStorage::Hdf5MultipleFiles
+        );
+        assert_eq!(
+            "HDF5-Multiple-Files".parse::<DataStorage>().unwrap(),
+            DataStorage::Hdf5MultipleFiles
+        );
+
+        // Test invalid input
+        let err = "invalid".parse::<DataStorage>().unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid DataStorage variant: 'invalid'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+        );
+
+        let err = "".parse::<DataStorage>().unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid DataStorage variant: ''. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+        );
     }
 }
