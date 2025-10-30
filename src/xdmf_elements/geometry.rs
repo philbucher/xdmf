@@ -1,11 +1,11 @@
 //! This module contains the Geometry element, which describes the XYZ values of the mesh points.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::data_item::DataItem;
 
 /// The Geometry element describes the XYZ values of the mesh points.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Geometry {
     #[serde(rename = "@GeometryType")]
     #[doc(hidden)]
@@ -17,7 +17,7 @@ pub struct Geometry {
 }
 
 /// Type of geometry, either 3D (XYZ) or 2D (XY).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum GeometryType {
     #[default]
     #[doc(hidden)]

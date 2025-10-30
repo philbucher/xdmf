@@ -144,7 +144,7 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     }
 
     // check that points are a multiple of 3 (x, y, z)
-    if points.len() % 3 != 0 {
+    if !points.len().is_multiple_of(3) {
         return Err(IoError::new(InvalidInput, "Points must have 3 dimensions"));
     }
 

@@ -1,11 +1,11 @@
 //! This module contains the Grid element, which specifies (a port of) the computational domain.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{attribute::Attribute, geometry::Geometry, topology::Topology};
 
 /// Definition of a grid, can be a uniform grid, or a composition of grids.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid {
     #[serde(rename = "@Name")]
     #[doc(hidden)]
@@ -43,7 +43,7 @@ pub struct Grid {
 /// The Time element is a child of the Grid element and specifies the temporal information for the grid.
 ///
 ///  Represented as string, such that the user has to make the decision about formatting.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Time {
     #[serde(rename = "@Value")]
     #[doc(hidden)]
@@ -108,7 +108,7 @@ impl Grid {
 }
 
 /// Type of the grid, can be a single uniform grid, a collection of grids, or a hierarchical tree of grids.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum GridType {
     #[default]
     #[doc(hidden)]
@@ -122,7 +122,7 @@ pub enum GridType {
 }
 
 /// Specifies the type of collection when `GridType` is `Collection`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum CollectionType {
     #[default]
     #[doc(hidden)]

@@ -1,11 +1,11 @@
 //! This module contains the Attribute element, which defines values associated with the mesh.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::data_item::DataItem;
 
 /// The Attribute element defines values associated with the mesh.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Attribute {
     #[serde(rename = "@Name")]
     #[doc(hidden)]
@@ -25,7 +25,7 @@ pub struct Attribute {
 }
 
 /// Type of the data (scalar, vector, tensor, etc.)
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum AttributeType {
     #[default]
     #[doc(hidden)]
@@ -41,7 +41,7 @@ pub enum AttributeType {
 }
 
 /// Specifies where the attribute data is centered, e.g., on nodes or cells.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Center {
     #[default]
     #[doc(hidden)]

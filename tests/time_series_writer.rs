@@ -196,7 +196,7 @@ fn write_xdmf() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.0"/>
+    <Information Name="version" Value="0.1.1"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -261,7 +261,7 @@ fn write_xdmf_only_mesh() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.0"/>
+    <Information Name="version" Value="0.1.1"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
