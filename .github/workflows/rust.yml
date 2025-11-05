@@ -25,6 +25,20 @@ jobs:
         rustup component add rustfmt --toolchain nightly
         cargo +nightly fmt --all --check
 
+    - name: Run clippy (no default features)
+      run: |
+        cargo clippy --all-targets --no-default-features -- -D warnings
+
+    - name: Run tests (debug mode, no default features)
+      run: |
+        rustup show active-toolchain
+        cargo test --no-default-features
+
+    - name: Run tests (release mode, no default features)
+      run: |
+        rustup show active-toolchain
+        cargo test --release --no-default-features
+
     - name: Install dependencies
       run: |
         sudo apt-get remove -y man-db || true # to speed up
@@ -35,15 +49,15 @@ jobs:
       run: |
         cargo clippy --all-targets -- -D warnings
 
-    - name: Run tests
+    - name: Run tests (debug mode)
       run: |
         rustup show active-toolchain
         cargo test
 
-    - name: Run tests (no default features)
+    - name: Run tests (release mode)
       run: |
         rustup show active-toolchain
-        cargo test --no-default-features
+        cargo test --release
 
     - name: Check Docs
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
