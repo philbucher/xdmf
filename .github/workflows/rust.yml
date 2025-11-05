@@ -25,9 +25,14 @@ jobs:
         rustup component add rustfmt --toolchain nightly
         cargo +nightly fmt --all --check
 
+    - name: Install dependencies
+      run: |
+        sudo apt-get remove -y man-db || true # to speed up
+        sudo apt-get update
+        sudo apt-get install libhdf5-dev --no-install-recommends
+
     - name: Run clippy
       run: |
-        sudo apt-get install libhdf5-dev
         cargo clippy --all-targets -- -D warnings
 
     - name: Run tests
