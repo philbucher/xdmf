@@ -33,10 +33,8 @@ impl TimeSeriesWriter {
     /// Create a new `TimeSeriesWriter`.
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
-    /// let xdmf_writer = TimeSeriesWriter::new(
-    ///     "name_xdmf_file",
-    ///     xdmf::DataStorage::AsciiInline
-    /// ).expect("failed to create XDMF writer");
+    /// let xdmf_writer = TimeSeriesWriter::new("name_xdmf_file", xdmf::DataStorage::AsciiInline)
+    ///     .expect("failed to create XDMF writer");
     /// ```
     pub fn new(file_name: impl AsRef<Path>, data_storage: DataStorage) -> IoResult<Self> {
         let xdmf_file_name = file_name.as_ref().to_path_buf().with_extension("xdmf2");
@@ -59,10 +57,8 @@ impl TimeSeriesWriter {
     /// Sizes of the inputs are validated to ensure consistency with the mesh and defined cell types.
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
-    /// let xdmf_writer = TimeSeriesWriter::new(
-    ///     "xdmf_write_mesh",
-    ///     xdmf::DataStorage::AsciiInline
-    /// ).expect("failed to create XDMF writer");
+    /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_mesh", xdmf::DataStorage::AsciiInline)
+    ///     .expect("failed to create XDMF writer");
     ///
     /// // define 3 points and 2 cells (a line and a triangle)
     /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
@@ -238,10 +234,8 @@ impl TimeSeriesDataWriter {
     /// Sizes of the data arrays are validated to ensure consistency with the mesh and defined dat types.
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
-    /// let xdmf_writer = TimeSeriesWriter::new(
-    ///     "xdmf_write_data",
-    ///     xdmf::DataStorage::AsciiInline
-    /// ).expect("failed to create XDMF writer");
+    /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_data", xdmf::DataStorage::AsciiInline)
+    ///     .expect("failed to create XDMF writer");
     ///
     /// // define 3 points and 2 cells (a line and a triangle)
     /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
@@ -249,28 +243,30 @@ impl TimeSeriesDataWriter {
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
-    /// let mut time_series_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types)).expect("failed to write mesh");
+    /// let mut time_series_writer = xdmf_writer
+    ///     .write_mesh(&coords, (&connectivity, &cell_types))
+    ///     .expect("failed to write mesh");
     ///
     /// // define some point and cell data for time step 0.0
     /// let point_data = vec![(
-    ///        "point_data".to_string(),
-    ///        (xdmf::DataAttribute::Vector, vec![0.0; 9].into()),
-    ///    )]
-    ///    .into_iter()
-    ///    .collect();
+    ///     "point_data".to_string(),
+    ///     (xdmf::DataAttribute::Vector, vec![0.0; 9].into()),
+    /// )]
+    /// .into_iter()
+    /// .collect();
     ///
     /// let cell_data = vec![(
-    ///        "cell_data".to_string(),
-    ///        (xdmf::DataAttribute::Scalar, vec![0.0, 1.0].into()),
-    ///    )]
-    ///    .into_iter()
-    ///    .collect();
+    ///     "cell_data".to_string(),
+    ///     (xdmf::DataAttribute::Scalar, vec![0.0, 1.0].into()),
+    /// )]
+    /// .into_iter()
+    /// .collect();
     ///
     /// // write the data for 10 time steps
     /// for i in 0..10 {
-    ///    time_series_writer
-    ///.write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
-    ///.expect("failed to write time step data");
+    ///     time_series_writer
+    ///         .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+    ///         .expect("failed to write time step data");
     /// }
     /// ```
     pub fn write_data(

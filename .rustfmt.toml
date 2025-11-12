@@ -2,3 +2,4 @@
 
 group_imports = "StdExternalCrate" # requires nightly, see https://rust-lang.github.io/rustfmt/?version=v1.8.0&search=#group_imports
 imports_granularity = "Crate"      # requires nightly, see https://rust-lang.github.io/rustfmt/?version=v1.8.0&search=#imports_granularity
+format_code_in_doc_comments = true
