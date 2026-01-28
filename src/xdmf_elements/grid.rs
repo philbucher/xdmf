@@ -29,7 +29,7 @@ pub struct Grid {
 
     #[serde(rename = "Grid", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]
-    pub grids: Option<Vec<Grid>>,
+    pub grids: Option<Vec<Self>>,
 
     #[serde(rename = "Time", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]

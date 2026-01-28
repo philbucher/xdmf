@@ -161,7 +161,7 @@ mod tests {
                 ),
                 (
                     "velocity".to_string(),
-                    (xdmf::DataAttribute::Vector, vec_data.to_vec().into()),
+                    (xdmf::DataAttribute::Vector, vec_data.into()),
                 ),
             ]
             .into_iter()
