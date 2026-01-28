@@ -6,7 +6,7 @@
 //! The concept is insipred by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{BufWriter, Error as IoError, ErrorKind::InvalidInput, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
@@ -121,7 +121,8 @@ impl TimeSeriesWriter {
             writer: self.writer,
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
-            attributes: BTreeMap::new(),
+            attributes: vec![],
+            writen_times: HashSet::new(),
             num_points: points.len() / 3,
             num_cells,
         };
@@ -222,7 +223,8 @@ pub struct TimeSeriesDataWriter {
     writer: Box<dyn DataWriter>,
     grid: Grid,
     data_items: Vec<DataItem>,
-    attributes: BTreeMap<String, Vec<attribute::Attribute>>,
+    attributes: Vec<(String, Vec<attribute::Attribute>)>,
+    writen_times: HashSet<String>,
     num_points: usize,
     num_cells: usize,
 }
@@ -313,10 +315,8 @@ impl TimeSeriesDataWriter {
         create_attributes(point_data, attribute::Center::Node)?;
         create_attributes(cell_data, attribute::Center::Cell)?;
 
-        self.attributes
-            .entry(time.to_string())
-            .or_default()
-            .extend(new_attributes);
+        self.attributes.push((time.to_string(), new_attributes));
+        self.writen_times.insert(time.to_string());
 
         self.writer.write_data_finalize()?;
 
@@ -390,7 +390,7 @@ impl TimeSeriesDataWriter {
         }
 
         // check if the time step has already been written
-        if self.attributes.contains_key(time) {
+        if self.writen_times.contains(time) {
             return Err(IoError::new(
                 InvalidInput,
                 format!("Time step '{time}' has already been written"),
@@ -491,7 +491,13 @@ fn validate_file_name(file_name: &Path) -> IoResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DataAttribute;
+    use crate::{
+        DataAttribute,
+        xdmf_elements::{
+            data_item::{DataContent, Format},
+            grid::Grid,
+        },
+    };
 
     #[test]
     fn test_poly_cell_points() {
@@ -1131,5 +1137,159 @@ mod tests {
             res.unwrap_err().to_string(),
             "File name 'valid_name:123.txt' cannot contain the following characters: ['?', '\\0', ':', '*', '\"', '<', '>', '|']"
         );
+    }
+
+    #[test]
+    fn test_write_data_preserve_order() {
+        fn dummy_geometry() -> Geometry {
+            Geometry {
+                geometry_type: GeometryType::XYZ,
+                data_item: DataItem {
+                    dimensions: Some(Dimensions(vec![5, 3])),
+                    data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
+                    number_type: Some(NumberType::Float),
+                    ..Default::default()
+                },
+            }
+        }
+
+        fn dummy_topology() -> Topology {
+            Topology {
+                topology_type: TopologyType::Triangle,
+                number_of_elements: "2".into(),
+                data_item: DataItem {
+                    dimensions: Some(Dimensions(vec![6])),
+                    number_type: Some(NumberType::Int),
+                    data: "0 1 2 2 3 4".into(),
+                    ..Default::default()
+                },
+            }
+        }
+
+        struct DummyWriter;
+
+        impl DataWriter for DummyWriter {
+            fn format(&self) -> Format {
+                Format::XML
+            }
+
+            fn data_storage(&self) -> DataStorage {
+                DataStorage::AsciiInline
+            }
+
+            fn write_mesh(
+                &mut self,
+                _points: &[f64],
+                _cells: &[u64],
+            ) -> IoResult<(DataContent, DataContent)> {
+                Ok((
+                    DataContent::Raw("points".to_string()),
+                    DataContent::Raw("cells".to_string()),
+                ))
+            }
+
+            fn write_data(
+                &mut self,
+                name: &str,
+                _center: attribute::Center,
+                _data: &crate::values::Values,
+            ) -> IoResult<DataContent> {
+                Ok(DataContent::Raw(format!("data_for_{name}")))
+            }
+        }
+
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_write_data_preserve_order.xdmf2");
+
+        let mut writer = TimeSeriesDataWriter {
+            xdmf_file_name: xdmf_file_path.clone(),
+            writer: Box::new(DummyWriter),
+            grid: Grid::new_uniform("test", dummy_geometry(), dummy_topology()),
+            data_items: Vec::new(),
+            num_points: 0,
+            num_cells: 0,
+            attributes: Vec::new(),
+            writen_times: HashSet::new(),
+        };
+
+        let point_data = vec![(
+            "scalar_data".to_string(),
+            (DataAttribute::Scalar, vec![0.0; 0].into()),
+        )]
+        .into_iter()
+        .collect();
+
+        writer.write_data("0.0", Some(&point_data), None).unwrap();
+        writer.write_data("1.0", Some(&point_data), None).unwrap();
+        writer.write_data("2.0", Some(&point_data), None).unwrap();
+        writer.write_data("10.0", Some(&point_data), None).unwrap();
+
+        // Check that the data are in the correct order
+
+        let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="time_series" GridType="Collection" CollectionType="Temporal">
+            <Grid Name="time_series-t0.0" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Dimensions="5 3" NumberType="Float" Format="XML" Precision="4">0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0</DataItem>
+                </Geometry>
+                <Topology TopologyType="Triangle" NumberOfElements="2">
+                    <DataItem Dimensions="6" NumberType="Int" Format="XML" Precision="4">0 1 2 2 3 4</DataItem>
+                </Topology>
+                <Time Value="0.0"/>
+                <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                </Attribute>
+            </Grid>
+            <Grid Name="time_series-t1.0" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Dimensions="5 3" NumberType="Float" Format="XML" Precision="4">0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0</DataItem>
+                </Geometry>
+                <Topology TopologyType="Triangle" NumberOfElements="2">
+                    <DataItem Dimensions="6" NumberType="Int" Format="XML" Precision="4">0 1 2 2 3 4</DataItem>
+                </Topology>
+                <Time Value="1.0"/>
+                <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                </Attribute>
+            </Grid>
+            <Grid Name="time_series-t2.0" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Dimensions="5 3" NumberType="Float" Format="XML" Precision="4">0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0</DataItem>
+                </Geometry>
+                <Topology TopologyType="Triangle" NumberOfElements="2">
+                    <DataItem Dimensions="6" NumberType="Int" Format="XML" Precision="4">0 1 2 2 3 4</DataItem>
+                </Topology>
+                <Time Value="2.0"/>
+                <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                </Attribute>
+            </Grid>
+            <Grid Name="time_series-t10.0" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Dimensions="5 3" NumberType="Float" Format="XML" Precision="4">0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0</DataItem>
+                </Geometry>
+                <Topology TopologyType="Triangle" NumberOfElements="2">
+                    <DataItem Dimensions="6" NumberType="Int" Format="XML" Precision="4">0 1 2 2 3 4</DataItem>
+                </Topology>
+                <Time Value="10.0"/>
+                <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                </Attribute>
+            </Grid>
+        </Grid>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="0.1.1"/>
+</Xdmf>"#;
+
+        let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+        let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+        // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
+        // std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
+
+        pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
     }
 }
