@@ -411,7 +411,7 @@ fn write_xdmf_point_mesh() {
     let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
 
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
-    std::fs::copy(xdmf_file, "write_xdmf_point_mesh.xdmf2").unwrap();
+    // std::fs::copy(xdmf_file, "write_xdmf_point_mesh.xdmf2").unwrap();
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
 }
