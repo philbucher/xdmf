@@ -7,14 +7,14 @@ keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
 license = "MIT"
 name = "xdmf"
 repository = "https://github.com/philbucher/xdmf"
-version = "0.1.1"
+version = "0.1.2"
 
 [features]
 default = ["hdf5"]
 hdf5 = ["dep:hdf5"]
 
 [dependencies]
-hdf5 = { package = "hdf5-metno", version = "0.10.1", optional = true }
+hdf5 = { package = "hdf5-metno", version = "0.12.1", optional = true }
 quick-xml = { version = "0.38", features = ["serialize"] }
 serde = { version = "1.0", features = ["derive"] }
 
@@ -95,10 +95,10 @@ should_panic_without_expect = "warn"
 single_char_pattern = "warn"
 stable_sort_primitive = "warn"
 string_lit_chars_any = "warn"
-string_to_string = "warn"
+implicit_clone = "warn"
 struct_field_names = "warn"
 str_split_at_newline = "warn"
-unchecked_duration_subtraction = "warn"
+unchecked_time_subtraction = "warn"
 uninlined_format_args = "warn"
 unnecessary_box_returns = "warn"
 unnecessary_debug_formatting = "warn"

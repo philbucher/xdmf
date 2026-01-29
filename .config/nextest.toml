@@ -1,0 +1,3 @@
+[profile.default]
+# Do not exit the test run until all tests complete.
+fail-fast = false
