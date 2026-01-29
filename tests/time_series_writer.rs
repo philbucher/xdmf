@@ -272,3 +272,52 @@ fn write_xdmf_only_mesh() {
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
 }
+
+#[test]
+fn write_xdmf_only_point_mesh() {
+    let node_coords = [
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0,
+        0.0, 2.0, 0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.5, -0.5, 0.2, -0.5, 0.5, 0.2, 1.5, -0.5,
+        0.2, 2.5, 0.5, 0.2, 0.5, 1.5, 0.2, 0.5, 2.5, 0.2, 1.5, 2.5, 0.2, 2.5, 1.5, 0.2,
+    ];
+
+    let connectivity = [];
+
+    let cell_types = [];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    xdmf_writer
+        .write_mesh(&node_coords, (&connectivity, &cell_types))
+        .unwrap();
+
+    let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="mesh" GridType="Uniform">
+            <Geometry GeometryType="XYZ">
+                <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+            </Geometry>
+            <Topology TopologyType="Polyvertex" NumberOfElements="17">
+                <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
+            </Topology>
+        </Grid>
+        <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 2.0000000000000000e0 0.0000000000000000e0 5.0000000000000000e-1 -5.0000000000000000e-1 2.0000000000000001e-1 -5.0000000000000000e-1 5.0000000000000000e-1 2.0000000000000001e-1 1.5000000000000000e0 -5.0000000000000000e-1 2.0000000000000001e-1 2.5000000000000000e0 5.0000000000000000e-1 2.0000000000000001e-1 5.0000000000000000e-1 1.5000000000000000e0 2.0000000000000001e-1 5.0000000000000000e-1 2.5000000000000000e0 2.0000000000000001e-1 1.5000000000000000e0 2.5000000000000000e0 2.0000000000000001e-1 2.5000000000000000e0 1.5000000000000000e0 2.0000000000000001e-1</DataItem>
+        <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="0.1.3"/>
+</Xdmf>"#;
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
+    // std::fs::copy(xdmf_file, "time_series_writer_only_point_mesh.xdmf2").unwrap();
+
+    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}
