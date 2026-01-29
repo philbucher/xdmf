@@ -23,11 +23,12 @@ pub struct Topology {
 
 /// Type of topology of the mesh.
 /// Either a uniform type for all elements, or mixed for different element types.
-/// Note: currently only the mixed type is used. Using a uniform type limits applicability but reduces file size slightly.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum TopologyType {
     #[doc(hidden)]
     Mixed,
+    #[doc(hidden)]
+    Polyvertex,
     #[doc(hidden)]
     Triangle,
     #[doc(hidden)]

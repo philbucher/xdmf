@@ -7,7 +7,7 @@ keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
 license = "MIT"
 name = "xdmf"
 repository = "https://github.com/philbucher/xdmf"
-version = "0.1.2"
+version = "0.1.3"
 
 [features]
 default = ["hdf5"]
