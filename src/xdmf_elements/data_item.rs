@@ -27,6 +27,10 @@ pub struct DataItem {
     /// Precision of the data, in bits (e.g. 4 for f32, 8 for f64)
     pub precision: Option<u8>,
 
+    #[serde(rename = "@Endian", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
+    pub endian: Option<Endian>,
+
     #[serde(flatten)]
     #[doc(hidden)]
     pub data: DataContent,
@@ -44,6 +48,7 @@ impl Default for DataItem {
             number_type: Some(NumberType::default()),
             format: Some(Format::default()),
             precision: Some(4),
+            endian: None,
             data: String::new().into(),
             reference: None,
         }
@@ -59,6 +64,7 @@ impl DataItem {
             number_type: None,
             format: None,
             precision: None,
+            endian: None,
             data: format!(
                 "{}[@Name=\"{}\"]",
                 source_path,
@@ -151,6 +157,37 @@ pub enum Format {
     Binary,
 }
 
+impl Format {
+    /// The `Endian` a `DataItem` of this format should be tagged with. Only `Binary` data is
+    /// byte-order-sensitive; writing `Little` explicitly (rather than leaving it unset, which
+    /// XDMF readers interpret as "whatever the reading machine is") is what makes files written
+    /// on one OS/architecture read correctly on another.
+    pub(crate) fn endian(self) -> Option<Endian> {
+        matches!(self, Self::Binary).then_some(Endian::Little)
+    }
+
+    /// Byte width to declare for `Int`/`UInt` heavy data of this format. `Binary` is the only
+    /// format that diverges from the natural 8-byte width: Paraview's legacy Xdmf2 reader (the
+    /// one `.xdmf2` files are pinned to, see `README.md`) silently misreads 64-bit integers in
+    /// `Format="Binary"` `DataItem`s, so `BinaryWriter` narrows integer data to 4 bytes on disk
+    /// and the declared `Precision` must match what was actually written.
+    pub(crate) fn uint_precision(self) -> u8 {
+        if matches!(self, Self::Binary) { 4 } else { 8 }
+    }
+}
+
+/// Byte order of externally stored binary data (only meaningful for [`Format::Binary`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum Endian {
+    #[doc(hidden)]
+    Native,
+    #[doc(hidden)]
+    Big,
+    #[default]
+    #[doc(hidden)]
+    Little,
+}
+
 #[cfg(test)]
 mod tests {
     use quick_xml::se::to_string;
@@ -171,6 +208,7 @@ mod tests {
         assert_eq!(default_item.number_type, Some(NumberType::Float));
         assert_eq!(default_item.format, Some(Format::XML));
         assert_eq!(default_item.precision, Some(4));
+        assert!(default_item.endian.is_none());
         assert_eq!(default_item.data, String::new().into());
         assert!(default_item.reference.is_none());
     }
@@ -186,6 +224,20 @@ mod tests {
     }
 
     #[test]
+    fn format_endian() {
+        assert_eq!(Format::XML.endian(), None);
+        assert_eq!(Format::HDF.endian(), None);
+        assert_eq!(Format::Binary.endian(), Some(Endian::Little));
+    }
+
+    #[test]
+    fn format_uint_precision() {
+        assert_eq!(Format::XML.uint_precision(), 8);
+        assert_eq!(Format::HDF.uint_precision(), 8);
+        assert_eq!(Format::Binary.uint_precision(), 4);
+    }
+
+    #[test]
     fn data_item_custom() {
         let custom_item = DataItem {
             name: Some("custom_data_item".to_string()),
@@ -193,6 +245,7 @@ mod tests {
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
             precision: Some(8),
+            endian: None,
             data: "custom_data".to_string().into(),
             reference: None,
         };
@@ -234,6 +287,7 @@ mod tests {
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
             precision: Some(8),
+            endian: None,
             data: "custom_data".to_string().into(),
             reference: None,
         };
@@ -274,6 +328,7 @@ mod tests {
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
             precision: Some(8),
+            endian: None,
             data: XInclude::new("coords.txt".to_string(), true).into(),
             reference: None,
         };

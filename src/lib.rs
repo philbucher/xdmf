@@ -2,7 +2,6 @@
 //!
 //! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
 use std::{
-    collections::BTreeMap,
     io::{Error as IoError, Result as IoResult},
     path::Path,
     str::FromStr,
@@ -15,6 +14,7 @@ use xdmf_elements::{
 };
 
 mod ascii_writer;
+mod binary_writer;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
 
@@ -24,11 +24,8 @@ pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
-pub use values::Values;
+pub use values::{ValueType, Values};
 pub use xdmf_elements::CellType;
-
-/// Map for data, relates name to attribtue and values
-pub type DataMap = BTreeMap<String, (DataAttribute, Values)>;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -41,6 +38,8 @@ pub enum DataStorage {
     Hdf5SingleFile,
     /// store the data in HDF5 format, one file per time step.
     Hdf5MultipleFiles,
+    /// store the data in uncompressed raw binary format, each set of data is stored in a separate file.
+    Binary,
 }
 
 impl FromStr for DataStorage {
@@ -54,8 +53,9 @@ impl FromStr for DataStorage {
             "hdf5multiplefiles" | "hdf5_multiple_files" | "hdf5-multiple-files" => {
                 Ok(Self::Hdf5MultipleFiles)
             }
+            "binary" => Ok(Self::Binary),
             _ => Err(format!(
-                "Invalid DataStorage variant: '{s}'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+                "Invalid DataStorage variant: '{s}'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
             )),
         }
     }
@@ -69,6 +69,10 @@ pub(crate) trait DataWriter {
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64])
     -> IoResult<(DataContent, DataContent)>;
+
+    /// Write an additional, independent block of cell/connectivity data tied to the mesh
+    /// written by [`Self::write_mesh`] (e.g. a submesh). Must be called after `write_mesh`.
+    fn write_mesh_block(&mut self, name: &str, cells: &[u64]) -> IoResult<DataContent>;
 
     fn write_data(
         &mut self,
@@ -125,6 +129,7 @@ pub(crate) fn create_writer(
                 ))
             }
         }
+        DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
     }
 }
 
@@ -310,17 +315,27 @@ mod tests {
             DataStorage::Hdf5MultipleFiles
         );
 
+        // Test Binary variant
+        assert_eq!(
+            "binary".parse::<DataStorage>().unwrap(),
+            DataStorage::Binary
+        );
+        assert_eq!(
+            "Binary".parse::<DataStorage>().unwrap(),
+            DataStorage::Binary
+        );
+
         // Test invalid input
         let err = "invalid".parse::<DataStorage>().unwrap_err();
         assert_eq!(
             err,
-            "Invalid DataStorage variant: 'invalid'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+            "Invalid DataStorage variant: 'invalid'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
         );
 
         let err = "".parse::<DataStorage>().unwrap_err();
         assert_eq!(
             err,
-            "Invalid DataStorage variant: ''. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+            "Invalid DataStorage variant: ''. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
         );
     }
 }

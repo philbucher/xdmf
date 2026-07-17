@@ -43,6 +43,10 @@ impl DataWriter for AsciiInlineWriter {
         ))
     }
 
+    fn write_mesh_block(&mut self, _name: &str, cells: &[u64]) -> IoResult<DataContent> {
+        Ok(array_to_string_fmt(cells).into())
+    }
+
     fn write_data(
         &mut self,
         _name: &str,
@@ -124,6 +128,22 @@ impl DataWriter for AsciiWriter {
             )
             .into(),
         ))
+    }
+
+    fn write_mesh_block(&mut self, name: &str, cells: &[u64]) -> IoResult<DataContent> {
+        let block_file_name = format!("block_{name}_cells.txt");
+
+        let mut file_block =
+            BufWriter::new(File::create(self.txt_files_dir.join(&block_file_name))?);
+
+        array_to_writer_fmt(cells, &mut file_block)?;
+        file_block.flush()?;
+
+        Ok(XInclude::new(
+            self.folder_name.join(block_file_name).to_string_lossy(),
+            true,
+        )
+        .into())
     }
 
     fn write_data(

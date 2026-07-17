@@ -80,6 +80,31 @@ impl DataWriter for SingleFileHdf5Writer {
         ))
     }
 
+    fn write_mesh_block(&mut self, name: &str, cells: &[u64]) -> IoResult<DataContent> {
+        let blocks_group_name = format!("{MESH}/blocks");
+
+        if !self.h5_file.link_exists(&blocks_group_name) {
+            self.h5_file
+                .create_group(&blocks_group_name)
+                .map_err(IoError::other)?;
+        }
+
+        let blocks_group = self
+            .h5_file
+            .group(&blocks_group_name)
+            .map_err(IoError::other)?;
+
+        let dataset_block = blocks_group
+            .new_dataset::<u64>()
+            .shape(cells.len())
+            .create(name)
+            .map_err(IoError::other)?;
+
+        dataset_block.write(cells).map_err(IoError::other)?;
+
+        Ok(full_path(&self.h5_file_name, &dataset_block.name()).into())
+    }
+
     fn write_data(
         &mut self,
         name: &str,
@@ -140,6 +165,9 @@ impl DataWriter for SingleFileHdf5Writer {
 pub(crate) struct MultipleFilesHdf5Writer {
     h5_files_dir: PathBuf,
     h5_data_file: Option<H5File>,
+    // Kept open (rather than dropped at the end of `write_mesh`) so that
+    // `write_mesh_block` can add further datasets (e.g. submesh blocks) to the same file.
+    mesh_file: Option<H5File>,
 }
 
 impl MultipleFilesHdf5Writer {
@@ -158,6 +186,7 @@ impl MultipleFilesHdf5Writer {
         Ok(Self {
             h5_files_dir,
             h5_data_file: None,
+            mesh_file: None,
         })
     }
 }
@@ -184,10 +213,42 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let rel_file_name = parent_and_filename(&file_name)
             .ok_or_else(|| IoError::other("Could not get parent and file name"))?;
 
+        self.mesh_file = Some(h5_file);
+
         Ok((
             full_path(&rel_file_name, &data_name_points).into(),
             full_path(&rel_file_name, &data_name_cells).into(),
         ))
+    }
+
+    fn write_mesh_block(&mut self, name: &str, cells: &[u64]) -> IoResult<DataContent> {
+        let h5_file = self
+            .mesh_file
+            .as_ref()
+            .ok_or_else(|| IoError::other("Mesh must be written before writing a mesh block"))?;
+
+        let blocks_group_name = "blocks";
+
+        if !h5_file.link_exists(blocks_group_name) {
+            h5_file
+                .create_group(blocks_group_name)
+                .map_err(IoError::other)?;
+        }
+
+        let blocks_group = h5_file.group(blocks_group_name).map_err(IoError::other)?;
+
+        let dataset_block = blocks_group
+            .new_dataset::<u64>()
+            .shape(cells.len())
+            .create(name)
+            .map_err(IoError::other)?;
+
+        dataset_block.write(cells).map_err(IoError::other)?;
+
+        let rel_file_name = parent_and_filename(h5_file.filename())
+            .ok_or_else(|| IoError::other("Could not get parent and file name"))?;
+
+        Ok(full_path(&rel_file_name, &dataset_block.name()).into())
     }
 
     fn write_data(

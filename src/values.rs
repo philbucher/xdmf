@@ -2,7 +2,10 @@
 
 use crate::{
     DataAttribute,
-    xdmf_elements::{data_item::NumberType, dimensions::Dimensions},
+    xdmf_elements::{
+        data_item::{Format, NumberType},
+        dimensions::Dimensions,
+    },
 };
 
 /// Wrapper around different types of data, used to provide a unified interface.
@@ -11,6 +14,54 @@ pub enum Values {
     F64(Vec<f64>),
     /// vector of u64 values
     U64(Vec<u64>),
+}
+
+mod private {
+    pub trait Sealed {}
+    impl Sealed for f64 {}
+    impl Sealed for u64 {}
+}
+
+/// Marker for the element types a [`Values`] can hold. Sealed (cannot be implemented outside
+/// this crate), so adding a new supported type only requires a new `impl ValueType for ...`
+/// here, without growing [`Values`]'s public accessor surface.
+pub trait ValueType: private::Sealed + Sized {
+    #[doc(hidden)]
+    fn as_slice(values: &Values) -> Option<&[Self]>;
+    #[doc(hidden)]
+    fn as_mut_slice(values: &mut Values) -> Option<&mut [Self]>;
+}
+
+impl ValueType for f64 {
+    fn as_slice(values: &Values) -> Option<&[Self]> {
+        match values {
+            Values::F64(v) => Some(v),
+            Values::U64(_) => None,
+        }
+    }
+
+    fn as_mut_slice(values: &mut Values) -> Option<&mut [Self]> {
+        match values {
+            Values::F64(v) => Some(v),
+            Values::U64(_) => None,
+        }
+    }
+}
+
+impl ValueType for u64 {
+    fn as_slice(values: &Values) -> Option<&[Self]> {
+        match values {
+            Values::F64(_) => None,
+            Values::U64(v) => Some(v),
+        }
+    }
+
+    fn as_mut_slice(values: &mut Values) -> Option<&mut [Self]> {
+        match values {
+            Values::F64(_) => None,
+            Values::U64(v) => Some(v),
+        }
+    }
 }
 
 impl From<Vec<f64>> for Values {
@@ -26,10 +77,10 @@ impl From<Vec<u64>> for Values {
 }
 
 impl Values {
-    pub(crate) fn precision(&self) -> u8 {
+    pub(crate) fn precision(&self, format: Format) -> u8 {
         match self {
             Self::F64(_) => 8,
-            Self::U64(_) => 8,
+            Self::U64(_) => format.uint_precision(),
         }
     }
 
@@ -59,6 +110,45 @@ impl Values {
             Self::U64(v) => v.len(),
         }
     }
+
+    /// Returns the underlying data as a `T` slice, or `None` if this `Values` holds a different
+    /// type. Useful for reading a `Values` without needing to match on its variant.
+    pub fn as_slice<T: ValueType>(&self) -> Option<&[T]> {
+        T::as_slice(self)
+    }
+
+    /// Returns the underlying data as a mutable `T` slice, or `None` if this `Values` holds a
+    /// different type. Useful for overwriting a `Values` in place (e.g. across time steps)
+    /// without reallocating it, and without needing to match on its variant.
+    pub fn as_mut_slice<T: ValueType>(&mut self) -> Option<&mut [T]> {
+        T::as_mut_slice(self)
+    }
+
+    /// Gather the entries at `indices` (each `stride` elements wide) into a new `Values`,
+    /// preserving variant and order. Used to slice per-entity (e.g. per-cell) data down to
+    /// the subset belonging to a single block, without needing any XDMF-level windowing.
+    pub(crate) fn gather<'a>(
+        &self,
+        stride: usize,
+        indices: impl IntoIterator<Item = &'a usize>,
+    ) -> Self {
+        match self {
+            Self::F64(v) => Self::F64(gather_strided(v, stride, indices)),
+            Self::U64(v) => Self::U64(gather_strided(v, stride, indices)),
+        }
+    }
+}
+
+fn gather_strided<'a, T: Copy>(
+    values: &[T],
+    stride: usize,
+    indices: impl IntoIterator<Item = &'a usize>,
+) -> Vec<T> {
+    let mut out = Vec::new();
+    for &idx in indices {
+        out.extend_from_slice(&values[idx * stride..(idx + 1) * stride]);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -73,7 +163,8 @@ mod tests {
         matches!(values, Values::F64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
-        assert_eq!(values.precision(), 8);
+        assert_eq!(values.precision(Format::XML), 8);
+        assert_eq!(values.precision(Format::Binary), 8);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -100,11 +191,70 @@ mod tests {
         matches!(values, Values::U64(_));
 
         assert_eq!(values.number_type(), NumberType::UInt);
-        assert_eq!(values.precision(), 8);
+        assert_eq!(values.precision(Format::XML), 8);
+        assert_eq!(values.precision(Format::HDF), 8);
+        assert_eq!(values.precision(Format::Binary), 4);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
         );
         assert_eq!(values.len(), 6);
+    }
+
+    #[test]
+    fn gather_f64_scalar() {
+        let values: Values = vec![10.0, 11.0, 12.0, 13.0].into();
+        let gathered = values.gather(1, &[2, 0]);
+        match gathered {
+            Values::F64(v) => assert_eq!(v, vec![12.0, 10.0]),
+            Values::U64(_) => panic!("expected F64"),
+        }
+    }
+
+    #[test]
+    fn gather_f64_vector() {
+        // 3 cells, 2 components each: cell0=[0,1], cell1=[2,3], cell2=[4,5]
+        let values: Values = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0].into();
+        let gathered = values.gather(2, &[2, 2, 0]);
+        match gathered {
+            Values::F64(v) => assert_eq!(v, vec![4.0, 5.0, 4.0, 5.0, 0.0, 1.0]),
+            Values::U64(_) => panic!("expected F64"),
+        }
+    }
+
+    #[test]
+    fn gather_u64() {
+        let values: Values = vec![1_u64, 2, 3, 4].into();
+        let gathered = values.gather(1, &[3, 1]);
+        match gathered {
+            Values::U64(v) => assert_eq!(v, vec![4, 2]),
+            Values::F64(_) => panic!("expected U64"),
+        }
+    }
+
+    #[test]
+    fn gather_empty_indices() {
+        let values: Values = vec![1.0, 2.0].into();
+        let gathered = values.gather(1, &[]);
+        assert_eq!(gathered.len(), 0);
+    }
+
+    #[test]
+    fn as_slice_and_as_mut_slice() {
+        let mut f64_values: Values = vec![1.0, 2.0].into();
+        assert_eq!(f64_values.as_slice::<f64>(), Some([1.0, 2.0].as_slice()));
+        assert_eq!(f64_values.as_slice::<u64>(), None);
+
+        f64_values.as_mut_slice::<f64>().expect("holds f64 data")[0] = 5.0;
+        assert_eq!(f64_values.as_slice::<f64>(), Some([5.0, 2.0].as_slice()));
+        assert_eq!(f64_values.as_mut_slice::<u64>(), None);
+
+        let mut u64_values: Values = vec![1_u64, 2].into();
+        assert_eq!(u64_values.as_slice::<u64>(), Some([1, 2].as_slice()));
+        assert_eq!(u64_values.as_slice::<f64>(), None);
+
+        u64_values.as_mut_slice::<u64>().expect("holds u64 data")[0] = 5;
+        assert_eq!(u64_values.as_slice::<u64>(), Some([5, 2].as_slice()));
+        assert_eq!(u64_values.as_mut_slice::<f64>(), None);
     }
 }

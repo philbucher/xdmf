@@ -6,16 +6,17 @@
 //! The concept is insipred by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     io::{BufWriter, Error as IoError, ErrorKind::InvalidInput, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    CellType, DataMap, DataStorage, DataWriter, create_writer, mpi_safe_create_dir_all,
+    CellType, DataAttribute, DataStorage, DataWriter, Values, create_writer,
+    mpi_safe_create_dir_all,
     xdmf_elements::{
         Information, Xdmf, attribute,
-        data_item::{DataItem, NumberType},
+        data_item::{DataItem, Format, NumberType},
         dimensions::Dimensions,
         geometry::{Geometry, GeometryType},
         grid::{CollectionType, Grid, GridType, Time},
@@ -82,9 +83,11 @@ impl TimeSeriesWriter {
             cells.1.len()
         };
 
-        let (topo_type, prepared_cells) = prepare_cells(cells, num_points);
+        let (topo_type, prepared_cells, _cell_windows) = prepare_cells(cells, num_points);
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
+
+        let format = self.writer.format();
 
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
@@ -92,7 +95,8 @@ impl TimeSeriesWriter {
             data: points_data,
             number_type: Some(NumberType::Float),
             precision: Some(8),
-            format: Some(self.writer.format()),
+            endian: format.endian(),
+            format: Some(format),
             reference: None,
         };
 
@@ -101,8 +105,9 @@ impl TimeSeriesWriter {
             dimensions: Some(Dimensions(vec![prepared_cells.len()])),
             number_type: Some(NumberType::UInt),
             data: cells_data,
-            format: Some(self.writer.format()),
-            precision: Some(8),
+            format: Some(format),
+            precision: Some(format.uint_precision()),
+            endian: format.endian(),
             reference: None,
         };
 
@@ -127,6 +132,8 @@ impl TimeSeriesWriter {
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
             attributes: vec![],
+            block_attributes: vec![],
+            blocks: None,
             writen_times: HashSet::new(),
             num_points,
             num_cells,
@@ -136,6 +143,230 @@ impl TimeSeriesWriter {
 
         Ok(ts_writer)
     }
+
+    /// Writes the mesh as a collection of named, possibly overlapping, blocks (submeshes),
+    /// rendered by [Paraview](https://www.paraview.org/) as a multiblock dataset.
+    ///
+    /// Each block is given as a name plus a set of indices into `cells` (0-based, in the same
+    /// order as `cells.1`) identifying the cells it contains. Indices need not be contiguous and
+    /// may repeat across blocks (a cell can belong to more than one block); each block simply
+    /// gets its own copy of the connectivity entries for the cells it references. Node coordinates
+    /// are always written once and shared by every block via an XDMF reference, regardless of
+    /// which nodes each block's cells actually use.
+    /// ```rust
+    /// use std::collections::BTreeSet;
+    /// use xdmf::TimeSeriesWriter;
+    /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_mesh_with_blocks", xdmf::DataStorage::AsciiInline)
+    ///     .expect("failed to create XDMF writer");
+    ///
+    /// // 4 points, 2 triangles sharing an edge
+    /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    /// let connectivity = [0, 1, 2, 0, 2, 3];
+    /// let cell_types = [xdmf::CellType::Triangle, xdmf::CellType::Triangle];
+    ///
+    /// // one block per triangle
+    /// let triangle_a: BTreeSet<usize> = [0].into();
+    /// let triangle_b: BTreeSet<usize> = [1].into();
+    /// let blocks = [("triangle_a", &triangle_a), ("triangle_b", &triangle_b)];
+    ///
+    /// let mut ts_writer = xdmf_writer
+    ///     .write_mesh_with_blocks(&coords, (&connectivity, &cell_types), &blocks)
+    ///     .expect("failed to write mesh with blocks");
+    /// ```
+    pub fn write_mesh_with_blocks(
+        mut self,
+        points: &[f64],
+        cells: (&[u64], &[CellType]),
+        blocks: &[(&str, &BTreeSet<usize>)],
+    ) -> IoResult<TimeSeriesDataWriter> {
+        validate_points_and_cells(points, cells)?;
+
+        let num_points = points.len() / 3;
+        let num_cells = if cells.1.is_empty() {
+            num_points
+        } else {
+            cells.1.len()
+        };
+
+        validate_blocks(blocks, num_cells)?;
+
+        let (topo_type, prepared_cells, cell_windows) = prepare_cells(cells, num_points);
+
+        // only points are shared across blocks; each block writes its own connectivity below
+        let (points_data, _unused_cells_data) = self.writer.write_mesh(points, &[])?;
+
+        let format = self.writer.format();
+
+        let data_item_coords = DataItem {
+            name: Some("coords".to_string()),
+            dimensions: Some(Dimensions(vec![num_points, 3])),
+            data: points_data,
+            number_type: Some(NumberType::Float),
+            precision: Some(8),
+            endian: format.endian(),
+            format: Some(format),
+            reference: None,
+        };
+
+        let data_item_coords_ref =
+            DataItem::new_reference(&data_item_coords, "/Xdmf/Domain/DataItem");
+
+        let mut block_grids = Vec::with_capacity(blocks.len());
+        let mut block_infos = Vec::with_capacity(blocks.len());
+        let mut data_items = vec![data_item_coords];
+
+        for &(block_name, cell_indices) in blocks {
+            let mut block_cells = Vec::new();
+            for &idx in cell_indices {
+                let (start, len) = cell_windows[idx];
+                block_cells.extend_from_slice(&prepared_cells[start..start + len]);
+            }
+
+            let block_cells_data = self.writer.write_mesh_block(block_name, &block_cells)?;
+
+            // Written once at the Domain level (like `coords`) and referenced below, so that
+            // cloning the block grid once per time step (in `write()`) only repeats a small
+            // reference, not the connectivity data itself.
+            let data_item_block_connectivity = DataItem {
+                name: Some(format!("connectivity_{block_name}")),
+                dimensions: Some(Dimensions(vec![block_cells.len()])),
+                number_type: Some(NumberType::UInt),
+                data: block_cells_data,
+                format: Some(format),
+                precision: Some(format.uint_precision()),
+                endian: format.endian(),
+                reference: None,
+            };
+
+            let data_item_block_connectivity_ref =
+                DataItem::new_reference(&data_item_block_connectivity, "/Xdmf/Domain/DataItem");
+
+            let topology = Topology {
+                topology_type: topo_type,
+                number_of_elements: cell_indices.len().to_string(),
+                data_item: data_item_block_connectivity_ref,
+            };
+
+            let geometry = Geometry {
+                geometry_type: GeometryType::XYZ,
+                data_item: data_item_coords_ref.clone(),
+            };
+
+            block_grids.push(Grid::new_uniform(block_name, geometry, topology));
+            block_infos.push(MeshBlock {
+                name: block_name.to_string(),
+                cell_indices: cell_indices.clone(),
+            });
+            data_items.push(data_item_block_connectivity);
+        }
+
+        let blocks_grid = Grid::new_collection("blocks", CollectionType::Spatial, Some(block_grids));
+
+        let mut ts_writer = TimeSeriesDataWriter {
+            xdmf_file_name: self.xdmf_file_name,
+            writer: self.writer,
+            grid: blocks_grid,
+            data_items,
+            attributes: vec![],
+            block_attributes: vec![],
+            blocks: Some(block_infos),
+            writen_times: HashSet::new(),
+            num_points,
+            num_cells,
+        };
+
+        ts_writer.write()?;
+
+        Ok(ts_writer)
+    }
+}
+
+/// A named submesh: the set of (0-based) indices into the original `cells` list it contains.
+#[derive(Clone, Debug)]
+struct MeshBlock {
+    name: String,
+    cell_indices: BTreeSet<usize>,
+}
+
+fn validate_blocks(blocks: &[(&str, &BTreeSet<usize>)], num_cells: usize) -> IoResult<()> {
+    if blocks.is_empty() {
+        return Err(IoError::new(InvalidInput, "At least one block is required"));
+    }
+
+    let mut seen_names = HashSet::new();
+    let mut covered = vec![false; num_cells];
+
+    for &(name, cell_indices) in blocks {
+        if !is_valid_data_name(name) {
+            return Err(IoError::new(
+                InvalidInput,
+                format!(
+                    "Block name '{name}' is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes",
+                ),
+            ));
+        }
+
+        if !seen_names.insert(name) {
+            return Err(IoError::new(
+                InvalidInput,
+                format!("Block name '{name}' is used more than once"),
+            ));
+        }
+
+        if cell_indices.is_empty() {
+            return Err(IoError::new(
+                InvalidInput,
+                format!("Block '{name}' must contain at least one cell"),
+            ));
+        }
+
+        if let Some(&max_idx) = cell_indices.last()
+            && max_idx >= num_cells
+        {
+            return Err(IoError::new(
+                InvalidInput,
+                format!(
+                    "Block '{name}' references cell index {max_idx}, but the mesh only has {num_cells} cells",
+                ),
+            ));
+        }
+
+        for &idx in cell_indices {
+            covered[idx] = true;
+        }
+    }
+
+    const MAX_SHOWN_UNCOVERED: usize = 10;
+    let uncovered: Vec<usize> = covered
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &is_covered)| (!is_covered).then_some(idx))
+        .collect();
+
+    if !uncovered.is_empty() {
+        let shown = uncovered
+            .iter()
+            .take(MAX_SHOWN_UNCOVERED)
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let suffix = if uncovered.len() > MAX_SHOWN_UNCOVERED {
+            format!(", ... ({} more)", uncovered.len() - MAX_SHOWN_UNCOVERED)
+        } else {
+            String::new()
+        };
+
+        return Err(IoError::new(
+            InvalidInput,
+            format!(
+                "{} of {num_cells} cells are not part of any block: {shown}{suffix}. \
+                 If this is intentional, exclude them from the cells passed to write_mesh_with_blocks",
+                uncovered.len()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 // Validate that the points and cells are valid
@@ -200,19 +431,35 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 
 /// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
 /// and for poly-cells, the number of points is also added.
+///
+/// Also returns, for each original cell (or point, in the no-cells/Polyvertex case), the
+/// `(start, len)` window locating that cell's entry within the flat returned buffer. This is
+/// used to slice out an arbitrary subset of cells (e.g. for [`TimeSeriesWriter::write_mesh_with_blocks`])
+/// without re-deriving the encoding logic.
 /// TODO if all cells are the same, then the type information can be stored as `TopologyType`
-fn prepare_cells(cells: (&[u64], &[CellType]), num_points: usize) -> (TopologyType, Vec<u64>) {
+fn prepare_cells(
+    cells: (&[u64], &[CellType]),
+    num_points: usize,
+) -> (TopologyType, Vec<u64>, Vec<(usize, usize)>) {
     if cells.1.is_empty() {
         // if there are no cells, use polyvertex on nodes
         // this is required by paraview to visualize only points
-        return (TopologyType::Polyvertex, (0..num_points as u64).collect());
+        let windows = (0..num_points).map(|i| (i, 1)).collect();
+        return (
+            TopologyType::Polyvertex,
+            (0..num_points as u64).collect(),
+            windows,
+        );
     }
 
     let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
+    let mut windows = Vec::with_capacity(cells.1.len());
     let mut index = 0_usize;
 
     for cell_type in cells.1 {
         let num_points = cell_type.num_points();
+        let start = cells_with_types.len();
+
         cells_with_types.push(*cell_type as u64);
 
         if let Some(n_points_poly) = poly_cell_points(*cell_type) {
@@ -222,10 +469,12 @@ fn prepare_cells(cells: (&[u64], &[CellType]), num_points: usize) -> (TopologyTy
 
         cells_with_types.extend_from_slice(&cells.0[index..index + num_points]);
 
+        windows.push((start, cells_with_types.len() - start));
+
         index += num_points; // move index to the next cell
     }
 
-    (TopologyType::Mixed, cells_with_types)
+    (TopologyType::Mixed, cells_with_types, windows)
 }
 
 /// Writer for time series data in XDMF format. Can be used after writing the mesh with `TimeSeriesWriter::write_mesh`.
@@ -235,6 +484,11 @@ pub struct TimeSeriesDataWriter {
     grid: Grid,
     data_items: Vec<DataItem>,
     attributes: Vec<(String, Vec<attribute::Attribute>)>,
+    // Only populated in block mode (`TimeSeriesWriter::write_mesh_with_blocks`): per time step,
+    // one attribute list per block, indexed the same as `blocks`.
+    block_attributes: Vec<(String, Vec<Vec<attribute::Attribute>>)>,
+    // Some(..) iff the mesh was written via `TimeSeriesWriter::write_mesh_with_blocks`.
+    blocks: Option<Vec<MeshBlock>>,
     writen_times: HashSet<String>,
     num_points: usize,
     num_cells: usize,
@@ -261,72 +515,92 @@ impl TimeSeriesDataWriter {
     ///     .expect("failed to write mesh");
     ///
     /// // define some point and cell data for time step 0.0
-    /// let point_data = vec![(
-    ///     "point_data".to_string(),
-    ///     (xdmf::DataAttribute::Vector, vec![0.0; 9].into()),
-    /// )]
-    /// .into_iter()
-    /// .collect();
+    /// let point_vals: xdmf::Values = vec![0.0; 9].into();
+    /// let point_data = [("point_data", xdmf::DataAttribute::Vector, &point_vals)];
     ///
-    /// let cell_data = vec![(
-    ///     "cell_data".to_string(),
-    ///     (xdmf::DataAttribute::Scalar, vec![0.0, 1.0].into()),
-    /// )]
-    /// .into_iter()
-    /// .collect();
+    /// let cell_vals: xdmf::Values = vec![0.0, 1.0].into();
+    /// let cell_data = [("cell_data", xdmf::DataAttribute::Scalar, &cell_vals)];
     ///
     /// // write the data for 10 time steps
     /// for i in 0..10 {
     ///     time_series_writer
-    ///         .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+    ///         .write_data(&i.to_string(), point_data, cell_data)
     ///         .expect("failed to write time step data");
     /// }
     /// ```
-    pub fn write_data(
+    pub fn write_data<'a>(
         &mut self,
         time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
+        point_data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values)>,
+        cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values)>,
     ) -> IoResult<()> {
-        self.validate_data(time, point_data, cell_data)?;
+        // Collected into `BTreeMap`s (keyed on name) so that output ordering is deterministic
+        // regardless of the order the caller happens to iterate in.
+        let point_data = collect_data(point_data, "point")?;
+        let cell_data = collect_data(cell_data, "cell")?;
+
+        self.validate_data(time, &point_data, &cell_data)?;
 
         self.writer.write_data_initialize(time)?;
         let format = self.writer.format();
 
-        let mut new_attributes = Vec::new();
+        // Point data is always shared verbatim, regardless of block mode.
+        let mut shared_attributes = Vec::new();
+        for (data_name, data) in &point_data {
+            shared_attributes.push(build_attribute(
+                self.writer.as_mut(),
+                format,
+                data_name,
+                data_name,
+                attribute::Center::Node,
+                data.0,
+                data.1,
+            )?);
+        }
 
-        let mut create_attributes =
-            |data_map: Option<&DataMap>, center: attribute::Center| -> IoResult<()> {
-                for (data_name, data) in data_map.unwrap_or(&BTreeMap::new()) {
-                    let vals = &data.1;
+        if let Some(blocks) = self.blocks.clone() {
+            let mut per_block_attributes: Vec<Vec<attribute::Attribute>> =
+                vec![shared_attributes; blocks.len()];
 
-                    let data_item = DataItem {
-                        name: None,
-                        dimensions: Some(vals.dimensions(data.0)),
-                        number_type: Some(vals.number_type()),
-                        format: Some(format),
-                        precision: Some(vals.precision()),
-                        data: self.writer.write_data(data_name, center, vals)?,
-                        reference: None,
-                    };
+            for (data_name, data) in &cell_data {
+                let stride = data.0.size();
 
-                    let attribute = attribute::Attribute {
-                        name: data_name.clone(),
-                        attribute_type: data.0.into(),
-                        center,
-                        data_items: vec![data_item],
-                    };
+                for (block, block_attrs) in blocks.iter().zip(per_block_attributes.iter_mut()) {
+                    let sliced_vals = data.1.gather(stride, &block.cell_indices);
+                    let unique_name = format!("{data_name}__{}", block.name);
 
-                    new_attributes.push(attribute);
+                    block_attrs.push(build_attribute(
+                        self.writer.as_mut(),
+                        format,
+                        &unique_name,
+                        data_name,
+                        attribute::Center::Cell,
+                        data.0,
+                        &sliced_vals,
+                    )?);
                 }
+            }
 
-                Ok(())
-            };
+            self.block_attributes
+                .push((time.to_string(), per_block_attributes));
+        } else {
+            let mut new_attributes = shared_attributes;
 
-        create_attributes(point_data, attribute::Center::Node)?;
-        create_attributes(cell_data, attribute::Center::Cell)?;
+            for (data_name, data) in &cell_data {
+                new_attributes.push(build_attribute(
+                    self.writer.as_mut(),
+                    format,
+                    data_name,
+                    data_name,
+                    attribute::Center::Cell,
+                    data.0,
+                    data.1,
+                )?);
+            }
 
-        self.attributes.push((time.to_string(), new_attributes));
+            self.attributes.push((time.to_string(), new_attributes));
+        }
+
         self.writen_times.insert(time.to_string());
 
         self.writer.write_data_finalize()?;
@@ -337,33 +611,59 @@ impl TimeSeriesDataWriter {
     fn write(&mut self) -> IoResult<()> {
         self.writer.flush()?;
 
-        // create the XDMF structure
-        let time_grids = self
-            .attributes
-            .iter()
-            .map(|(time, attributes)| {
-                let mut grid = self.grid.clone();
-
-                match grid.grid_type {
-                    GridType::Uniform => {
-                        grid.name = format!("time_series-t{time}");
-                        grid.time = Some(Time::new(time));
-                        grid.attributes = Some(attributes.clone());
-                        grid
-                    }
-                    _ => unimplemented!("Only Uniform grids are supported for time series"),
-                }
-            })
-            .collect();
-
-        let temporal_grid =
-            Grid::new_collection("time_series", CollectionType::Temporal, Some(time_grids));
+        let grid_has_data = if self.blocks.is_some() {
+            !self.block_attributes.is_empty()
+        } else {
+            !self.attributes.is_empty()
+        };
 
         // If there are no attributes aka time-data, write the grid directly
-        let grid_to_write = if self.attributes.is_empty() {
+        let grid_to_write = if !grid_has_data {
             self.grid.clone()
+        } else if self.blocks.is_some() {
+            let time_grids = self
+                .block_attributes
+                .iter()
+                .map(|(time, per_block_attributes)| {
+                    let mut grid = self.grid.clone();
+                    grid.name = format!("time_series-t{time}");
+                    grid.time = Some(Time::new(time));
+
+                    // `grid.grids` is always `Some` here: it was built by `write_mesh_with_blocks`
+                    // as a `Grid::new_collection` with an explicit list of block sub-grids.
+                    if let Some(sub_grids) = grid.grids.as_mut() {
+                        for (sub_grid, attrs) in
+                            sub_grids.iter_mut().zip(per_block_attributes.iter())
+                        {
+                            sub_grid.attributes = Some(attrs.clone());
+                        }
+                    }
+
+                    grid
+                })
+                .collect();
+
+            Grid::new_collection("time_series", CollectionType::Temporal, Some(time_grids))
         } else {
-            temporal_grid
+            let time_grids = self
+                .attributes
+                .iter()
+                .map(|(time, attributes)| {
+                    let mut grid = self.grid.clone();
+
+                    match grid.grid_type {
+                        GridType::Uniform => {
+                            grid.name = format!("time_series-t{time}");
+                            grid.time = Some(Time::new(time));
+                            grid.attributes = Some(attributes.clone());
+                            grid
+                        }
+                        _ => unimplemented!("Only Uniform grids are supported for time series"),
+                    }
+                })
+                .collect();
+
+            Grid::new_collection("time_series", CollectionType::Temporal, Some(time_grids))
         };
 
         let mut xdmf = Xdmf {
@@ -389,8 +689,8 @@ impl TimeSeriesDataWriter {
     fn validate_data(
         &self,
         time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
+        point_data: &BTreeMap<&str, (DataAttribute, &Values)>,
+        cell_data: &BTreeMap<&str, (DataAttribute, &Values)>,
     ) -> IoResult<()> {
         // check if time can be parsed as a float
         if time.parse::<f64>().is_err() {
@@ -409,10 +709,7 @@ impl TimeSeriesDataWriter {
         }
 
         // check if some data is provided
-        if (point_data.unwrap_or(&BTreeMap::new()).len()
-            + cell_data.unwrap_or(&BTreeMap::new()).len())
-            == 0
-        {
+        if point_data.len() + cell_data.len() == 0 {
             return Err(IoError::new(
                 InvalidInput,
                 "At least one of point_data or cell_data must be provided",
@@ -428,38 +725,92 @@ impl TimeSeriesDataWriter {
     }
 }
 
+// Build a single `Attribute` (with its own `DataItem`), writing `vals` out via the given writer
+// under `storage_name` (must be unique per writer call, e.g. suffixed per block), while the
+// Attribute's own (user-facing) `Name` stays `display_name`.
+fn build_attribute(
+    writer: &mut dyn DataWriter,
+    format: Format,
+    storage_name: &str,
+    display_name: &str,
+    center: attribute::Center,
+    data_attr: DataAttribute,
+    vals: &Values,
+) -> IoResult<attribute::Attribute> {
+    let data_item = DataItem {
+        name: None,
+        dimensions: Some(vals.dimensions(data_attr)),
+        number_type: Some(vals.number_type()),
+        format: Some(format),
+        precision: Some(vals.precision(format)),
+        endian: format.endian(),
+        data: writer.write_data(storage_name, center, vals)?,
+        reference: None,
+    };
+
+    Ok(attribute::Attribute {
+        name: display_name.to_string(),
+        attribute_type: data_attr.into(),
+        center,
+        data_items: vec![data_item],
+    })
+}
+
 // check sizes of point_data and cell_data
-fn check_data_size(data_input: Option<&DataMap>, num_entities: usize, label: &str) -> IoResult<()> {
-    if let Some(data_map) = data_input {
-        for (name, data) in data_map {
-            let exp_size = num_entities * data.0.size();
-            if data.1.len() != exp_size {
-                return Err(IoError::new(
-                    InvalidInput,
-                    format!(
-                        "Size of {label}-data '{name}' must be {}, but is {}",
-                        exp_size,
-                        data.1.len()
-                    ),
-                ));
-            }
+fn check_data_size(
+    data_input: &BTreeMap<&str, (DataAttribute, &Values)>,
+    num_entities: usize,
+    label: &str,
+) -> IoResult<()> {
+    for (name, data) in data_input {
+        let exp_size = num_entities * data.0.size();
+        if data.1.len() != exp_size {
+            return Err(IoError::new(
+                InvalidInput,
+                format!(
+                    "Size of {label}-data '{name}' must be {}, but is {}",
+                    exp_size,
+                    data.1.len()
+                ),
+            ));
         }
     }
     Ok(())
 }
 
-fn validate_data_name(data_input: Option<&DataMap>, label: &str) -> IoResult<()> {
-    if let Some(data_map) = data_input {
-        for name in data_map.keys() {
-            if !is_valid_data_name(name) {
-                return Err(IoError::new(
-                    InvalidInput,
-                    format!(
-                        "Data name '{name}' of {label}-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes",
-                    ),
-                ));
-            };
+// Collect a flat iterator of (name, attribute, values) into a `BTreeMap` keyed on name,
+// rejecting a name used more than once instead of silently keeping the last occurrence.
+fn collect_data<'a>(
+    data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values)>,
+    label: &str,
+) -> IoResult<BTreeMap<&'a str, (DataAttribute, &'a Values)>> {
+    let mut map = BTreeMap::new();
+
+    for (name, attr, values) in data {
+        if map.insert(name, (attr, values)).is_some() {
+            return Err(IoError::new(
+                InvalidInput,
+                format!("{label}-data name '{name}' is used more than once"),
+            ));
         }
+    }
+
+    Ok(map)
+}
+
+fn validate_data_name(
+    data_input: &BTreeMap<&str, (DataAttribute, &Values)>,
+    label: &str,
+) -> IoResult<()> {
+    for name in data_input.keys() {
+        if !is_valid_data_name(name) {
+            return Err(IoError::new(
+                InvalidInput,
+                format!(
+                    "Data name '{name}' of {label}-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes",
+                ),
+            ));
+        };
     }
     Ok(())
 }
@@ -535,7 +886,7 @@ mod tests {
 
     #[test]
     fn test_prepare_cells() {
-        let (topo_type, cells_prep) = prepare_cells(
+        let (topo_type, cells_prep, windows) = prepare_cells(
             (
                 &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
                 &[
@@ -553,6 +904,12 @@ mod tests {
             cells_prep,
             vec![1, 1, 0, 2, 2, 1, 2, 4, 3, 4, 5, 5, 6, 7, 8, 9]
         );
+        // Vertex: [1, 1, 0] (start=0, len=3), Edge: [2, 2, 1, 2] (start=3, len=4),
+        // Triangle: [4, 3, 4, 5] (start=7, len=4), Quadrilateral: [5, 6, 7, 8, 9] (start=11, len=5)
+        assert_eq!(windows, vec![(0, 3), (3, 4), (7, 4), (11, 5)]);
+        for &(start, len) in &windows {
+            assert!(start + len <= cells_prep.len());
+        }
     }
 
     #[test]
@@ -735,10 +1092,11 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_no_cells() {
-        let (topo_type, cells_prep) = prepare_cells((&[], &[]), 5);
+        let (topo_type, cells_prep, windows) = prepare_cells((&[], &[]), 5);
 
         assert_eq!(topo_type, TopologyType::Polyvertex);
         assert_eq!(cells_prep, vec![0, 1, 2, 3, 4]);
+        assert_eq!(windows, vec![(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)]);
     }
 
     #[test]
@@ -849,6 +1207,97 @@ mod tests {
         );
     }
 
+    fn set(items: &[usize]) -> BTreeSet<usize> {
+        items.iter().copied().collect()
+    }
+
+    #[test]
+    fn validate_blocks_no_blocks() {
+        let res = validate_blocks(&[], 3);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "At least one block is required"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_invalid_name() {
+        let cells = set(&[0]);
+        let res = validate_blocks(&[("bad name", &cells)], 1);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Block name 'bad name' is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_duplicate_name() {
+        let cells_a = set(&[0]);
+        let cells_b = set(&[1]);
+        let res = validate_blocks(&[("a", &cells_a), ("a", &cells_b)], 2);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Block name 'a' is used more than once"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_empty_cell_indices() {
+        let cells = set(&[]);
+        let res = validate_blocks(&[("a", &cells)], 1);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Block 'a' must contain at least one cell"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_index_out_of_bounds() {
+        let cells = set(&[0, 5]);
+        let res = validate_blocks(&[("a", &cells)], 3);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Block 'a' references cell index 5, but the mesh only has 3 cells"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_uncovered_cells() {
+        let cells = set(&[0]);
+        let res = validate_blocks(&[("a", &cells)], 3);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "2 of 3 cells are not part of any block: 1, 2. If this is intentional, exclude them from the cells passed to write_mesh_with_blocks"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_uncovered_cells_truncated() {
+        let cells = set(&[0]);
+        let res = validate_blocks(&[("a", &cells)], 15);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "14 of 15 cells are not part of any block: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, ... (4 more). If this is intentional, exclude them from the cells passed to write_mesh_with_blocks"
+        );
+    }
+
+    #[test]
+    fn validate_blocks_fully_covered_ok() {
+        // overlapping blocks together covering every cell is fine
+        let cells_a = set(&[0, 1]);
+        let cells_b = set(&[1, 2]);
+        validate_blocks(&[("a", &cells_a), ("b", &cells_b)], 3).unwrap();
+    }
+
+    #[test]
+    fn validate_blocks_duplicate_indices_within_block_collapse() {
+        // a `BTreeSet` structurally cannot contain a duplicate index, so passing e.g. `[0, 0, 1]`
+        // just collapses to `{0, 1}`, covering cells 0 and 1 exactly once each.
+        let cells = set(&[0, 0, 1]);
+        assert_eq!(cells.len(), 2);
+        validate_blocks(&[("a", &cells)], 2).unwrap();
+    }
+
     #[test]
     fn time_series_writer_create_folder() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
@@ -908,50 +1357,92 @@ mod tests {
             )
             .unwrap();
 
-        let point_data = vec![(
-            "point_data1".to_string(),
-            (DataAttribute::Scalar, vec![5.0; NUM_POINTS].into()),
-        )]
-        .into_iter()
-        .collect();
+        let point_vals: Values = vec![5.0; NUM_POINTS].into();
+        let point_data = [("point_data1", DataAttribute::Scalar, &point_vals)];
 
         // Valid time step
-        writer.write_data("0.1", Some(&point_data), None).unwrap();
+        writer.write_data("0.1", point_data, []).unwrap();
 
         // Missing data
         let exp_err_missing_data = "At least one of point_data or cell_data must be provided";
 
         // neither point_data nor cell_data provided
-        let res = writer.write_data("1.0", None, None);
-        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
-
-        // (empty) point_data provided, but cell_data is None
-        let res = writer.write_data("1.0", Some(&BTreeMap::new()), None);
-        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
-
-        // (empty) cell_data provided, but point_data is None
-        let res = writer.write_data("1.0", None, Some(&BTreeMap::new()));
+        let res = writer.write_data("1.0", [], []);
         assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
 
         // Invalid time step (already exists)
-        let res = writer.write_data("0.1", Some(&point_data), None);
+        let res = writer.write_data("0.1", point_data, []);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Time step '0.1' has already been written"
         );
 
         // Invalid time step (not a float)
-        let res = writer.write_data("invalid_time", None, None);
+        let res = writer.write_data("invalid_time", [], []);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Time must be a valid float, and not 'invalid_time'"
         );
 
         // Invalid time step (empty)
-        let res = writer.write_data("", None, None);
+        let res = writer.write_data("", [], []);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Time must be a valid float, and not ''"
+        );
+    }
+
+    #[test]
+    fn test_write_data_duplicate_point_data_name() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        let mut writer = writer
+            .write_mesh(&[0.0; 10 * 3], (&[0, 2, 3, 4], &[CellType::Vertex; 4]))
+            .unwrap();
+
+        let vals_a: Values = vec![5.0; 10].into();
+        let vals_b: Values = vec![6.0; 10].into();
+        let res = writer.write_data(
+            "0.0",
+            [
+                ("dup", DataAttribute::Scalar, &vals_a),
+                ("dup", DataAttribute::Scalar, &vals_b),
+            ],
+            [],
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "point-data name 'dup' is used more than once"
+        );
+    }
+
+    #[test]
+    fn test_write_data_duplicate_cell_data_name() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        let mut writer = writer
+            .write_mesh(&[0.0; 10 * 3], (&[0, 2, 3, 4], &[CellType::Vertex; 4]))
+            .unwrap();
+
+        let vals_a: Values = vec![5.0; 4].into();
+        let vals_b: Values = vec![6.0; 4].into();
+        let res = writer.write_data(
+            "0.0",
+            [],
+            [
+                ("dup", DataAttribute::Scalar, &vals_a),
+                ("dup", DataAttribute::Scalar, &vals_b),
+            ],
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "cell-data name 'dup' is used more than once"
         );
     }
 
@@ -973,68 +1464,64 @@ mod tests {
             .unwrap();
 
         // scalar point data
-        let point_data_scalar = vec![(
-            "point_data_sca".to_string(),
-            (DataAttribute::Scalar, vec![5.0; NUM_POINTS - 1].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_scalar), None);
+        let scalar_vals: Values = vec![5.0; NUM_POINTS - 1].into();
+        let res = writer.write_data(
+            "0.0",
+            [("point_data_sca", DataAttribute::Scalar, &scalar_vals)],
+            [],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of point-data 'point_data_sca' must be 10, but is 9"
         );
 
         // vector point data
-        let point_data_vector = vec![(
-            "point_data_vec".to_string(),
-            (DataAttribute::Vector, vec![5.0; NUM_POINTS * 2].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_vector), None);
+        let vector_vals: Values = vec![5.0; NUM_POINTS * 2].into();
+        let res = writer.write_data(
+            "0.0",
+            [("point_data_vec", DataAttribute::Vector, &vector_vals)],
+            [],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of point-data 'point_data_vec' must be 30, but is 20"
         );
 
         // Tensor point data
-        let point_data_tensor = vec![(
-            "point_data_ten".to_string(),
-            (DataAttribute::Tensor, vec![5.0; NUM_POINTS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_tensor), None);
+        let tensor_vals: Values = vec![5.0; NUM_POINTS * 3].into();
+        let res = writer.write_data(
+            "0.0",
+            [("point_data_ten", DataAttribute::Tensor, &tensor_vals)],
+            [],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of point-data 'point_data_ten' must be 90, but is 30"
         );
 
         // Tensor6 point data
-        let point_data_tensor6 = vec![(
-            "point_data_ten6".to_string(),
-            (DataAttribute::Tensor6, vec![5.0; NUM_POINTS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_tensor6), None);
+        let tensor6_vals: Values = vec![5.0; NUM_POINTS * 3].into();
+        let res = writer.write_data(
+            "0.0",
+            [("point_data_ten6", DataAttribute::Tensor6, &tensor6_vals)],
+            [],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of point-data 'point_data_ten6' must be 60, but is 30"
         );
 
         // Matrix point data
-        let point_data_matrix = vec![(
-            "point_data_mat".to_string(),
-            (
+        let matrix_vals: Values = vec![5.0; NUM_POINTS * 3 - 1].into();
+        let res = writer.write_data(
+            "0.0",
+            [(
+                "point_data_mat",
                 DataAttribute::Matrix(2, 1),
-                vec![5.0; NUM_POINTS * 3 - 1].into(),
-            ),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_matrix), None);
+                &matrix_vals,
+            )],
+            [],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of point-data 'point_data_mat' must be 20, but is 29"
@@ -1059,68 +1546,64 @@ mod tests {
             .unwrap();
 
         // scalar cell data
-        let cell_data_scalar = vec![(
-            "cell_data_sca".to_string(),
-            (DataAttribute::Scalar, vec![5.0; NUM_CELLS - 1].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_scalar));
+        let scalar_vals: Values = vec![5.0; NUM_CELLS - 1].into();
+        let res = writer.write_data(
+            "0.0",
+            [],
+            [("cell_data_sca", DataAttribute::Scalar, &scalar_vals)],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of cell-data 'cell_data_sca' must be 4, but is 3"
         );
 
         // vector cell data
-        let cell_data_vector = vec![(
-            "cell_data_vec".to_string(),
-            (DataAttribute::Vector, vec![5.0; NUM_CELLS * 2].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_vector));
+        let vector_vals: Values = vec![5.0; NUM_CELLS * 2].into();
+        let res = writer.write_data(
+            "0.0",
+            [],
+            [("cell_data_vec", DataAttribute::Vector, &vector_vals)],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of cell-data 'cell_data_vec' must be 12, but is 8"
         );
 
         // Tensor cell data
-        let cell_data_tensor = vec![(
-            "cell_data_ten".to_string(),
-            (DataAttribute::Tensor, vec![5.0; NUM_CELLS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_tensor));
+        let tensor_vals: Values = vec![5.0; NUM_CELLS * 3].into();
+        let res = writer.write_data(
+            "0.0",
+            [],
+            [("cell_data_ten", DataAttribute::Tensor, &tensor_vals)],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of cell-data 'cell_data_ten' must be 36, but is 12"
         );
 
         // Tensor6 cell data
-        let cell_data_tensor6 = vec![(
-            "cell_data_ten6".to_string(),
-            (DataAttribute::Tensor6, vec![5.0; NUM_CELLS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_tensor6));
+        let tensor6_vals: Values = vec![5.0; NUM_CELLS * 3].into();
+        let res = writer.write_data(
+            "0.0",
+            [],
+            [("cell_data_ten6", DataAttribute::Tensor6, &tensor6_vals)],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of cell-data 'cell_data_ten6' must be 24, but is 12"
         );
 
         // Matrix cell data
-        let cell_data_matrix = vec![(
-            "cell_data_mat".to_string(),
-            (
+        let matrix_vals: Values = vec![5.0; NUM_CELLS * 3 - 1].into();
+        let res = writer.write_data(
+            "0.0",
+            [],
+            [(
+                "cell_data_mat",
                 DataAttribute::Matrix(2, 1),
-                vec![5.0; NUM_CELLS * 3 - 1].into(),
-            ),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_matrix));
+                &matrix_vals,
+            )],
+        );
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of cell-data 'cell_data_mat' must be 8, but is 11"
@@ -1129,23 +1612,20 @@ mod tests {
 
     #[test]
     fn test_validate_data_names() {
-        let data = vec![(
-            "cell_data_ten".to_string(),
-            (DataAttribute::Scalar, vec![0.0; 1].into()),
-        )]
-        .into_iter()
-        .collect();
+        let vals: Values = vec![0.0; 1].into();
+        let data: BTreeMap<&str, (DataAttribute, &Values)> =
+            [("cell_data_ten", (DataAttribute::Scalar, &vals))]
+                .into_iter()
+                .collect();
 
-        validate_data_name(Some(&data), "cell").unwrap();
+        validate_data_name(&data, "cell").unwrap();
 
-        let data_invalid_name = vec![(
-            "cell[_data]_ten".to_string(),
-            (DataAttribute::Scalar, vec![0.0; 1].into()),
-        )]
-        .into_iter()
-        .collect();
+        let data_invalid_name: BTreeMap<&str, (DataAttribute, &Values)> =
+            [("cell[_data]_ten", (DataAttribute::Scalar, &vals))]
+                .into_iter()
+                .collect();
 
-        let res = validate_data_name(Some(&data_invalid_name), "point");
+        let res = validate_data_name(&data_invalid_name, "point");
         assert_eq!(
             res.unwrap_err().to_string(),
             "Data name 'cell[_data]_ten' of point-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes"
@@ -1250,6 +1730,10 @@ mod tests {
                 ))
             }
 
+            fn write_mesh_block(&mut self, name: &str, _cells: &[u64]) -> IoResult<DataContent> {
+                Ok(DataContent::Raw(format!("block_for_{name}")))
+            }
+
             fn write_data(
                 &mut self,
                 name: &str,
@@ -1271,20 +1755,18 @@ mod tests {
             num_points: 0,
             num_cells: 0,
             attributes: Vec::new(),
+            block_attributes: Vec::new(),
+            blocks: None,
             writen_times: HashSet::new(),
         };
 
-        let point_data = vec![(
-            "scalar_data".to_string(),
-            (DataAttribute::Scalar, vec![0.0; 0].into()),
-        )]
-        .into_iter()
-        .collect();
+        let scalar_vals: Values = vec![0.0; 0].into();
+        let point_data = [("scalar_data", DataAttribute::Scalar, &scalar_vals)];
 
-        writer.write_data("0.0", Some(&point_data), None).unwrap();
-        writer.write_data("1.0", Some(&point_data), None).unwrap();
-        writer.write_data("2.0", Some(&point_data), None).unwrap();
-        writer.write_data("10.0", Some(&point_data), None).unwrap();
+        writer.write_data("0.0", point_data, []).unwrap();
+        writer.write_data("1.0", point_data, []).unwrap();
+        writer.write_data("2.0", point_data, []).unwrap();
+        writer.write_data("10.0", point_data, []).unwrap();
 
         // Check that the data are in the correct order
 

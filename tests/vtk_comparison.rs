@@ -151,26 +151,22 @@ mod tests {
         }
 
         fn write_step(&mut self, time: f64, data: &[f64]) {
-            let vec_data: Vec<f64> = (0..data.len() * 3).map(|j| (j % 3) as f64).collect();
+            let vec_data: xdmf::Values = (0..data.len() * 3)
+                .map(|j| (j % 3) as f64)
+                .collect::<Vec<f64>>()
+                .into();
+            let pressure_data: xdmf::Values = data.to_vec().into();
             let start = Instant::now();
 
-            let point_data = vec![
-                (
-                    "pressure".to_string(),
-                    (xdmf::DataAttribute::Scalar, data.to_vec().into()),
-                ),
-                (
-                    "velocity".to_string(),
-                    (xdmf::DataAttribute::Vector, vec_data.into()),
-                ),
-            ]
-            .into_iter()
-            .collect();
+            let point_data = [
+                ("pressure", xdmf::DataAttribute::Scalar, &pressure_data),
+                ("velocity", xdmf::DataAttribute::Vector, &vec_data),
+            ];
 
             self.writer
                 .as_mut()
                 .unwrap()
-                .write_data(format!("{time}").as_str(), Some(&point_data), None)
+                .write_data(format!("{time}").as_str(), point_data, [])
                 .unwrap();
 
             // Implement step writing logic here

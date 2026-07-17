@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use temp_dir::TempDir;
 use xdmf::TimeSeriesWriter;
 
@@ -43,57 +45,72 @@ fn write_xdmf() {
         .unwrap();
 
     for i in 0..3 {
-        let point_data_scalar: Vec<f64> = (0..num_nodes).map(|j| j as f64 + i as f64).collect();
-        let point_data_vec: Vec<f64> = (0..num_nodes * 3).map(|j| (j % 3) as f64).collect();
-        let point_data_tensor: Vec<f64> = (0..num_nodes * 9).map(|j| (j % 9) as f64).collect();
-        let point_data_tensor6: Vec<f64> = (0..num_nodes * 6).map(|j| (j % 6) as f64).collect();
-        let point_data_generic: Vec<f64> = (0..num_nodes * 5).map(|j| (j % 5) as f64).collect();
-        let point_data_matrix2x2: Vec<f64> = (0..num_nodes * 4).map(|j| (j % 4) as f64).collect();
+        let point_data_scalar: xdmf::Values = (0..num_nodes)
+            .map(|j| j as f64 + i as f64)
+            .collect::<Vec<f64>>()
+            .into();
+        let point_data_vec: xdmf::Values = (0..num_nodes * 3)
+            .map(|j| (j % 3) as f64)
+            .collect::<Vec<f64>>()
+            .into();
+        let point_data_tensor: xdmf::Values = (0..num_nodes * 9)
+            .map(|j| (j % 9) as f64)
+            .collect::<Vec<f64>>()
+            .into();
+        let point_data_tensor6: xdmf::Values = (0..num_nodes * 6)
+            .map(|j| (j % 6) as f64)
+            .collect::<Vec<f64>>()
+            .into();
+        let point_data_generic: xdmf::Values = (0..num_nodes * 5)
+            .map(|j| (j % 5) as f64)
+            .collect::<Vec<f64>>()
+            .into();
+        let point_data_matrix2x2: xdmf::Values = (0..num_nodes * 4)
+            .map(|j| (j % 4) as f64)
+            .collect::<Vec<f64>>()
+            .into();
 
-        let cell_data: Vec<f64> = (0..num_cells)
+        let cell_data: xdmf::Values = (0..num_cells)
             .map(|j| 1. * j as f64 + 1.5 * i as f64)
-            .collect();
+            .collect::<Vec<f64>>()
+            .into();
 
-        let point_data = vec![
+        let point_data = [
             (
-                "point_data_scalar".to_string(),
-                (xdmf::DataAttribute::Scalar, point_data_scalar.into()),
+                "point_data_scalar",
+                xdmf::DataAttribute::Scalar,
+                &point_data_scalar,
             ),
             (
-                "point_data_vector".to_string(),
-                (xdmf::DataAttribute::Vector, point_data_vec.into()),
+                "point_data_vector",
+                xdmf::DataAttribute::Vector,
+                &point_data_vec,
             ),
             (
-                "point_data_tensor".to_string(),
-                (xdmf::DataAttribute::Tensor, point_data_tensor.into()),
+                "point_data_tensor",
+                xdmf::DataAttribute::Tensor,
+                &point_data_tensor,
             ),
             (
-                "point_data_tensor6".to_string(),
-                (xdmf::DataAttribute::Tensor6, point_data_tensor6.into()),
+                "point_data_tensor6",
+                xdmf::DataAttribute::Tensor6,
+                &point_data_tensor6,
             ),
             (
-                "point_data_matrix_2x2".to_string(),
-                (
-                    xdmf::DataAttribute::Matrix(2, 2),
-                    point_data_matrix2x2.into(),
-                ),
+                "point_data_matrix_2x2",
+                xdmf::DataAttribute::Matrix(2, 2),
+                &point_data_matrix2x2,
             ),
             (
-                "point_data_generic-5".to_string(),
-                (xdmf::DataAttribute::Generic(5), point_data_generic.into()),
+                "point_data_generic-5",
+                xdmf::DataAttribute::Generic(5),
+                &point_data_generic,
             ),
-        ]
-        .into_iter()
-        .collect();
+        ];
 
-        let cell_data = vec![(
-            "cell_data".to_string(),
-            (xdmf::DataAttribute::Scalar, cell_data.into()),
-        )]
-        .into_iter()
-        .collect();
+        let cell_data = [("cell_data", xdmf::DataAttribute::Scalar, &cell_data)];
         xdmf_writer
-            .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+            .write_data(&i.to_string(), point_data, cell_data)
             .unwrap();
     }
 
@@ -345,17 +362,19 @@ fn write_xdmf_point_mesh() {
         .unwrap();
 
     for i in 0..3 {
-        let point_data_scalar: Vec<f64> = (0..17).map(|j| j as f64 + i as f64).collect();
+        let point_data_scalar: xdmf::Values = (0..17)
+            .map(|j| j as f64 + i as f64)
+            .collect::<Vec<f64>>()
+            .into();
 
-        let point_data = vec![(
-            "point_data_scalar".to_string(),
-            (xdmf::DataAttribute::Scalar, point_data_scalar.into()),
-        )]
-        .into_iter()
-        .collect();
+        let point_data = [(
+            "point_data_scalar",
+            xdmf::DataAttribute::Scalar,
+            &point_data_scalar,
+        )];
 
         xdmf_writer
-            .write_data(&i.to_string(), Some(&point_data), None)
+            .write_data(&i.to_string(), point_data, [])
             .unwrap();
     }
 
@@ -414,4 +433,149 @@ fn write_xdmf_point_mesh() {
     // std::fs::copy(xdmf_file, "write_xdmf_point_mesh.xdmf2").unwrap();
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}
+
+#[test]
+fn write_xdmf_with_blocks() {
+    // A unit quad (nodes 0,1,2,3) plus an extra node (4) forming a triangle (1,2,4)
+    let node_coords = [
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 2.0, 0.5, 0.0,
+    ];
+
+    let connectivity = [0, 1, 2, 3, 1, 2, 4];
+
+    let cell_types = [xdmf::CellType::Quadrilateral, xdmf::CellType::Triangle];
+
+    // "quad_only" and "quad_and_tri" both reference cell 0 (the quad) -- a genuine overlap,
+    // and "quad_and_tri" combines non-contiguous, mixed-type cells (one quad, one triangle).
+    let quad_only: BTreeSet<usize> = [0].into();
+    let quad_and_tri: BTreeSet<usize> = [0, 1].into();
+    let blocks = [("quad_only", &quad_only), ("quad_and_tri", &quad_and_tri)];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    let mut xdmf_writer = xdmf_writer
+        .write_mesh_with_blocks(&node_coords, (&connectivity, &cell_types), &blocks)
+        .unwrap();
+
+    let point_data_vals: xdmf::Values = vec![0.0, 1.0, 2.0, 3.0, 4.0].into();
+    let point_data = [(
+        "point_data_scalar",
+        xdmf::DataAttribute::Scalar,
+        &point_data_vals,
+    )];
+
+    let cell_data_vals: xdmf::Values = vec![10.0, 20.0].into();
+    let cell_data = [(
+        "cell_data_scalar",
+        xdmf::DataAttribute::Scalar,
+        &cell_data_vals,
+    )];
+
+    xdmf_writer.write_data("0", point_data, cell_data).unwrap();
+
+    let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="time_series" GridType="Collection" CollectionType="Temporal">
+            <Grid Name="time_series-t0" GridType="Collection" CollectionType="Spatial">
+                <Grid Name="quad_only" GridType="Uniform">
+                    <Geometry GeometryType="XYZ">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+                    </Geometry>
+                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_quad_only"]</DataItem>
+                    </Topology>
+                    <Attribute Name="point_data_scalar" AttributeType="Scalar" Center="Node">
+                        <DataItem Dimensions="5" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0</DataItem>
+                    </Attribute>
+                    <Attribute Name="cell_data_scalar" AttributeType="Scalar" Center="Cell">
+                        <DataItem Dimensions="1" NumberType="Float" Format="XML" Precision="8">1.0000000000000000e1</DataItem>
+                    </Attribute>
+                </Grid>
+                <Grid Name="quad_and_tri" GridType="Uniform">
+                    <Geometry GeometryType="XYZ">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+                    </Geometry>
+                    <Topology TopologyType="Mixed" NumberOfElements="2">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_quad_and_tri"]</DataItem>
+                    </Topology>
+                    <Attribute Name="point_data_scalar" AttributeType="Scalar" Center="Node">
+                        <DataItem Dimensions="5" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0</DataItem>
+                    </Attribute>
+                    <Attribute Name="cell_data_scalar" AttributeType="Scalar" Center="Cell">
+                        <DataItem Dimensions="2" NumberType="Float" Format="XML" Precision="8">1.0000000000000000e1 2.0000000000000000e1</DataItem>
+                    </Attribute>
+                </Grid>
+                <Time Value="0"/>
+            </Grid>
+        </Grid>
+        <DataItem Name="coords" Dimensions="5 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 2.0000000000000000e0 5.0000000000000000e-1 0.0000000000000000e0</DataItem>
+        <DataItem Name="connectivity_quad_only" Dimensions="5" NumberType="UInt" Format="XML" Precision="8">5 0 1 2 3</DataItem>
+        <DataItem Name="connectivity_quad_and_tri" Dimensions="9" NumberType="UInt" Format="XML" Precision="8">5 0 1 2 3 4 1 2 4</DataItem>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="0.1.3"/>
+</Xdmf>"#;
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
+    // std::fs::copy(xdmf_file, "write_xdmf_with_blocks.xdmf2").unwrap();
+
+    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}
+
+#[test]
+fn write_xdmf_with_blocks_connectivity_written_once() {
+    // Regression test: a block's connectivity data must be written exactly once, and referenced
+    // by every time step's grid, rather than being re-embedded (and thus duplicated) per time step.
+    let node_coords = [
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    let connectivity = [0, 1, 2, 3];
+    let cell_types = [xdmf::CellType::Quadrilateral];
+    let quad: BTreeSet<usize> = [0].into();
+    let blocks = [("quad", &quad)];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    let mut xdmf_writer = xdmf_writer
+        .write_mesh_with_blocks(&node_coords, (&connectivity, &cell_types), &blocks)
+        .unwrap();
+
+    let cell_data_vals: xdmf::Values = vec![1.0].into();
+    let cell_data = [(
+        "cell_data_scalar",
+        xdmf::DataAttribute::Scalar,
+        &cell_data_vals,
+    )];
+
+    for t in 0..5 {
+        xdmf_writer
+            .write_data(&t.to_string(), [], cell_data)
+            .unwrap();
+    }
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    // the raw connectivity data must appear exactly once, regardless of the number of time steps
+    assert_eq!(read_xdmf.matches("5 0 1 2 3").count(), 1);
+    // ... but it must be referenced by every one of the 5 time steps
+    assert_eq!(
+        read_xdmf
+            .matches(r#"<DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_quad"]</DataItem>"#)
+            .count(),
+        5
+    );
 }
