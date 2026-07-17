@@ -1,3 +1,6 @@
+[workspace]
+members = ["python"]
+
 [package]
 authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]

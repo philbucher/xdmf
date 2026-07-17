@@ -51,7 +51,7 @@ impl DataWriter for AsciiInlineWriter {
         &mut self,
         _name: &str,
         _center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         Ok(values_to_string(data).into())
     }
@@ -150,7 +150,7 @@ impl DataWriter for AsciiWriter {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         let time = self
             .write_time
@@ -254,14 +254,14 @@ where
     writeln!(writer)
 }
 
-fn values_to_string(data: &Values) -> String {
+fn values_to_string(data: &Values<'_>) -> String {
     match data {
         Values::F64(v) => array_to_string_fmt(v),
         Values::U64(v) => array_to_string_fmt(v),
     }
 }
 
-fn values_to_writer(data: &Values, writer: &mut impl Write) -> IoResult<()> {
+fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> IoResult<()> {
     match data {
         Values::F64(v) => array_to_writer_fmt(v, writer),
         Values::U64(v) => array_to_writer_fmt(v, writer),
@@ -338,21 +338,21 @@ mod tests {
 
     #[test]
     fn values_to_string_multiple_types() {
-        let data_f64 = Values::F64(vec![1.0, 2.0, 3.0]);
+        let data_f64: Values = vec![1.0, 2.0, 3.0].into();
         let result_f64 = values_to_string(&data_f64);
         assert_eq!(
             result_f64,
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
         );
 
-        let data_u64 = Values::U64(vec![1_u64, 2, 3]);
+        let data_u64: Values = vec![1_u64, 2, 3].into();
         let result_u64 = values_to_string(&data_u64);
         assert_eq!(result_u64, "1 2 3");
     }
 
     #[test]
     fn values_to_writer_multiple_types() {
-        let data_f64 = Values::F64(vec![1.0, 2.0, 3.0]);
+        let data_f64: Values = vec![1.0, 2.0, 3.0].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_f64, &mut buffer).unwrap();
         assert_eq!(
@@ -360,7 +360,7 @@ mod tests {
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0\n"
         );
 
-        let data_u64 = Values::U64(vec![1_u64, 2, 3]);
+        let data_u64: Values = vec![1_u64, 2, 3].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_u64, &mut buffer).unwrap();
         assert_eq!(String::from_utf8(buffer).unwrap(), "1 2 3\n");
@@ -414,7 +414,7 @@ mod tests {
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0]),
+            &vec![1.0, 2.0].into(),
         );
         assert_eq!(
             res_write.unwrap_err().to_string(),
@@ -507,7 +507,7 @@ mod tests {
             .write_data(
                 point_data_name,
                 attribute::Center::Node,
-                &Values::F64(data_points),
+                &data_points.into(),
             )
             .unwrap();
 
@@ -520,7 +520,7 @@ mod tests {
             .write_data(
                 "some_cell_data",
                 attribute::Center::Cell,
-                &Values::F64(data_cells),
+                &data_cells.into(),
             )
             .unwrap();
         assert!(data_file_points.exists());

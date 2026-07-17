@@ -1,5 +1,7 @@
 //! This module contains the wrapper type for using a common interface for different data types.
 
+use std::borrow::Cow;
+
 use crate::{
     DataAttribute,
     xdmf_elements::{
@@ -9,11 +11,16 @@ use crate::{
 };
 
 /// Wrapper around different types of data, used to provide a unified interface.
-pub enum Values {
+///
+/// Backed by [`Cow`] rather than an owned `Vec`, so callers that already have the data in a
+/// borrowed slice (e.g. a numpy buffer borrowed from Python) can wrap it via `From<&[f64]>`/
+/// `From<&[u64]>` without copying. `From<Vec<f64>>`/`From<Vec<u64>>` are still available for
+/// owned data and work for any `'a` (owned data has no borrow to satisfy).
+pub enum Values<'a> {
     /// vector of f64 values
-    F64(Vec<f64>),
+    F64(Cow<'a, [f64]>),
     /// vector of u64 values
-    U64(Vec<u64>),
+    U64(Cow<'a, [u64]>),
 }
 
 mod private {
@@ -27,56 +34,68 @@ mod private {
 /// here, without growing [`Values`]'s public accessor surface.
 pub trait ValueType: private::Sealed + Sized {
     #[doc(hidden)]
-    fn as_slice(values: &Values) -> Option<&[Self]>;
+    fn as_slice<'v>(values: &'v Values<'_>) -> Option<&'v [Self]>;
     #[doc(hidden)]
-    fn as_mut_slice(values: &mut Values) -> Option<&mut [Self]>;
+    fn as_mut_slice<'v>(values: &'v mut Values<'_>) -> Option<&'v mut [Self]>;
 }
 
 impl ValueType for f64 {
-    fn as_slice(values: &Values) -> Option<&[Self]> {
+    fn as_slice<'v>(values: &'v Values<'_>) -> Option<&'v [Self]> {
         match values {
             Values::F64(v) => Some(v),
             Values::U64(_) => None,
         }
     }
 
-    fn as_mut_slice(values: &mut Values) -> Option<&mut [Self]> {
+    fn as_mut_slice<'v>(values: &'v mut Values<'_>) -> Option<&'v mut [Self]> {
         match values {
-            Values::F64(v) => Some(v),
+            Values::F64(v) => Some(v.to_mut()),
             Values::U64(_) => None,
         }
     }
 }
 
 impl ValueType for u64 {
-    fn as_slice(values: &Values) -> Option<&[Self]> {
+    fn as_slice<'v>(values: &'v Values<'_>) -> Option<&'v [Self]> {
         match values {
             Values::F64(_) => None,
             Values::U64(v) => Some(v),
         }
     }
 
-    fn as_mut_slice(values: &mut Values) -> Option<&mut [Self]> {
+    fn as_mut_slice<'v>(values: &'v mut Values<'_>) -> Option<&'v mut [Self]> {
         match values {
             Values::F64(_) => None,
-            Values::U64(v) => Some(v),
+            Values::U64(v) => Some(v.to_mut()),
         }
     }
 }
 
-impl From<Vec<f64>> for Values {
+impl<'a> From<Vec<f64>> for Values<'a> {
     fn from(vec: Vec<f64>) -> Self {
-        Self::F64(vec)
+        Self::F64(Cow::Owned(vec))
     }
 }
 
-impl From<Vec<u64>> for Values {
+impl<'a> From<Vec<u64>> for Values<'a> {
     fn from(vec: Vec<u64>) -> Self {
-        Self::U64(vec)
+        Self::U64(Cow::Owned(vec))
     }
 }
 
-impl Values {
+impl<'a> From<&'a [f64]> for Values<'a> {
+    fn from(slice: &'a [f64]) -> Self {
+        Self::F64(Cow::Borrowed(slice))
+    }
+}
+
+impl<'a> From<&'a [u64]> for Values<'a> {
+    fn from(slice: &'a [u64]) -> Self {
+        Self::U64(Cow::Borrowed(slice))
+    }
+}
+
+impl<'a> Values<'a> {
     pub(crate) fn precision(&self, format: Format) -> u8 {
         match self {
             Self::F64(_) => 8,
@@ -127,14 +146,14 @@ impl Values {
     /// Gather the entries at `indices` (each `stride` elements wide) into a new `Values`,
     /// preserving variant and order. Used to slice per-entity (e.g. per-cell) data down to
     /// the subset belonging to a single block, without needing any XDMF-level windowing.
-    pub(crate) fn gather<'a>(
+    pub(crate) fn gather<'idx>(
         &self,
         stride: usize,
-        indices: impl IntoIterator<Item = &'a usize>,
+        indices: impl IntoIterator<Item = &'idx usize>,
     ) -> Self {
         match self {
-            Self::F64(v) => Self::F64(gather_strided(v, stride, indices)),
-            Self::U64(v) => Self::U64(gather_strided(v, stride, indices)),
+            Self::F64(v) => Self::F64(Cow::Owned(gather_strided(v, stride, indices))),
+            Self::U64(v) => Self::U64(Cow::Owned(gather_strided(v, stride, indices))),
         }
     }
 }
@@ -206,7 +225,7 @@ mod tests {
         let values: Values = vec![10.0, 11.0, 12.0, 13.0].into();
         let gathered = values.gather(1, &[2, 0]);
         match gathered {
-            Values::F64(v) => assert_eq!(v, vec![12.0, 10.0]),
+            Values::F64(v) => assert_eq!(v.into_owned(), vec![12.0, 10.0]),
             Values::U64(_) => panic!("expected F64"),
         }
     }
@@ -217,7 +236,7 @@ mod tests {
         let values: Values = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0].into();
         let gathered = values.gather(2, &[2, 2, 0]);
         match gathered {
-            Values::F64(v) => assert_eq!(v, vec![4.0, 5.0, 4.0, 5.0, 0.0, 1.0]),
+            Values::F64(v) => assert_eq!(v.into_owned(), vec![4.0, 5.0, 4.0, 5.0, 0.0, 1.0]),
             Values::U64(_) => panic!("expected F64"),
         }
     }
@@ -227,7 +246,7 @@ mod tests {
         let values: Values = vec![1_u64, 2, 3, 4].into();
         let gathered = values.gather(1, &[3, 1]);
         match gathered {
-            Values::U64(v) => assert_eq!(v, vec![4, 2]),
+            Values::U64(v) => assert_eq!(v.into_owned(), vec![4, 2]),
             Values::F64(_) => panic!("expected U64"),
         }
     }

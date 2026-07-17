@@ -78,7 +78,7 @@ pub(crate) trait DataWriter {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent>;
 
     fn write_data_initialize(&mut self, _time: &str) -> IoResult<()> {

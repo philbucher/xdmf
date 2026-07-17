@@ -528,11 +528,11 @@ impl TimeSeriesDataWriter {
     ///         .expect("failed to write time step data");
     /// }
     /// ```
-    pub fn write_data<'a>(
+    pub fn write_data<'a, 'v: 'a>(
         &mut self,
         time: &str,
-        point_data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values)>,
-        cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values)>,
+        point_data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values<'v>)>,
+        cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values<'v>)>,
     ) -> IoResult<()> {
         // Collected into `BTreeMap`s (keyed on name) so that output ordering is deterministic
         // regardless of the order the caller happens to iterate in.
@@ -689,8 +689,8 @@ impl TimeSeriesDataWriter {
     fn validate_data(
         &self,
         time: &str,
-        point_data: &BTreeMap<&str, (DataAttribute, &Values)>,
-        cell_data: &BTreeMap<&str, (DataAttribute, &Values)>,
+        point_data: &BTreeMap<&str, (DataAttribute, &Values<'_>)>,
+        cell_data: &BTreeMap<&str, (DataAttribute, &Values<'_>)>,
     ) -> IoResult<()> {
         // check if time can be parsed as a float
         if time.parse::<f64>().is_err() {
@@ -735,7 +735,7 @@ fn build_attribute(
     display_name: &str,
     center: attribute::Center,
     data_attr: DataAttribute,
-    vals: &Values,
+    vals: &Values<'_>,
 ) -> IoResult<attribute::Attribute> {
     let data_item = DataItem {
         name: None,
@@ -758,7 +758,7 @@ fn build_attribute(
 
 // check sizes of point_data and cell_data
 fn check_data_size(
-    data_input: &BTreeMap<&str, (DataAttribute, &Values)>,
+    data_input: &BTreeMap<&str, (DataAttribute, &Values<'_>)>,
     num_entities: usize,
     label: &str,
 ) -> IoResult<()> {
@@ -780,10 +780,10 @@ fn check_data_size(
 
 // Collect a flat iterator of (name, attribute, values) into a `BTreeMap` keyed on name,
 // rejecting a name used more than once instead of silently keeping the last occurrence.
-fn collect_data<'a>(
-    data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values)>,
+fn collect_data<'a, 'v: 'a>(
+    data: impl IntoIterator<Item = (&'a str, DataAttribute, &'a Values<'v>)>,
     label: &str,
-) -> IoResult<BTreeMap<&'a str, (DataAttribute, &'a Values)>> {
+) -> IoResult<BTreeMap<&'a str, (DataAttribute, &'a Values<'v>)>> {
     let mut map = BTreeMap::new();
 
     for (name, attr, values) in data {
@@ -799,7 +799,7 @@ fn collect_data<'a>(
 }
 
 fn validate_data_name(
-    data_input: &BTreeMap<&str, (DataAttribute, &Values)>,
+    data_input: &BTreeMap<&str, (DataAttribute, &Values<'_>)>,
     label: &str,
 ) -> IoResult<()> {
     for name in data_input.keys() {
@@ -1738,7 +1738,7 @@ mod tests {
                 &mut self,
                 name: &str,
                 _center: attribute::Center,
-                _data: &crate::values::Values,
+                _data: &crate::values::Values<'_>,
             ) -> IoResult<DataContent> {
                 Ok(DataContent::Raw(format!("data_for_{name}")))
             }

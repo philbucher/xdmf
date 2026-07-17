@@ -108,7 +108,7 @@ impl DataWriter for BinaryWriter {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         let time = self
             .write_time
@@ -179,7 +179,7 @@ fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write) -> IoResult<()> {
     Ok(())
 }
 
-fn values_to_writer(data: &Values, writer: &mut impl Write) -> IoResult<()> {
+fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> IoResult<()> {
     match data {
         Values::F64(v) => write_f64_le(v, writer),
         Values::U64(v) => write_u64_as_u32_le(v, writer),
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn values_to_writer_multiple_types() {
-        let data_f64 = Values::F64(vec![1.0, 2.0]);
+        let data_f64: Values = vec![1.0, 2.0].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_f64, &mut buffer).unwrap();
         let mut expected = Vec::new();
@@ -235,7 +235,7 @@ mod tests {
         expected.extend_from_slice(&2.0_f64.to_le_bytes());
         assert_eq!(buffer, expected);
 
-        let data_u64 = Values::U64(vec![1_u64, 2]);
+        let data_u64: Values = vec![1_u64, 2].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_u64, &mut buffer).unwrap();
         let mut expected = Vec::new();
@@ -362,7 +362,7 @@ mod tests {
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0]),
+            &vec![1.0, 2.0].into(),
         );
         assert_eq!(
             res_write.unwrap_err().to_string(),

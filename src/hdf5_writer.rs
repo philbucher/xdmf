@@ -109,7 +109,7 @@ impl DataWriter for SingleFileHdf5Writer {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         let time = self
             .write_time
@@ -255,7 +255,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         // also double check that the name does not already exist
 
@@ -325,7 +325,7 @@ fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<(Strin
     Ok((dataset_points.name(), dataset_cells.name()))
 }
 
-fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<String> {
+fn write_values(group: &H5Group, dataset_name: &str, vals: &Values<'_>) -> IoResult<String> {
     let data_set = match vals {
         Values::F64(_) => group.new_dataset::<f64>(),
         Values::U64(_) => group.new_dataset::<u64>(),
@@ -337,8 +337,8 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values) -> IoResult<
         .map_err(IoError::other)?;
 
     match vals {
-        Values::F64(v) => data_set.write(v).map_err(IoError::other)?,
-        Values::U64(v) => data_set.write(v).map_err(IoError::other)?,
+        Values::F64(v) => data_set.write(&v[..]).map_err(IoError::other)?,
+        Values::U64(v) => data_set.write(&v[..]).map_err(IoError::other)?,
     };
 
     Ok(data_set.name())
@@ -488,7 +488,7 @@ mod tests {
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0]),
+            &vec![1.0, 2.0].into(),
         );
         assert_eq!(
             res_write.unwrap_err().to_string(),
@@ -524,7 +524,7 @@ mod tests {
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0]),
+            &vec![1.0, 2.0].into(),
         );
         assert_eq!(
             res_write.unwrap_err().to_string(),
@@ -652,7 +652,7 @@ mod tests {
             .write_data(
                 "dummy_point_data",
                 attribute::Center::Node,
-                &Values::F64(data_points.clone()),
+                &data_points.clone().into(),
             )
             .unwrap();
 
@@ -662,7 +662,7 @@ mod tests {
             .write_data(
                 "some_cell_data",
                 attribute::Center::Cell,
-                &Values::F64(data_cells.clone()),
+                &data_cells.clone().into(),
             )
             .unwrap();
 
@@ -715,7 +715,7 @@ mod tests {
             .write_data(
                 "dummy_point_data",
                 attribute::Center::Node,
-                &Values::F64(data_points.clone()),
+                &data_points.clone().into(),
             )
             .unwrap();
 
@@ -725,7 +725,7 @@ mod tests {
             .write_data(
                 "some_cell_data",
                 attribute::Center::Cell,
-                &Values::F64(data_cells.clone()),
+                &data_cells.clone().into(),
             )
             .unwrap();
 

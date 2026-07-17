@@ -1,3 +1,9 @@
 Cargo.lock
 /target
 tests/xdmf_vtk_comparison
+
+# python bindings (python/)
+python/.venv
+python/.pytest_cache
+python/**/__pycache__
+python/*.egg-info
