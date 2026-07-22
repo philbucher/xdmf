@@ -2,23 +2,69 @@
 
 use pyo3::prelude::*;
 
-/// Heavy-data storage format. HDF5 storage is intentionally not exposed here yet (see
-/// `PYTHON_BINDINGS_PLAN.md`).
-#[pyclass(name = "DataStorage", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq)]
-pub enum PyDataStorage {
-    Ascii,
-    AsciiInline,
-    Binary,
+/// Heavy-data storage format. `Hdf5SingleFile`/`Hdf5MultipleFiles` are plain attributes for the
+/// default (library-chosen) deflate compression level; use `hdf5_single_file(level)`/
+/// `hdf5_multiple_files(level)` to pick a specific level (0-9) instead.
+#[pyclass(name = "DataStorage", from_py_object)]
+#[derive(Clone, Copy)]
+pub struct PyDataStorage(pub(crate) xdmf::DataStorage);
+
+#[pymethods]
+impl PyDataStorage {
+    #[classattr]
+    #[allow(non_snake_case, reason = "matches Python constant naming convention")]
+    fn Ascii() -> Self {
+        Self(xdmf::DataStorage::Ascii)
+    }
+
+    #[classattr]
+    #[allow(non_snake_case, reason = "matches Python constant naming convention")]
+    fn AsciiInline() -> Self {
+        Self(xdmf::DataStorage::AsciiInline)
+    }
+
+    #[classattr]
+    #[allow(non_snake_case, reason = "matches Python constant naming convention")]
+    fn Hdf5SingleFile() -> Self {
+        Self(xdmf::DataStorage::Hdf5SingleFile { deflate_level: None })
+    }
+
+    #[classattr]
+    #[allow(non_snake_case, reason = "matches Python constant naming convention")]
+    fn Hdf5MultipleFiles() -> Self {
+        Self(xdmf::DataStorage::Hdf5MultipleFiles { deflate_level: None })
+    }
+
+    #[classattr]
+    #[allow(non_snake_case, reason = "matches Python constant naming convention")]
+    fn Binary() -> Self {
+        Self(xdmf::DataStorage::Binary)
+    }
+
+    /// HDF5, all data in a single file, with a custom zlib/deflate compression level (0-9).
+    #[staticmethod]
+    fn hdf5_single_file(deflate_level: u8) -> Self {
+        Self(xdmf::DataStorage::Hdf5SingleFile {
+            deflate_level: Some(deflate_level),
+        })
+    }
+
+    /// HDF5, one file per time step, with a custom zlib/deflate compression level (0-9).
+    #[staticmethod]
+    fn hdf5_multiple_files(deflate_level: u8) -> Self {
+        Self(xdmf::DataStorage::Hdf5MultipleFiles {
+            deflate_level: Some(deflate_level),
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.0)
+    }
 }
 
 impl From<PyDataStorage> for xdmf::DataStorage {
     fn from(value: PyDataStorage) -> Self {
-        match value {
-            PyDataStorage::Ascii => Self::Ascii,
-            PyDataStorage::AsciiInline => Self::AsciiInline,
-            PyDataStorage::Binary => Self::Binary,
-        }
+        value.0
     }
 }
 

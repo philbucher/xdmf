@@ -1,0 +1,69 @@
+name: ParaView compatibility
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  paraview-smoke-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # kept in sync with the versions manually verified against (see the
+        # `paraview-install-locations` note and CFD_BENCHMARK_PLAN.md).
+        paraview-version: [ "v5.13.3", "v6.1.1" ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system HDF5
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libhdf5-dev
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Build and install the xdmf python bindings
+      working-directory: python
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install "maturin>=1,<2" numpy
+        maturin develop --release
+
+    - name: Write ParaView smoke-test fixture
+      working-directory: python
+      run: |
+        source .venv/bin/activate
+        python ../tests/paraview_smoke/write_fixture.py "$RUNNER_TEMP/paraview_smoke"
+
+    - name: Pull ParaView CI image
+      run: docker pull "kitware/paraview-for-ci:${{ matrix.paraview-version }}"
+
+    - name: Verify fixture opens correctly in ParaView
+      run: |
+        docker run --rm \
+          -v "$RUNNER_TEMP/paraview_smoke:/fixture:ro" \
+          -v "${{ github.workspace }}/tests/paraview_smoke:/scripts:ro" \
+          "kitware/paraview-for-ci:${{ matrix.paraview-version }}" \
+          bash -c '
+            set -euo pipefail
+            pvpython=/opt/paraview/install/bin/pvpython
+            if [ ! -x "$pvpython" ]; then
+              pvpython=$(find /opt -maxdepth 6 -name pvpython -type f 2>/dev/null | head -n1)
+            fi
+            if [ -z "$pvpython" ]; then
+              echo "pvpython not found in kitware/paraview-for-ci:${{ matrix.paraview-version }}" >&2
+              exit 1
+            fi
+            "$pvpython" /scripts/verify_with_pvpython.py /fixture/expected.json
+          '

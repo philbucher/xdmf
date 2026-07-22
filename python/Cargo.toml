@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 numpy = "0.29.0"
 pyo3 = { version = "0.29.0", features = ["extension-module"] }
-# HDF5 storage is intentionally excluded from the Python bindings for now (avoids requiring
-# CMake to build the wheel, see PYTHON_BINDINGS_PLAN.md) -- default-features off drops it.
-xdmf = { version = "0.1.3", path = "..", default-features = false }
+# `default-features = false` + explicit `features = ["hdf5"]` (rather than just leaving the
+# crate's own default on) so a future default-feature addition on the core crate doesn't get
+# silently pulled into the wheel unnoticed.
+xdmf = { version = "0.1.3", path = "..", default-features = false, features = ["hdf5"] }

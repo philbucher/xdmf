@@ -1,5 +1,9 @@
 # Python bindings for `xdmf` via pyo3/maturin
 
+**Status: implemented and verified (uncommitted).** This doc now reflects what was actually
+built, not just the original plan — see the "Deviations from the original plan" section for the
+one place implementation diverged.
+
 ## Context
 
 The `xdmf` crate currently only has a Rust API. The user wants a Python interface,
@@ -10,19 +14,30 @@ this matters most for per-timestep attribute data, since mesh geometry/connectiv
 written once but attribute data is written repeatedly (once per timestep), so it's the
 hot path for the benchmark.
 
-Decisions already confirmed with the user:
+Decisions confirmed with the user before implementation:
 - Bindings live in a **separate workspace crate** (`python/`), not a feature flag on
   the core crate — keeps `xdmf` on crates.io free of pyo3/numpy deps.
-- The core crate's `Values` type will be **refactored to borrow** (`Cow`-backed,
+- The core crate's `Values` type was **refactored to borrow** (`Cow`-backed,
   lifetime-parameterized) so attribute data can be passed from Python with zero copies.
-- **HDF5 storage is out of scope for this first cut** (avoids the CMake/static-linking
-  build complexity discussed earlier) — only `Ascii`, `AsciiInline`, `Binary` are
-  exposed to Python for now.
+- **HDF5 storage was out of scope for the first cut** (avoids the CMake/static-linking
+  build complexity discussed earlier) — only `Ascii`, `AsciiInline`, `Binary` were
+  initially exposed to Python. **Update (2026-07-18): wired up.** The concern turned out to
+  only bite the `static` (build-from-source) linking mode; this machine already has
+  `libhdf5-dev` installed system-wide, so `hdf5-metno`'s default (dynamic, `pkg-config`
+  based) linking needs no CMake at all. `python/Cargo.toml` now depends on
+  `xdmf` with `features = ["hdf5"]` (still `default-features = false`, so a future
+  default-feature addition on the core crate doesn't get silently pulled into the wheel),
+  and `PyDataStorage` (`python/src/enums.rs`) gained `Hdf5SingleFile`/`Hdf5MultipleFiles`
+  variants. No other code changes were needed — `TimeSeriesWriter`/`TimeSeriesDataWriter`
+  are already generic over `DataWriter`. Covered by two new tests in
+  `python/tests/test_basic.py` (`h5py` via `pytest.importorskip`, so it's not a hard test
+  dependency). Distributing a portable wheel (one that doesn't require the end user to have
+  system HDF5 installed) would still need the `static` feature + CMake — not done, since
+  this was about enabling local/dev use, not packaging.
 
-## Part 1 — Core crate: make `Values` borrow-capable
+## Part 1 — Core crate: make `Values` borrow-capable — DONE
 
-`src/values.rs`: change `Values` to `Values<'a>`, backed by `Cow<'a, [f64]>` /
-`Cow<'a, [u64]>` instead of owned `Vec`s:
+`src/values.rs`: `Values` is now `Values<'a>`, backed by `Cow<'a, [f64]>` / `Cow<'a, [u64]>`:
 
 ```rust
 pub enum Values<'a> {
@@ -31,98 +46,112 @@ pub enum Values<'a> {
 }
 ```
 
-- Keep `From<Vec<f64>>` / `From<Vec<u64>>` (→ `Cow::Owned`) so existing Rust callers
-  are source-compatible modulo the lifetime annotation.
-- Add `From<&'a [f64]>` / `From<&'a [u64]>` (→ `Cow::Borrowed`) — this is what the
-  Python binding will use to wrap a numpy buffer with no copy.
-- `ValueType::as_slice`/`as_mut_slice`, `dimensions`, `number_type`, `len`, `precision`,
-  `gather` bodies are essentially unchanged (`Cow` derefs to `[T]`); `gather` keeps
-  building a new owned `Vec` internally (`Cow::Owned`), which is valid for any `'a`.
-  Note in `as_mut_slice`'s doc comment that in-place mutation on a *borrowed* `Values`
-  will clone-on-write (only owned `Values` get the "no reallocation" guarantee).
-- Propagate `Values<'_>` through: `DataWriter::write_data`, `ascii_writer.rs`,
-  `binary_writer.rs`, `hdf5_writer.rs` (`write_data` signatures), and
-  `time_series_writer.rs` (`collect_data`, `check_data_size`, `validate_data_name`,
-  `build_attribute`, `TimeSeriesDataWriter::write_data`, `validate_data`) — mechanical
-  `&Values` → `&Values<'_>` / `&'a Values` → `&'a Values<'v>` fixups.
-- Fix doctests in `time_series_writer.rs`/`lib.rs`, `README.md`'s example, and
-  `tests/*.rs` the same way.
-- Verify with `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`
-  (both default and `--no-default-features`) before moving on — this refactor must land
-  clean on its own before the Python crate is added.
+- `From<Vec<f64>>` / `From<Vec<u64>>` (→ `Cow::Owned`) kept for existing Rust callers.
+- `From<&'a [f64]>` / `From<&'a [u64]>` (→ `Cow::Borrowed`) added — used by the Python
+  binding to wrap a numpy buffer with no copy.
+- `ValueType::as_slice`/`as_mut_slice` needed an explicit named lifetime on the *outer*
+  reference (`fn as_slice<'v>(values: &'v Values<'_>) -> Option<&'v [Self]>`) — plain
+  elision doesn't work here because `&Values<'_>` has two lifetime positions (the `&`
+  and `Values`'s own param), so the compiler can't auto-pick which one the return
+  borrows from. `as_mut_slice` uses `v.to_mut()` (clone-on-write for a borrowed `Values`).
+- `gather` wraps its result in `Cow::Owned(..)`; `write_data`/`collect_data` in
+  `time_series_writer.rs` needed a second lifetime param with an explicit `'v: 'a` bound
+  (a `&'a Values<'v>` requires the data to outlive the reference to it).
+- Propagated `Values<'_>` through `DataWriter::write_data`, `ascii_writer.rs`,
+  `binary_writer.rs`, `hdf5_writer.rs`, and `time_series_writer.rs`'s helpers.
+  `let x: Values = ...` local bindings (tests, doctests) needed **no** changes — lifetime
+  elision in `let` type annotations resolves via inference, unlike item signatures.
+- One non-obvious fixup: `hdf5_writer.rs`'s `data_set.write(v)` where `v` is now
+  `&Cow<[T]>` doesn't compile via deref coercion (works for concrete `&[T]` params, not
+  generic trait-bounded ones) — needed explicit `&v[..]`.
 
-## Part 2 — Workspace + crate scaffold
+**Verified**: `cargo build`/`test`/`clippy -- -D warnings` clean under both default
+(`hdf5` on) and `--no-default-features`. 130 tests + 4 doctests passing.
 
-- Add `[workspace]` / `members = ["python"]` to the root `Cargo.toml` (the root package
-  stays the workspace root package too — this doesn't affect `cargo publish` for it).
-- `python/Cargo.toml`: package `xdmf-python`, `publish = false`,
-  `[lib] crate-type = ["cdylib"]`, deps: `xdmf = { path = ".." }`, `pyo3` (latest 0.2x,
-  `extension-module` feature), `numpy` (matching pyo3 version).
-- `python/pyproject.toml`: `build-backend = "maturin"`, project name `xdmf`,
-  `dependencies = ["numpy>=1.21"]`. Pure-extension layout (module *is* the compiled
-  `.so`) — no `.pyi` stub package for this first cut (fast-follow).
+## Part 2 — Workspace + crate scaffold — DONE
 
-## Part 3 — Bindings (`python/src/`)
+- Root `Cargo.toml` gained `[workspace] members = ["python"]`.
+- `python/Cargo.toml`: package `xdmf-python`, `publish = false`, `[lib] name = "xdmf"`
+  (so the compiled artifact importable name is `xdmf`, matching the `pyproject.toml`
+  project name), `crate-type = ["cdylib"]`. Deps resolved via `cargo add`:
+  **pyo3 0.29.0** (`extension-module` feature) and **numpy 0.29.0** (versions track each
+  other). `xdmf = { path = "..", default-features = false }` — confirmed this actually
+  excludes `hdf5-metno`/CMake from the wheel build (`cargo build -p xdmf-python` alone,
+  which is what `maturin` invokes, does not compile `hdf5-metno`; `cargo build
+  --workspace` *does* pull it in, because feature-unification unions the root package's
+  own default-on `hdf5` feature across all primary targets in that one invocation — a
+  harmless `--workspace`-only quirk, not a wheel-build problem).
+- `python/pyproject.toml`: maturin backend, project name `xdmf`, dep `numpy>=1.21`,
+  pure-extension layout (no `.pyi` stubs).
+- Tested locally via a venv at `python/.venv` (gitignored, along with
+  `.pytest_cache`/`__pycache__`/`*.egg-info`) with `maturin`, `numpy`, `pytest` installed.
 
-Expose, mirroring the Rust API shape:
-- `DataStorage` (Ascii / AsciiInline / Binary only).
-- `CellType` — mirrors `xdmf::CellType` (already `#[repr(u8)]` with explicit VTK
-  discriminants in `src/xdmf_elements.rs`), exposed as a Python int-enum.
-- `DataAttribute` — Scalar/Vector/Tensor/Tensor6 as constants, `Matrix(rows, cols)` and
-  `Generic(size)` as static-method constructors (they carry data, so a plain enum
-  doesn't fit).
-- `TimeSeriesWriter` — wraps `Option<xdmf::TimeSeriesWriter>`. `write_mesh` /
-  `write_mesh_with_blocks` do `self.inner.take()` (Rust's `write_mesh` consumes
-  `self`), returning a `TimeSeriesDataWriter`; calling either twice raises a clear
-  Python exception instead of a Rust move error.
-- `TimeSeriesDataWriter` — wraps `xdmf::TimeSeriesDataWriter` directly (`write_data`
-  takes `&mut self` in Rust, no consumption, so this is a plain mutable pyclass).
+## Part 3 — Bindings (`python/src/`) — DONE
 
-**Numpy → Rust, zero-copy path:**
-- `points` and attribute float data: require a contiguous 1D `float64` numpy array,
-  use `PyReadonlyArray1<f64>::as_slice()` to get `&[f64]` directly — matches the
-  existing flat-layout Rust API (`&coords`, `Values::F64(Cow::Borrowed(..))`).
-- `connectivity` / uint attribute data: accept **either** `uint64` (direct
-  zero-copy) or `int64` (also zero-copy, via an O(n) sign-check pass — same cost as
-  the pass we'd need anyway to write the bytes — then bit-reinterpret as `u64`, since
-  indices/counts are never negative). This matters because numpy's default integer
-  dtype is signed `int64` on Linux/Mac, so requiring `uint64` would force users into an
-  `.astype()` copy on the most common path. Negative values produce a clear
-  `ValueError`, not silent wraparound.
-- Arrays that aren't C-contiguous are **rejected with a clear error** (e.g. "call
-  `np.ascontiguousarray()`"), not silently copied — silent copying would be a perf trap
-  given the whole point is predictable zero-copy behavior.
-- `cell_types`: accept a plain Python sequence of `CellType`/`int` (small array
-  relative to the rest of the mesh data in typical cases; a per-element validating
-  conversion to `Vec<CellType>` is fine here and is not the hot path).
-- Release the GIL (`py.allow_threads`) around the actual `write_mesh`/`write_data`
-  call, after slice extraction — writing (disk I/O, and for `Binary`, the u32-narrowing
-  pass) shouldn't block other Python threads. Slices borrowed via `PyReadonlyArray`
-  remain valid without the GIL (pyo3-numpy's borrow tracking is independent of GIL
-  state) — verify this holds under `maturin develop` with a quick concurrent-write
-  smoke test before relying on it.
-- `IoError` → `PyErr`: map `ErrorKind::InvalidInput` to `PyValueError`, everything else
-  to `PyIOError`, via a small `From`/helper conversion used at every `?` boundary.
+Files: `error.rs` (IoError → PyErr), `enums.rs` (`DataStorage`, `CellType`,
+`DataAttribute`), `arrays.rs` (`FloatArray`, `UintArray`, `ValueGuard` — the numpy
+conversion layer), `writer.rs` (`PyTimeSeriesWriter`, `PyTimeSeriesDataWriter`), `lib.rs`
+(`#[pymodule] fn xdmf`).
 
-## Part 4 — Verification
+- `DataStorage`/`CellType`: fieldless `#[pyclass(eq, eq_int, from_py_object)]` enums.
+  `CellType` discriminants mirror `xdmf::CellType` exactly. (`from_py_object` needed
+  explicitly — pyo3 0.29 deprecated the implicit auto-derived `FromPyObject` for
+  `Clone` pyclasses in favor of opt-in.)
+- `DataAttribute`: wrapper struct (`Matrix`/`Generic` carry data, so not a plain enum) —
+  `SCALAR`/`VECTOR`/`TENSOR`/`TENSOR6` class attributes, `.matrix(rows, cols)` /
+  `.generic(size)` static methods.
+- `PyTimeSeriesWriter` wraps `Option<xdmf::TimeSeriesWriter>`, `.take()`s itself on
+  `write_mesh`/`write_mesh_with_blocks` (Rust's consuming API); a second call raises
+  `RuntimeError`. Both pyclasses are `#[pyclass(unsendable)]` (see deviation below).
+- Zero-copy numpy path (`arrays.rs`): `FloatArray` requires contiguous `float64`.
+  `UintArray` accepts `uint64` (borrowed as-is) or `int64` (borrowed, after an O(n) sign
+  check + bit-reinterpret to `u64` — `numpy`'s default int dtype is signed `int64`, so
+  requiring `uint64` would force a copy on the common path). Non-contiguous arrays raise
+  `ValueError` rather than being silently copied. `ValueGuard` unifies both for
+  `write_data`'s attribute arrays (tries `FloatArray` first, then `UintArray`).
+- `cell_types` takes `Vec<PyCellType>` (actual `xdmf.CellType` enum members) — **not**
+  bare ints as originally sketched; dropped for scope, see follow-ups.
+- `IoError` → `PyErr`: `ErrorKind::InvalidInput` → `PyValueError`, else `PyIOError`.
 
-1. `cargo build --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
-   / `cargo test --workspace`.
-2. `maturin develop --release` inside `python/` to build+install into the active venv.
-3. `python/tests/test_basic.py` (pytest): write a small mesh + a few timesteps of
-   point/cell data using numpy arrays (mirroring the existing Rust doctest example),
-   assert on the produced `.xdmf2`/data files; cover the error paths (wrong dtype,
-   non-contiguous array, mismatched sizes, negative int64 index).
-4. Re-verify the produced file actually loads in ParaView via `pvpython`
-   (`/home/philipp/software/ParaView-5.13.2-MPI-Linux-Python3.10-x86_64/bin/pvpython`),
-   the same headless approach used earlier to catch the `Format::Binary` reader bug —
-   worth reusing here since it's the ground truth for "does this actually work."
-5. Optional smoke comparison: a short script writing a sizeable mesh via
-   `xdmf.TimeSeriesWriter` vs. `pyvista`, just to sanity-check the zero-copy path is
-   actually faster before the user runs their own benchmark.
+## Part 4 — Verification — DONE
 
-## Out of scope (this pass)
+1. `cargo build -p xdmf-python` / `cargo clippy -p xdmf-python --all-targets` — clean,
+   zero warnings.
+2. `maturin develop --release` inside `python/.venv` — builds and installs.
+3. `python/tests/test_basic.py` (pytest, 8 tests, all passing): mesh + timestep data via
+   numpy arrays (Binary and Ascii storage), `int64` connectivity accepted, negative
+   `int64` rejected, wrong dtype (`float32`) rejected, non-contiguous array rejected,
+   double `write_mesh` rejected, `write_mesh_with_blocks`.
+4. Re-verified against the real ParaView install
+   (`/home/philipp/software/ParaView-5.13.2-MPI-Linux-Python3.10-x86_64/bin/pvpython`):
+   wrote a hexahedron mesh + 3 timesteps of point/cell data via the Python API, loaded it
+   headlessly — correct point/cell counts, correct and distinct `height`/`cell_id`
+   values per timestep.
+5. Optional pyvista smoke comparison — **not run** (pyvista not installed; left for the
+   user, this was explicitly optional).
 
-- HDF5 storage from Python (needs the static-linking work discussed earlier).
+## Deviations from the original plan
+
+- **GIL is not released during writes.** The plan called for `py.allow_threads(...)`
+  (now named `py.detach(...)` in pyo3 0.29) around the actual `write_mesh`/`write_data`
+  call. This doesn't compile: `xdmf::TimeSeriesWriter`/`TimeSeriesDataWriter` contain a
+  `Box<dyn DataWriter>`, and `dyn DataWriter` (no `+ Send` bound) isn't `Send`, which
+  `detach`'s `Ungil` bound requires for anything crossing it. Fixing this means adding
+  `Send` as a supertrait on the crate-private `DataWriter` trait in `src/lib.rs` — true
+  for all four current writer impls (`AsciiWriter`, `AsciiInlineWriter`, `BinaryWriter`
+  are trivially `Send`; the two HDF5 writers need checking), but it's a change to a
+  trait also used by the `hdf5` feature build, so it wasn't made in passing. Writes
+  currently run under the GIL — correct, just not maximally concurrent with other
+  Python threads.
+
+## Follow-ups (not done, either dropped for scope or genuinely out of scope)
+
+- Release the GIL during writes (needs the `DataWriter: Send` change above).
+- `cell_types` currently only accepts `xdmf.CellType` enum members, not a numpy
+  `uint8` array of codes or bare ints — fine for typical meshes (this array is rarely
+  the dominant cost) but worth adding if profiling says otherwise.
+- Portable wheel distribution of HDF5 storage (needs the `static` feature + CMake so end
+  users don't need system HDF5 installed) — local/dev use is already wired up, see above.
 - `.pyi` type stubs / a mixed pure-Python wrapper package.
 - 2D (`N, 3`) convenience array shapes for points (flat 1D only, matches Rust layout).
+- Run the pyvista comparison benchmark.

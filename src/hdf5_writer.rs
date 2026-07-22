@@ -20,15 +20,23 @@ const DATA: &str = "data";
 const POINTS: &str = "points";
 const CELLS: &str = "cells";
 
+// zlib/deflate compression level used when `DataStorage::Hdf5{SingleFile,MultipleFiles}`'s
+// `deflate_level` is `None`. Benchmarked against 6 (zlib's own default) and 9 (max): on noisy,
+// realistic field data (see CFD_BENCHMARK_PLAN.md) level 3 writes ~30% faster for only ~1.3%
+// larger output, while 9 is strictly worse everywhere. 3 costs more size on unrealistically
+// smooth/structured data, but write speed matters more for the common case.
+pub(crate) const DEFAULT_DEFLATE_LEVEL: u8 = 3;
+
 pub(crate) struct SingleFileHdf5Writer {
     h5_file: H5File,
     h5_file_name: PathBuf,
     write_time: Option<String>,
+    deflate_level: u8,
 }
 
 /// TODO show file hierarchy, and how data is structured
 impl SingleFileHdf5Writer {
-    pub(crate) fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
+    pub(crate) fn new(file_name: impl AsRef<Path>, deflate_level: u8) -> IoResult<Self> {
         let h5_file_name_full = file_name.as_ref().to_path_buf().with_extension("h5");
 
         if let Some(parent) = h5_file_name_full.parent() {
@@ -48,6 +56,7 @@ impl SingleFileHdf5Writer {
             h5_file,
             h5_file_name: h5_file_name.into(),
             write_time: None,
+            deflate_level,
         })
     }
 }
@@ -58,7 +67,9 @@ impl DataWriter for SingleFileHdf5Writer {
     }
 
     fn data_storage(&self) -> DataStorage {
-        DataStorage::Hdf5SingleFile
+        DataStorage::Hdf5SingleFile {
+            deflate_level: Some(self.deflate_level),
+        }
     }
 
     fn write_mesh(
@@ -72,7 +83,8 @@ impl DataWriter for SingleFileHdf5Writer {
 
         let mesh_group = self.h5_file.create_group(MESH).map_err(IoError::other)?;
 
-        let (data_name_points, data_name_cells) = write_mesh(&mesh_group, points, cells)?;
+        let (data_name_points, data_name_cells) =
+            write_mesh(&mesh_group, points, cells, self.deflate_level)?;
 
         Ok((
             full_path(&self.h5_file_name, &data_name_points).into(),
@@ -97,6 +109,8 @@ impl DataWriter for SingleFileHdf5Writer {
         let dataset_block = blocks_group
             .new_dataset::<u64>()
             .shape(cells.len())
+            .shuffle()
+            .deflate(self.deflate_level)
             .create(name)
             .map_err(IoError::other)?;
 
@@ -133,6 +147,7 @@ impl DataWriter for SingleFileHdf5Writer {
             &self.h5_file.group(group_name).map_err(IoError::other)?,
             name,
             data,
+            self.deflate_level,
         )?;
 
         Ok(full_path(&self.h5_file_name, &data_path).into())
@@ -168,10 +183,11 @@ pub(crate) struct MultipleFilesHdf5Writer {
     // Kept open (rather than dropped at the end of `write_mesh`) so that
     // `write_mesh_block` can add further datasets (e.g. submesh blocks) to the same file.
     mesh_file: Option<H5File>,
+    deflate_level: u8,
 }
 
 impl MultipleFilesHdf5Writer {
-    pub(crate) fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
+    pub(crate) fn new(file_name: impl AsRef<Path>, deflate_level: u8) -> IoResult<Self> {
         let h5_files_dir = file_name.as_ref().to_path_buf().with_extension("h5");
 
         h5_files_dir.file_name().ok_or_else(|| {
@@ -187,6 +203,7 @@ impl MultipleFilesHdf5Writer {
             h5_files_dir,
             h5_data_file: None,
             mesh_file: None,
+            deflate_level,
         })
     }
 }
@@ -197,7 +214,9 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 
     fn data_storage(&self) -> DataStorage {
-        DataStorage::Hdf5MultipleFiles
+        DataStorage::Hdf5MultipleFiles {
+            deflate_level: Some(self.deflate_level),
+        }
     }
 
     fn write_mesh(
@@ -208,7 +227,8 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(IoError::other)?;
 
-        let (data_name_points, data_name_cells) = write_mesh(&h5_file, points, cells)?;
+        let (data_name_points, data_name_cells) =
+            write_mesh(&h5_file, points, cells, self.deflate_level)?;
 
         let rel_file_name = parent_and_filename(&file_name)
             .ok_or_else(|| IoError::other("Could not get parent and file name"))?;
@@ -240,6 +260,8 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let dataset_block = blocks_group
             .new_dataset::<u64>()
             .shape(cells.len())
+            .shuffle()
+            .deflate(self.deflate_level)
             .create(name)
             .map_err(IoError::other)?;
 
@@ -275,6 +297,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
             &data_file.group(group_name).map_err(IoError::other)?,
             name,
             data,
+            self.deflate_level,
         )?;
 
         let rel_file_name = parent_and_filename(data_file.filename())
@@ -305,10 +328,17 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 }
 
-fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<(String, String)> {
+fn write_mesh(
+    group: &H5Group,
+    points: &[f64],
+    cells: &[u64],
+    deflate_level: u8,
+) -> IoResult<(String, String)> {
     let dataset_points = group
         .new_dataset::<f64>()
         .shape(points.len())
+        .shuffle()
+        .deflate(deflate_level)
         .create(POINTS)
         .map_err(IoError::other)?;
 
@@ -317,6 +347,8 @@ fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<(Strin
     let dataset_cells = group
         .new_dataset::<u64>()
         .shape(cells.len())
+        .shuffle()
+        .deflate(deflate_level)
         .create(CELLS)
         .map_err(IoError::other)?;
 
@@ -325,7 +357,12 @@ fn write_mesh(group: &H5Group, points: &[f64], cells: &[u64]) -> IoResult<(Strin
     Ok((dataset_points.name(), dataset_cells.name()))
 }
 
-fn write_values(group: &H5Group, dataset_name: &str, vals: &Values<'_>) -> IoResult<String> {
+fn write_values(
+    group: &H5Group,
+    dataset_name: &str,
+    vals: &Values<'_>,
+    deflate_level: u8,
+) -> IoResult<String> {
     let data_set = match vals {
         Values::F64(_) => group.new_dataset::<f64>(),
         Values::U64(_) => group.new_dataset::<u64>(),
@@ -333,6 +370,8 @@ fn write_values(group: &H5Group, dataset_name: &str, vals: &Values<'_>) -> IoRes
 
     let data_set = data_set
         .shape(vals.dimensions(crate::DataAttribute::Scalar).0)
+        .shuffle()
+        .deflate(deflate_level)
         .create(dataset_name)
         .map_err(IoError::other)?;
 
@@ -402,7 +441,7 @@ mod tests {
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0, 1, 2];
 
-        let (data_name_points, data_name_cells) = write_mesh(&group, &points, &cells).unwrap();
+        let (data_name_points, data_name_cells) = write_mesh(&group, &points, &cells, 6).unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -442,8 +481,8 @@ mod tests {
         let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
         let vec_u64 = vec![10_u64, 20, 30, 40, 50, 60];
 
-        let f64_path = write_values(&group, "test_f64", &vec_f64.clone().into()).unwrap();
-        let u64_path = write_values(&group, "test_u64", &vec_u64.clone().into()).unwrap();
+        let f64_path = write_values(&group, "test_f64", &vec_f64.clone().into(), 6).unwrap();
+        let u64_path = write_values(&group, "test_u64", &vec_u64.clone().into(), 6).unwrap();
 
         assert_eq!(f64_path, "/test_group/test_f64");
         assert_eq!(u64_path, "/test_group/test_u64");
@@ -475,7 +514,7 @@ mod tests {
     fn single_files_hdf5_writer_write_data_init_fin() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let mut writer = SingleFileHdf5Writer::new(file_name).unwrap();
+        let mut writer = SingleFileHdf5Writer::new(file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
 
         assert!(writer.write_time.is_none());
 
@@ -512,7 +551,7 @@ mod tests {
     fn mutliple_files_hdf5_writer_write_data_init_fin() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let mut writer = MultipleFilesHdf5Writer::new(&file_name).unwrap();
+        let mut writer = MultipleFilesHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         assert!(writer.h5_data_file.is_none());
 
         let res_fin = writer.write_data_finalize();
@@ -555,7 +594,7 @@ mod tests {
     fn single_file_hdf5_writer_new() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let writer = SingleFileHdf5Writer::new(&file_name).unwrap();
+        let writer = SingleFileHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         let exp_file_name = file_name.with_extension("h5");
         assert!(exp_file_name.exists());
         assert_eq!(writer.h5_file.filename(), exp_file_name.to_string_lossy());
@@ -566,7 +605,7 @@ mod tests {
     fn mutliple_files_hdf5_writer_new() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let writer = MultipleFilesHdf5Writer::new(&file_name).unwrap();
+        let writer = MultipleFilesHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         let exp_dir_name = file_name.with_extension("h5");
         assert_eq!(writer.h5_files_dir, exp_dir_name);
         assert!(writer.h5_files_dir.exists());
@@ -578,7 +617,7 @@ mod tests {
     fn single_file_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let mut writer = SingleFileHdf5Writer::new(&file_name).unwrap();
+        let mut writer = SingleFileHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         let h5_file = file_name.with_extension("h5");
 
         let points = vec![0.0, 1.0, 2.0];
@@ -615,7 +654,7 @@ mod tests {
     fn mutliple_files_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let mut writer = MultipleFilesHdf5Writer::new(file_name).unwrap();
+        let mut writer = MultipleFilesHdf5Writer::new(file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         let mesh_file = writer.h5_files_dir.join("mesh.h5");
         assert!(!mesh_file.exists());
 
@@ -640,7 +679,7 @@ mod tests {
     fn single_file_hdf5_writer_write_data() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let mut writer = SingleFileHdf5Writer::new(&file_name).unwrap();
+        let mut writer = SingleFileHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         let h5_file = file_name.with_extension("h5");
         let write_time = "12.258";
 
@@ -701,7 +740,7 @@ mod tests {
     fn mutliple_files_hdf5_writer_write_data() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
-        let mut writer = MultipleFilesHdf5Writer::new(file_name).unwrap();
+        let mut writer = MultipleFilesHdf5Writer::new(file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
         let write_time = "12.258";
         let data_file = writer.h5_files_dir.join(format!("data_t_{write_time}.h5"));
         assert!(!data_file.exists());

@@ -58,6 +58,72 @@ def test_write_mesh_and_data_binary(tmp_path):
     assert struct.unpack("<2I", region_bytes) == (100, 200)
 
 
+def test_write_mesh_and_data_hdf5_single_file(tmp_path):
+    file_path, data_writer = _write_small_mesh(tmp_path, xdmf.DataStorage.Hdf5SingleFile)
+
+    temperature = np.array([10.0, 11.0, 12.0, 13.0], dtype=np.float64)
+    region_id = np.array([100, 200], dtype=np.uint64)
+
+    data_writer.write_data(
+        "0",
+        [("temperature", xdmf.DataAttribute.SCALAR, temperature)],
+        [("region_id", xdmf.DataAttribute.SCALAR, region_id)],
+    )
+    del data_writer
+
+    xdmf_file = file_path.with_suffix(".xdmf2")
+    xml = xdmf_file.read_text()
+    assert 'Format="HDF"' in xml
+    assert 'test_output.h5:data/t_0/point_data/temperature' in xml
+    assert 'test_output.h5:data/t_0/cell_data/region_id' in xml
+
+    h5py = pytest.importorskip("h5py")
+    with h5py.File(file_path.with_suffix(".h5")) as f:
+        np.testing.assert_array_equal(f["data/t_0/point_data/temperature"][:], temperature)
+        np.testing.assert_array_equal(f["data/t_0/cell_data/region_id"][:], region_id)
+
+
+def test_write_mesh_and_data_hdf5_multiple_files(tmp_path):
+    file_path, data_writer = _write_small_mesh(tmp_path, xdmf.DataStorage.Hdf5MultipleFiles)
+
+    temperature = np.array([10.0, 11.0, 12.0, 13.0], dtype=np.float64)
+    data_writer.write_data(
+        "0", [("temperature", xdmf.DataAttribute.SCALAR, temperature)], []
+    )
+    del data_writer
+
+    xdmf_file = file_path.with_suffix(".xdmf2")
+    xml = xdmf_file.read_text()
+    assert 'Format="HDF"' in xml
+
+    h5py = pytest.importorskip("h5py")
+    h5_dir = file_path.with_suffix(".h5")
+    with h5py.File(h5_dir / "data_t_0.h5") as f:
+        np.testing.assert_array_equal(f["point_data/temperature"][:], temperature)
+
+
+def test_write_mesh_and_data_hdf5_custom_deflate_level(tmp_path):
+    file_path, data_writer = _write_small_mesh(
+        tmp_path, xdmf.DataStorage.hdf5_single_file(3)
+    )
+
+    temperature = np.array([10.0, 11.0, 12.0, 13.0], dtype=np.float64)
+    data_writer.write_data(
+        "0", [("temperature", xdmf.DataAttribute.SCALAR, temperature)], []
+    )
+    del data_writer
+
+    xdmf_file = file_path.with_suffix(".xdmf2")
+    assert "deflate_level: Some(3)" in xdmf_file.read_text()
+
+    h5py = pytest.importorskip("h5py")
+    with h5py.File(file_path.with_suffix(".h5")) as f:
+        dataset = f["data/t_0/point_data/temperature"]
+        assert dataset.compression == "gzip"
+        assert dataset.compression_opts == 3
+        np.testing.assert_array_equal(dataset[:], temperature)
+
+
 def test_write_mesh_and_data_ascii(tmp_path):
     file_path, data_writer = _write_small_mesh(tmp_path, xdmf.DataStorage.Ascii)
 

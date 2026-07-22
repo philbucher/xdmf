@@ -125,14 +125,16 @@ mod tests {
                 OutputType::XdmfAsciiInline => {
                     TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::AsciiInline).unwrap()
                 }
-                OutputType::XdmfH5Single => {
-                    TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::Hdf5SingleFile)
-                        .unwrap()
-                }
-                OutputType::XdmfH5Multiple => {
-                    TimeSeriesWriter::new(&self.file_name, xdmf::DataStorage::Hdf5MultipleFiles)
-                        .unwrap()
-                }
+                OutputType::XdmfH5Single => TimeSeriesWriter::new(
+                    &self.file_name,
+                    xdmf::DataStorage::Hdf5SingleFile { deflate_level: None },
+                )
+                .unwrap(),
+                OutputType::XdmfH5Multiple => TimeSeriesWriter::new(
+                    &self.file_name,
+                    xdmf::DataStorage::Hdf5MultipleFiles { deflate_level: None },
+                )
+                .unwrap(),
                 _ => {
                     panic!("Unsupported XDMF type: {:?}", self.output_type);
                 }
