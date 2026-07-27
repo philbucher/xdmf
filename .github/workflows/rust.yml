@@ -17,29 +17,29 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    name: "Building and testing with default features: ${{ matrix.default_features }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        default_features: [YES, NO]
+
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
-    - name: Check formatting
-      run: |
-        rustup component add rustfmt --toolchain nightly
-        cargo +nightly fmt --all --check
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: clippy
 
-    - name: Run clippy (no default features)
-      run: |
-        cargo clippy --all-targets --no-default-features -- -D warnings
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "features-${{ matrix.default_features }}"
 
-    - name: Run tests (debug mode, no default features)
-      run: |
-        rustup show active-toolchain
-        cargo test --no-default-features
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest
 
-    - name: Run tests (release mode, no default features)
-      run: |
-        rustup show active-toolchain
-        cargo test --release --no-default-features
-
-    - name: Install dependencies
+    - name: Install feature dependencies
+      if: ${{ matrix.default_features == 'YES' }}
       run: |
         sudo apt-get remove -y man-db || true # to speed up
         sudo apt-get update
@@ -47,17 +47,50 @@ jobs:
 
     - name: Run clippy
       run: |
-        cargo clippy --all-targets -- -D warnings
+        if [ "${{ matrix.default_features }}" == 'YES' ]; then
+          cargo clippy --all-targets -- -D warnings
+        else
+          cargo clippy --all-targets --no-default-features -- -D warnings
+        fi
 
     - name: Run tests (debug mode)
       run: |
-        rustup show active-toolchain
-        cargo test
+        if [ "${{ matrix.default_features }}" == 'YES' ]; then
+          cargo nextest run
+        else
+          cargo nextest run --no-default-features
+        fi
 
     - name: Run tests (release mode)
       run: |
-        rustup show active-toolchain
-        cargo test --release
+        if [ "${{ matrix.default_features }}" == 'YES' ]; then
+          cargo nextest run --release
+        else
+          cargo nextest run --no-default-features --release
+        fi
 
-    - name: Check Docs
+    - name: Run doc tests # nextest does not support doc tests, thus running them separately
+      run: |
+        if [ "${{ matrix.default_features }}" == 'YES' ]; then
+          cargo test --doc
+        else
+          cargo test --no-default-features --doc
+        fi
+
+    - name: Check Docs # docs need dependencies to be installed, thus checking them after installing dependencies
+      if: ${{ matrix.default_features == 'YES' }}
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
+
+  formatting:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: nightly
+        components: rustfmt
+
+    - name: Check formatting
+      run: cargo +nightly fmt --all --check
