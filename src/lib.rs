@@ -38,9 +38,19 @@ pub enum DataStorage {
     /// store the data in ASCII format, but inline in the XDMF file. This is only recommended for small datasets.
     AsciiInline,
     /// store the data in HDF5 format, all data in a single HDF5 file.
-    Hdf5SingleFile,
+    Hdf5SingleFile {
+        /// zlib/deflate compression level applied to every dataset (0 = none, 9 = max).
+        /// `None` uses the library default (currently 3, chosen for write speed over
+        /// compression ratio).
+        deflate_level: Option<u8>,
+    },
     /// store the data in HDF5 format, one file per time step.
-    Hdf5MultipleFiles,
+    Hdf5MultipleFiles {
+        /// zlib/deflate compression level applied to every dataset (0 = none, 9 = max).
+        /// `None` uses the library default (currently 3, chosen for write speed over
+        /// compression ratio).
+        deflate_level: Option<u8>,
+    },
 }
 
 impl FromStr for DataStorage {
@@ -50,9 +60,15 @@ impl FromStr for DataStorage {
         match s.to_lowercase().as_str() {
             "ascii" => Ok(Self::Ascii),
             "asciiinline" | "ascii_inline" | "ascii-inline" => Ok(Self::AsciiInline),
-            "hdf5singlefile" | "hdf5_single_file" | "hdf5-single-file" => Ok(Self::Hdf5SingleFile),
+            "hdf5singlefile" | "hdf5_single_file" | "hdf5-single-file" => {
+                Ok(Self::Hdf5SingleFile {
+                    deflate_level: None,
+                })
+            }
             "hdf5multiplefiles" | "hdf5_multiple_files" | "hdf5-multiple-files" => {
-                Ok(Self::Hdf5MultipleFiles)
+                Ok(Self::Hdf5MultipleFiles {
+                    deflate_level: None,
+                })
             }
             _ => Err(format!(
                 "Invalid DataStorage variant: '{s}'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
@@ -99,27 +115,33 @@ pub(crate) fn create_writer(
     match data_storage {
         DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiWriter::new(file_name)?)),
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
-        DataStorage::Hdf5SingleFile => {
+        DataStorage::Hdf5SingleFile { deflate_level } => {
             #[cfg(feature = "hdf5")]
             {
-                Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(file_name)?))
+                Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
+                    file_name,
+                    deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
+                )?))
             }
             #[cfg(not(feature = "hdf5"))]
             {
+                let _ = deflate_level;
                 Err(IoError::other(
                     "Using Hdf5SingleFile DataStorage requires the hdf5 feature.",
                 ))
             }
         }
-        DataStorage::Hdf5MultipleFiles => {
+        DataStorage::Hdf5MultipleFiles { deflate_level } => {
             #[cfg(feature = "hdf5")]
             {
                 Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
                     file_name,
+                    deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
                 )?))
             }
             #[cfg(not(feature = "hdf5"))]
             {
+                let _ = deflate_level;
                 Err(IoError::other(
                     "Using Hdf5MultipleFiles DataStorage requires the hdf5 feature.",
                 ))
@@ -285,29 +307,41 @@ mod tests {
         // Test Hdf5SingleFile variants
         assert_eq!(
             "hdf5singlefile".parse::<DataStorage>().unwrap(),
-            DataStorage::Hdf5SingleFile
+            DataStorage::Hdf5SingleFile {
+                deflate_level: None
+            }
         );
         assert_eq!(
             "hdf5_single_file".parse::<DataStorage>().unwrap(),
-            DataStorage::Hdf5SingleFile
+            DataStorage::Hdf5SingleFile {
+                deflate_level: None
+            }
         );
         assert_eq!(
             "Hdf5-Single-File".parse::<DataStorage>().unwrap(),
-            DataStorage::Hdf5SingleFile
+            DataStorage::Hdf5SingleFile {
+                deflate_level: None
+            }
         );
 
         // Test Hdf5MultipleFiles variants
         assert_eq!(
             "hdf5multiplefiles".parse::<DataStorage>().unwrap(),
-            DataStorage::Hdf5MultipleFiles
+            DataStorage::Hdf5MultipleFiles {
+                deflate_level: None
+            }
         );
         assert_eq!(
             "hdf5_multiple_files".parse::<DataStorage>().unwrap(),
-            DataStorage::Hdf5MultipleFiles
+            DataStorage::Hdf5MultipleFiles {
+                deflate_level: None
+            }
         );
         assert_eq!(
             "HDF5-Multiple-Files".parse::<DataStorage>().unwrap(),
-            DataStorage::Hdf5MultipleFiles
+            DataStorage::Hdf5MultipleFiles {
+                deflate_level: None
+            }
         );
 
         // Test invalid input
