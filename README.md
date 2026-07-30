@@ -4,7 +4,7 @@ This crate implements the [xdmf](https://www.xdmf.org) file format for writing m
 
 The data storage is split into light and heavy data. The light data is metadata in xml-format, describing where and how the heavy data is stored. The heavy data can be stored in different formats. HDF is the preferred format, for space and time efficient data storage.
 
-A large advantage over VTK based formats is that data can be referenced. The mesh can be written only once, and then referenced for the visualization of time step data. This reduces the storage requirements and write times significatly.
+A large advantage over VTK based formats is that data can be referenced. The mesh can be written only once, and then referenced for the visualization of time step data. This reduces the storage requirements and write times significantly.
 
 <!--
 xdmf readers: <https://discourse.paraview.org/t/xmdf-reader-names-xdmf2-reader/4756> => using "xdmf2" file extension to use this reader
@@ -68,7 +68,7 @@ The xdmf format allows to separate the storing of light and heavy data. Differen
 
 ## Comparison with vtk/vtu
 
-Initial comparisons show smaller storage sizes as well as faster write times. The conclusions still have to be summarized here. In the meantime check [this file](./tests/vtk_comparison.rs) for a comparion.
+Initial comparisons show smaller storage sizes as well as faster write times. The conclusions still have to be summarized here. In the meantime check [this file](./tests/vtk_comparison.rs) for a comparison.
 
 ## General information
 
@@ -81,7 +81,7 @@ Initial comparisons show smaller storage sizes as well as faster write times. Th
 
 ## Roadmap / planned features
 
-- MPI suport <!-- (writing to one file => writing separate independent files can already work if file names passed have ranks) -->
+- MPI support <!-- (writing to one file => writing separate independent files can already work if file names passed have ranks) -->
 - SubMesh support, so that parts of the mesh can be visualized with the MultiBlock inspector
 - Reading files. Hopefully even concurrently, perhaps consuming to safe space.
 - Maybe binary support (could be nice for platforms that dont have HDF installed)

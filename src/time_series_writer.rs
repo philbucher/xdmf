@@ -3,7 +3,7 @@
 //! The mesh is written only once and then referenced in each time step.
 //! This is a significant advantage over VTK based formats, making it more efficient both in terms of storage size as well as write speed.
 //!
-//! The concept is insipred by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
+//! The concept is inspired by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -127,7 +127,7 @@ impl TimeSeriesWriter {
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
             attributes: vec![],
-            writen_times: HashSet::new(),
+            written_times: HashSet::new(),
             num_points,
             num_cells,
         };
@@ -235,7 +235,7 @@ pub struct TimeSeriesDataWriter {
     grid: Grid,
     data_items: Vec<DataItem>,
     attributes: Vec<(String, Vec<attribute::Attribute>)>,
-    writen_times: HashSet<String>,
+    written_times: HashSet<String>,
     num_points: usize,
     num_cells: usize,
 }
@@ -327,7 +327,7 @@ impl TimeSeriesDataWriter {
         create_attributes(cell_data, attribute::Center::Cell)?;
 
         self.attributes.push((time.to_string(), new_attributes));
-        self.writen_times.insert(time.to_string());
+        self.written_times.insert(time.to_string());
 
         self.writer.write_data_finalize()?;
 
@@ -401,7 +401,7 @@ impl TimeSeriesDataWriter {
         }
 
         // check if the time step has already been written
-        if self.writen_times.contains(time) {
+        if self.written_times.contains(time) {
             return Err(IoError::new(
                 InvalidInput,
                 format!("Time step '{time}' has already been written"),
@@ -1271,7 +1271,7 @@ mod tests {
             num_points: 0,
             num_cells: 0,
             attributes: Vec::new(),
-            writen_times: HashSet::new(),
+            written_times: HashSet::new(),
         };
 
         let point_data = vec![(
