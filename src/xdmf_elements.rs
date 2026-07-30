@@ -1,6 +1,6 @@
 //! This module contains the main XDMF elements along with their serialization logic.
 //!
-//! The official documentaion for these can be found [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
+//! The official documentation for these can be found [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
 
 use serde::{Deserialize, Serialize};
 

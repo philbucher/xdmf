@@ -1,8 +1,9 @@
 name: Rust
 
+permissions:
+  contents: read
+
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
@@ -12,10 +13,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CLICOLOR: 1
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     name: "Building and testing with default features: ${{ matrix.default_features }}"
     strategy:
@@ -83,6 +86,7 @@ jobs:
 
   formatting:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - uses: actions/checkout@v7
@@ -94,3 +98,13 @@ jobs:
 
     - name: Check formatting
       run: cargo +nightly fmt --all --check
+
+  spelling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Check spelling
+      uses: crate-ci/typos@v1.48.0

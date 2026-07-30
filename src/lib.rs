@@ -27,7 +27,7 @@ pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
 pub use values::Values;
 pub use xdmf_elements::CellType;
 
-/// Map for data, relates name to attribtue and values
+/// Map for data, relates name to attribute and values
 pub type DataMap = BTreeMap<String, (DataAttribute, Values)>;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
@@ -198,7 +198,7 @@ impl From<DataAttribute> for attribute::AttributeType {
             DataAttribute::Scalar => Self::Scalar,
             DataAttribute::Vector => Self::Vector,
             DataAttribute::Tensor => Self::Tensor,
-            DataAttribute::Tensor6 => Self::Matrix, // writen as Matrix to get detected as symmetric tensor
+            DataAttribute::Tensor6 => Self::Matrix, // written as Matrix to get detected as symmetric tensor
             DataAttribute::Matrix(_, _) => Self::Matrix,
             DataAttribute::Generic(_) => Self::Matrix,
         }

@@ -484,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn mutliple_files_hdf5_writer_write_data_init_fin() {
+    fn multiple_files_hdf5_writer_write_data_init_fin() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
@@ -538,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn mutliple_files_hdf5_writer_new() {
+    fn multiple_files_hdf5_writer_new() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let writer = MultipleFilesHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
@@ -587,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn mutliple_files_hdf5_writer_write_mesh() {
+    fn multiple_files_hdf5_writer_write_mesh() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
@@ -673,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn mutliple_files_hdf5_writer_write_data() {
+    fn multiple_files_hdf5_writer_write_data() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = MultipleFilesHdf5Writer::new(file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
