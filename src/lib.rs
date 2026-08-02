@@ -15,6 +15,7 @@ use xdmf_elements::{
 };
 
 mod ascii_writer;
+mod binary_writer;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
 
@@ -51,6 +52,8 @@ pub enum DataStorage {
         /// compression ratio).
         deflate_level: Option<u8>,
     },
+    /// store the data in uncompressed raw binary format, each set of data is stored in a separate file.
+    Binary,
 }
 
 impl FromStr for DataStorage {
@@ -70,8 +73,9 @@ impl FromStr for DataStorage {
                     deflate_level: None,
                 })
             }
+            "binary" => Ok(Self::Binary),
             _ => Err(format!(
-                "Invalid DataStorage variant: '{s}'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+                "Invalid DataStorage variant: '{s}'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
             )),
         }
     }
@@ -147,6 +151,7 @@ pub(crate) fn create_writer(
                 ))
             }
         }
+        DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
     }
 }
 
@@ -344,17 +349,27 @@ mod tests {
             }
         );
 
+        // Test Binary variant
+        assert_eq!(
+            "binary".parse::<DataStorage>().unwrap(),
+            DataStorage::Binary
+        );
+        assert_eq!(
+            "Binary".parse::<DataStorage>().unwrap(),
+            DataStorage::Binary
+        );
+
         // Test invalid input
         let err = "invalid".parse::<DataStorage>().unwrap_err();
         assert_eq!(
             err,
-            "Invalid DataStorage variant: 'invalid'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+            "Invalid DataStorage variant: 'invalid'. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
         );
 
         let err = "".parse::<DataStorage>().unwrap_err();
         assert_eq!(
             err,
-            "Invalid DataStorage variant: ''. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles'"
+            "Invalid DataStorage variant: ''. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
         );
     }
 }
