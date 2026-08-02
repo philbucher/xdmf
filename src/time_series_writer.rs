@@ -480,8 +480,9 @@ fn is_valid_data_name(name: &str) -> bool {
 
 /// Validate the file name for the XDMF file.
 fn validate_file_name(file_name: &Path) -> IoResult<()> {
-    // Ensure it's valid UTF-8
-    let Some(name) = file_name.to_str() else {
+    // Only validate the final path component, the parent directories are not under our control
+    // and may legitimately contain characters such as ':' (e.g. Windows drive letters).
+    let Some(name) = file_name.file_name().and_then(|name| name.to_str()) else {
         return Err(IoError::new(InvalidInput, "File name must be valid UTF-8"));
     };
 
