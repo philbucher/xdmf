@@ -57,32 +57,52 @@ jobs:
         fi
 
     - name: Run tests (debug mode)
-      run: |
-        if [ "${{ matrix.default_features }}" == 'YES' ]; then
-          cargo nextest run
-        else
-          cargo nextest run --no-default-features
-        fi
+      if: ${{ matrix.default_features == 'YES' }}
+      run: cargo nextest run
 
     - name: Run tests (release mode)
-      run: |
-        if [ "${{ matrix.default_features }}" == 'YES' ]; then
-          cargo nextest run --release
-        else
-          cargo nextest run --no-default-features --release
-        fi
+      if: ${{ matrix.default_features == 'YES' }}
+      run: cargo nextest run --release
 
     - name: Run doc tests # nextest does not support doc tests, thus running them separately
-      run: |
-        if [ "${{ matrix.default_features }}" == 'YES' ]; then
-          cargo test --doc
-        else
-          cargo test --no-default-features --doc
-        fi
+      if: ${{ matrix.default_features == 'YES' }}
+      run: cargo test --doc
 
     - name: Check Docs # docs need dependencies to be installed, thus checking them after installing dependencies
       if: ${{ matrix.default_features == 'YES' }}
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
+
+  test-cross-platform:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    name: "Testing on ${{ matrix.os }} (no default features)"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "cross-platform-${{ matrix.os }}"
+
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest
+
+    - name: Run tests (debug mode)
+      run: cargo nextest run --no-default-features
+
+    - name: Run tests (release mode)
+      run: cargo nextest run --no-default-features --release
+
+    - name: Run doc tests # nextest does not support doc tests, thus running them separately
+      run: cargo test --no-default-features --doc
 
   formatting:
     runs-on: ubuntu-latest
