@@ -86,13 +86,16 @@ impl TimeSeriesWriter {
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
 
+        let format = self.writer.format();
+
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
             dimensions: Some(Dimensions(vec![num_points, 3])),
             data: points_data,
             number_type: Some(NumberType::Float),
             precision: Some(8),
-            format: Some(self.writer.format()),
+            format: Some(format),
+            endian: format.endian(),
             reference: None,
         };
 
@@ -101,8 +104,9 @@ impl TimeSeriesWriter {
             dimensions: Some(Dimensions(vec![prepared_cells.len()])),
             number_type: Some(NumberType::UInt),
             data: cells_data,
-            format: Some(self.writer.format()),
-            precision: Some(8),
+            format: Some(format),
+            precision: Some(format.uint_precision()),
+            endian: format.endian(),
             reference: None,
         };
 
@@ -305,7 +309,8 @@ impl TimeSeriesDataWriter {
                         dimensions: Some(vals.dimensions(data.0)),
                         number_type: Some(vals.number_type()),
                         format: Some(format),
-                        precision: Some(vals.precision()),
+                        precision: Some(vals.precision(format)),
+                        endian: format.endian(),
                         data: self.writer.write_data(data_name, center, vals)?,
                         reference: None,
                     };
@@ -779,7 +784,6 @@ mod tests {
             ),
         );
 
-        assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
             "At least one point is required"
@@ -800,7 +804,6 @@ mod tests {
             ),
         );
 
-        assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
             "Points must have 3 dimensions"
@@ -821,7 +824,6 @@ mod tests {
             ),
         );
 
-        assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
             "Connectivity indices out of bounds for the given points, max index: 70, but number of points is 11"
@@ -843,7 +845,6 @@ mod tests {
             ),
         );
 
-        assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
             "Size of connectivities not match the expected number based on the cell types: 8 != 10"
