@@ -142,8 +142,8 @@ fn write_f64_le(vec: &[f64], writer: &mut impl Write) -> IoResult<()> {
     Ok(())
 }
 
-// Paraview's legacy Xdmf reader silently misreads 64-bit integers in `Format="Binary"` `DataItem`s: 
-// connectivity comes back empty and attribute data comes back with corrupted values. 
+// Paraview's legacy Xdmf reader silently misreads 64-bit integers in `Format="Binary"` `DataItem`s:
+// connectivity comes back empty and attribute data comes back with corrupted values.
 // Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
 // Values that don't fit in 32 bits are rejected rather than silently truncated.
 fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write) -> IoResult<()> {

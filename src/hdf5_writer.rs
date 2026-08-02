@@ -360,9 +360,11 @@ mod tests {
             parent_and_filename(Path::new("some/random/path/test.h5")).unwrap(),
             "path/test.h5"
         );
-        assert!(!parent_and_filename(Path::new("some/random/path/test.h5"))
-            .unwrap()
-            .contains('\\'));
+        assert!(
+            !parent_and_filename(Path::new("some/random/path/test.h5"))
+                .unwrap()
+                .contains('\\')
+        );
 
         assert!(parent_and_filename(Path::new("test.h5")).is_none(),);
     }

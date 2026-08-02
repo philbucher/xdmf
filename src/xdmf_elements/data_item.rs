@@ -158,7 +158,7 @@ pub enum Format {
 }
 
 impl Format {
-    /// Specify the endianess of the dataitem. Little by default to ensure OS-agnostic reading ad writing
+    /// Specify the endianness of the dataitem. Little by default to ensure OS-agnostic reading and writing
     pub(crate) fn endian(self) -> Option<Endian> {
         matches!(self, Self::Binary).then_some(Endian::Little)
     }
