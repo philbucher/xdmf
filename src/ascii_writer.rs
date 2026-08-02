@@ -80,6 +80,13 @@ impl AsciiWriter {
             write_time: None,
         })
     }
+
+    // Built with an explicit `/` rather than `PathBuf::join`/`to_string_lossy`, so the path
+    // embedded in the XDMF file is valid on every OS regardless of which OS wrote it (e.g. no
+    // backslashes from a Windows `PathBuf` ending up in a file read back on Linux).
+    fn relative_path(&self, file_name: &str) -> String {
+        format!("{}/{file_name}", self.folder_name.to_string_lossy())
+    }
 }
 
 impl DataWriter for AsciiWriter {
@@ -113,16 +120,8 @@ impl DataWriter for AsciiWriter {
         file_cells.flush()?;
 
         Ok((
-            XInclude::new(
-                self.folder_name.join(points_file_name).to_string_lossy(),
-                true,
-            )
-            .into(),
-            XInclude::new(
-                self.folder_name.join(cells_file_name).to_string_lossy(),
-                true,
-            )
-            .into(),
+            XInclude::new(self.relative_path(points_file_name), true).into(),
+            XInclude::new(self.relative_path(cells_file_name), true).into(),
         ))
     }
 
@@ -149,11 +148,7 @@ impl DataWriter for AsciiWriter {
         // explicitly flush the buffers to ensure all data is written and errors are caught
         data_file.flush()?;
 
-        Ok(XInclude::new(
-            self.folder_name.join(data_file_name).to_string_lossy(),
-            true,
-        )
-        .into())
+        Ok(XInclude::new(self.relative_path(&data_file_name), true).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -425,6 +420,15 @@ mod tests {
         assert!(writer.txt_files_dir.is_dir());
         assert!(writer.write_time.is_none());
         assert_eq!(writer.folder_name, PathBuf::from("test.txt"));
+    }
+
+    #[test]
+    fn relative_path_uses_forward_slash() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let writer = AsciiWriter::new(file_name).unwrap();
+        assert_eq!(writer.relative_path("data.txt"), "test.txt/data.txt");
+        assert!(!writer.relative_path("data.txt").contains('\\'));
     }
 
     #[test]

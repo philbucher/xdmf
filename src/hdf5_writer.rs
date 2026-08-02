@@ -87,9 +87,10 @@ impl DataWriter for SingleFileHdf5Writer {
         let (data_name_points, data_name_cells) =
             write_mesh(&mesh_group, points, cells, self.deflate_level)?;
 
+        let h5_file_name = self.h5_file_name.to_string_lossy();
         Ok((
-            full_path(&self.h5_file_name, &data_name_points).into(),
-            full_path(&self.h5_file_name, &data_name_cells).into(),
+            full_path(&h5_file_name, &data_name_points).into(),
+            full_path(&h5_file_name, &data_name_cells).into(),
         ))
     }
 
@@ -124,7 +125,7 @@ impl DataWriter for SingleFileHdf5Writer {
             self.deflate_level,
         )?;
 
-        Ok(full_path(&self.h5_file_name, &data_path).into())
+        Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_path).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
@@ -319,22 +320,21 @@ fn write_values(
     Ok(data_set.name())
 }
 
-fn parent_and_filename(path: impl AsRef<Path>) -> Option<PathBuf> {
+// Built with an explicit `/` rather than `PathBuf::join`/`to_string_lossy`, so the path
+// embedded in the XDMF file is valid on every OS regardless of which OS wrote it (e.g. no
+// backslashes from a Windows `PathBuf` ending up in a file read back on Linux).
+fn parent_and_filename(path: impl AsRef<Path>) -> Option<String> {
     let path = path.as_ref();
-    let parent = path.parent()?.file_name()?;
-    let file_name = path.file_name()?;
-    Some(Path::new(parent).join(file_name))
+    let parent = path.parent()?.file_name()?.to_string_lossy();
+    let file_name = path.file_name()?.to_string_lossy();
+    Some(format!("{parent}/{file_name}"))
 }
 
 // Path that is written to the xdmf file, specifying where the data is stored in the h5 file
 // it consists of the path to the h5 file and the location within the file, which are separated by a colon
 // e.g. /path/to/file.h5:mesh/points
-fn full_path(path: &Path, data_name: &str) -> String {
-    format!(
-        "{}{}",
-        path.to_string_lossy(),
-        data_name.replacen('/', ":", 1)
-    )
+fn full_path(path: &str, data_name: &str) -> String {
+    format!("{path}{}", data_name.replacen('/', ":", 1))
 }
 
 #[cfg(test)]
@@ -345,12 +345,12 @@ mod tests {
 
     #[test]
     fn full_path_works() {
-        let file_name = Path::new("some/random/path/test.h5");
+        let file_name = "some/random/path/test.h5";
         let data_name = "/test_group/test_data";
 
         assert_eq!(
             full_path(file_name, data_name),
-            file_name.to_string_lossy().to_string() + ":test_group/test_data"
+            format!("{file_name}:test_group/test_data")
         );
     }
 
@@ -358,8 +358,11 @@ mod tests {
     fn parent_and_filename_works() {
         assert_eq!(
             parent_and_filename(Path::new("some/random/path/test.h5")).unwrap(),
-            PathBuf::from("path/test.h5")
+            "path/test.h5"
         );
+        assert!(!parent_and_filename(Path::new("some/random/path/test.h5"))
+            .unwrap()
+            .contains('\\'));
 
         assert!(parent_and_filename(Path::new("test.h5")).is_none(),);
     }
