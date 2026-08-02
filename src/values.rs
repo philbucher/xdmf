@@ -2,7 +2,10 @@
 
 use crate::{
     DataAttribute,
-    xdmf_elements::{data_item::NumberType, dimensions::Dimensions},
+    xdmf_elements::{
+        data_item::{Format, NumberType},
+        dimensions::Dimensions,
+    },
 };
 
 /// Wrapper around different types of data, used to provide a unified interface.
@@ -26,10 +29,10 @@ impl From<Vec<u64>> for Values {
 }
 
 impl Values {
-    pub(crate) fn precision(&self) -> u8 {
+    pub(crate) fn precision(&self, format: Format) -> u8 {
         match self {
             Self::F64(_) => 8,
-            Self::U64(_) => 8,
+            Self::U64(_) => format.uint_precision(),
         }
     }
 
@@ -73,7 +76,8 @@ mod tests {
         matches!(values, Values::F64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
-        assert_eq!(values.precision(), 8);
+        assert_eq!(values.precision(Format::XML), 8);
+        assert_eq!(values.precision(Format::Binary), 8);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -100,7 +104,9 @@ mod tests {
         matches!(values, Values::U64(_));
 
         assert_eq!(values.number_type(), NumberType::UInt);
-        assert_eq!(values.precision(), 8);
+        assert_eq!(values.precision(Format::XML), 8);
+        assert_eq!(values.precision(Format::HDF), 8);
+        assert_eq!(values.precision(Format::Binary), 4);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
