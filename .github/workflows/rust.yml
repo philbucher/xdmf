@@ -17,14 +17,15 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
-    name: "Building and testing with default features: ${{ matrix.default_features }}"
+    name: "Building and testing on ${{ matrix.os }} (hdf5: ${{ matrix.hdf5 }})"
     strategy:
       fail-fast: false
       matrix:
-        default_features: [YES, NO]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        hdf5: [YES, NO]
 
     steps:
     - uses: actions/checkout@v7
@@ -35,74 +36,74 @@ jobs:
 
     - uses: Swatinem/rust-cache@v2
       with:
-        shared-key: "features-${{ matrix.default_features }}"
+        shared-key: "cross-platform-${{ matrix.os }}-${{ matrix.hdf5 }}"
 
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest
 
-    - name: Install feature dependencies
-      if: ${{ matrix.default_features == 'YES' }}
+    - name: Install HDF5 (apt)
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.hdf5 == 'YES' }}
       run: |
         sudo apt-get remove -y man-db || true # to speed up
         sudo apt-get update
         sudo apt-get install libhdf5-dev --no-install-recommends
 
-    - name: Run clippy
+    - name: Install HDF5 (Homebrew)
+      if: ${{ matrix.os == 'macos-latest' && matrix.hdf5 == 'YES' }}
       run: |
-        if [ "${{ matrix.default_features }}" == 'YES' ]; then
+        brew install hdf5
+        echo "HDF5_DIR=$(brew --prefix hdf5)" >> "$GITHUB_ENV"
+
+    - name: Install HDF5 (vcpkg)
+      if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' }}
+      shell: pwsh
+      run: |
+        vcpkg install hdf5:x64-windows
+        $hdf5Dir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+        echo "HDF5_DIR=$hdf5Dir" >> $env:GITHUB_ENV
+        echo "$hdf5Dir\bin" >> $env:GITHUB_PATH
+
+    - name: Run clippy
+      shell: bash
+      run: |
+        if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
           cargo clippy --all-targets -- -D warnings
         else
           cargo clippy --all-targets --no-default-features -- -D warnings
         fi
 
     - name: Run tests (debug mode)
-      if: ${{ matrix.default_features == 'YES' }}
-      run: cargo nextest run
+      shell: bash
+      run: |
+        if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
+          cargo nextest run
+        else
+          cargo nextest run --no-default-features
+        fi
 
     - name: Run tests (release mode)
-      if: ${{ matrix.default_features == 'YES' }}
-      run: cargo nextest run --release
+      shell: bash
+      run: |
+        if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
+          cargo nextest run --release
+        else
+          cargo nextest run --no-default-features --release
+        fi
 
     - name: Run doc tests # nextest does not support doc tests, thus running them separately
-      if: ${{ matrix.default_features == 'YES' }}
-      run: cargo test --doc
+      shell: bash
+      run: |
+        if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
+          cargo test --doc
+        else
+          cargo test --no-default-features --doc
+        fi
 
     - name: Check Docs # docs need dependencies to be installed, thus checking them after installing dependencies
-      if: ${{ matrix.default_features == 'YES' }}
+      if: ${{ matrix.hdf5 == 'YES' }}
+      shell: bash
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
-
-  test-cross-platform:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-
-    name: "Testing on ${{ matrix.os }} (no default features)"
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-
-    steps:
-    - uses: actions/checkout@v7
-
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
-
-    - uses: Swatinem/rust-cache@v2
-      with:
-        shared-key: "cross-platform-${{ matrix.os }}"
-
-    - uses: taiki-e/install-action@v2
-      with:
-        tool: nextest
-
-    - name: Run tests (debug mode)
-      run: cargo nextest run --no-default-features
-
-    - name: Run tests (release mode)
-      run: cargo nextest run --no-default-features --release
-
-    - name: Run doc tests # nextest does not support doc tests, thus running them separately
-      run: cargo test --no-default-features --doc
 
   formatting:
     runs-on: ubuntu-latest
