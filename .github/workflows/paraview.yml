@@ -1,0 +1,75 @@
+name: ParaView compatibility
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  paraview-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    name: "ParaView ${{ matrix.paraview-version }} (storage: ${{ matrix.storage }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        # see https://hub.docker.com/r/kitware/paraview-for-ci for available tags/usage
+        # example usage: https://github.com/Kitware/paraview-ci-example
+        # background: https://www.kitware.com/adding-ci-to-your-paraview-plugin-and-vtk-modules/
+        paraview-version: [ "v5.13.3", "v6.1.1" ]
+        storage: [ "Ascii", "AsciiInline", "Hdf5SingleFile", "Hdf5MultipleFiles", "Binary" ]
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "paraview-${{ matrix.storage }}"
+
+    - name: Install system HDF5 (apt)
+      if: contains(matrix.storage, 'Hdf5')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libhdf5-dev
+
+    - name: Build fixture-writer example
+      run: |
+        if [[ "${{ matrix.storage }}" == *Hdf5* ]]; then
+          cargo build --example paraview_smoke
+        else
+          cargo build --example paraview_smoke --no-default-features
+        fi
+
+    - name: Write ParaView smoke-test fixture
+      run: ./target/debug/examples/paraview_smoke "$RUNNER_TEMP/paraview_smoke" "${{ matrix.storage }}"
+
+    - name: Pull ParaView CI image
+      run: docker pull "kitware/paraview-for-ci:${{ matrix.paraview-version }}"
+
+    - name: Verify fixture opens correctly in ParaView
+      run: |
+        docker run --rm \
+          -v "$RUNNER_TEMP/paraview_smoke:/fixture:ro" \
+          -v "${{ github.workspace }}/tests/paraview_smoke:/scripts:ro" \
+          "kitware/paraview-for-ci:${{ matrix.paraview-version }}" \
+          bash -c '
+            set -euo pipefail
+            pvpython=/opt/paraview/install/bin/pvpython
+            if [ ! -x "$pvpython" ]; then
+              pvpython=$(find /opt -maxdepth 6 -name pvpython -type f 2>/dev/null | head -n1)
+            fi
+            if [ -z "$pvpython" ]; then
+              echo "pvpython not found in kitware/paraview-for-ci:${{ matrix.paraview-version }}" >&2
+              exit 1
+            fi
+            "$pvpython" /scripts/verify_with_pvpython.py /fixture/expected.json
+          '
