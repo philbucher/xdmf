@@ -75,6 +75,7 @@ Initial comparisons show smaller storage sizes as well as faster write times. Th
 - The node ordering is same as for [vtk](https://www.vtk.org/wp-content/uploads/2015/04/file-formats.pdf).
 - The focus is writing data that can be visualized with ParaView. Therefore, consistency checks were added to ensure that the data is correctly written.
 - The xdmf format seems does not seem to be actively developed any more. It will probably be superseded by [hdf-based vtk files](https://www.kitware.com/vtk-hdf-reader/). However, it can be assumed that xdmf will still be supported for a while by ParaView
+- `DataAttribute::Tensor6`, `DataAttribute::Matrix`, and `DataAttribute::Generic` data (written as XDMF's `AttributeType="Matrix"`) requires **ParaView >= 6.1 / VTK >= 9.6** to be read back correctly. Older versions misread the shape and merge every node's/cell's values into a single tuple, due to a change in VTK's XDMF2 reader ([Kitware/VTK@7199be5](https://github.com/Kitware/VTK/commit/7199be5854)). `Scalar`, `Vector`, and `Tensor` are unaffected and work on all ParaView versions.
 
 <!-- <https://www.kitware.com/how-to-write-time-dependent-data-in-vtkhdf-files/>
 <https://docs.vtk.org/en/latest/design_documents/VTKFileFormats.html#vtkhdf-file-format>  -->
