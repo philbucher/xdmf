@@ -39,7 +39,7 @@ fn write_xdmf() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&node_coords, (&connectivity, &cell_types))
+        .write_mesh(&node_coords, &connectivity, &cell_types)
         .unwrap();
 
     for i in 0..3 {
@@ -241,7 +241,7 @@ fn write_xdmf_only_mesh() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     xdmf_writer
-        .write_mesh(&node_coords, (&connectivity, &cell_types))
+        .write_mesh(&node_coords, &connectivity, &cell_types)
         .unwrap();
 
     let expected_xdmf = r#"
@@ -290,7 +290,7 @@ fn write_xdmf_only_point_mesh() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     xdmf_writer
-        .write_mesh(&node_coords, (&connectivity, &cell_types))
+        .write_mesh(&node_coords, &connectivity, &cell_types)
         .unwrap();
 
     let expected_xdmf = r#"
@@ -339,7 +339,7 @@ fn write_xdmf_point_mesh() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&node_coords, (&connectivity, &cell_types))
+        .write_mesh(&node_coords, &connectivity, &cell_types)
         .unwrap();
 
     for i in 0..3 {

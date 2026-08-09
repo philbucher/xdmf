@@ -32,7 +32,7 @@ let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
 let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
 
 // write the mesh
-let mut time_series_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types)).expect("failed to write mesh");
+let mut time_series_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types).expect("failed to write mesh");
 
 // the data buffers, reused across time steps: `Values` only borrows them
 let point_values = vec![0.0; 9];

@@ -35,7 +35,7 @@ fn write_and_verify_binary() {
     let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&coords, (&connectivity, &cell_types))
+        .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
     xdmf_writer
@@ -98,7 +98,7 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
 
     let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&coords, (&connectivity, &cell_types))
+        .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
     let res = xdmf_writer.write_data(

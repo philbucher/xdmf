@@ -67,23 +67,24 @@ impl TimeSeriesWriter {
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
-    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types));
+    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types);
     /// ```
     pub fn write_mesh(
         mut self,
         points: &[f64],
-        cells: (&[u64], &[CellType]),
+        connectivity: &[u64],
+        cell_types: &[CellType],
     ) -> IoResult<TimeSeriesDataWriter> {
-        validate_points_and_cells(points, cells)?;
+        validate_points_and_cells(points, connectivity, cell_types)?;
 
         let num_points = points.len() / 3;
-        let num_cells = if cells.1.is_empty() {
+        let num_cells = if cell_types.is_empty() {
             num_points
         } else {
-            cells.1.len()
+            cell_types.len()
         };
 
-        let (topo_type, prepared_cells) = prepare_cells(cells, num_points);
+        let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
 
@@ -144,7 +145,11 @@ impl TimeSeriesWriter {
 }
 
 // Validate that the points and cells are valid
-fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> IoResult<()> {
+fn validate_points_and_cells(
+    points: &[f64],
+    connectivity: &[u64],
+    cell_types: &[CellType],
+) -> IoResult<()> {
     // at least one point is required
     if points.is_empty() {
         return Err(IoError::new(InvalidInput, "At least one point is required"));
@@ -156,7 +161,7 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     }
 
     // check cells connectivity indices
-    let max_connectivity_index = cells.0.iter().max();
+    let max_connectivity_index = connectivity.iter().max();
 
     if let Some(&max_index) = max_connectivity_index
         && max_index as usize >= points.len() / 3
@@ -172,13 +177,13 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     }
 
     // check that the number of connectivities matches the expected number based on the cell types
-    let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
-    if exp_num_points != cells.0.len() {
+    let exp_num_points: usize = cell_types.iter().map(|ct| ct.num_points()).sum();
+    if exp_num_points != connectivity.len() {
         return Err(IoError::new(
             InvalidInput,
             format!(
                 "Size of connectivities not match the expected number based on the cell types: {} != {}",
-                cells.0.len(),
+                connectivity.len(),
                 exp_num_points
             ),
         ));
@@ -206,17 +211,21 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 /// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
 /// and for poly-cells, the number of points is also added.
 /// TODO if all cells are the same, then the type information can be stored as `TopologyType`
-fn prepare_cells(cells: (&[u64], &[CellType]), num_points: usize) -> (TopologyType, Vec<u64>) {
-    if cells.1.is_empty() {
+fn prepare_cells(
+    connectivity: &[u64],
+    cell_types: &[CellType],
+    num_points: usize,
+) -> (TopologyType, Vec<u64>) {
+    if cell_types.is_empty() {
         // if there are no cells, use polyvertex on nodes
         // this is required by paraview to visualize only points
         return (TopologyType::Polyvertex, (0..num_points as u64).collect());
     }
 
-    let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
+    let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
     let mut index = 0_usize;
 
-    for cell_type in cells.1 {
+    for cell_type in cell_types {
         let num_points = cell_type.num_points();
         cells_with_types.push(*cell_type as u64);
 
@@ -225,7 +234,7 @@ fn prepare_cells(cells: (&[u64], &[CellType]), num_points: usize) -> (TopologyTy
             cells_with_types.push(n_points_poly);
         }
 
-        cells_with_types.extend_from_slice(&cells.0[index..index + num_points]);
+        cells_with_types.extend_from_slice(&connectivity[index..index + num_points]);
 
         index += num_points; // move index to the next cell
     }
@@ -265,7 +274,7 @@ impl TimeSeriesDataWriter {
     ///
     /// // write the mesh
     /// let mut time_series_writer = xdmf_writer
-    ///     .write_mesh(&coords, (&connectivity, &cell_types))
+    ///     .write_mesh(&coords, &connectivity, &cell_types)
     ///     .expect("failed to write mesh");
     ///
     /// // buffers are reused across time steps, `Values` only borrows them
@@ -564,15 +573,13 @@ mod tests {
     #[test]
     fn test_prepare_cells() {
         let (topo_type, cells_prep) = prepare_cells(
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                &[
-                    CellType::Vertex,
-                    CellType::Edge,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            &[
+                CellType::Vertex,
+                CellType::Edge,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
             0,
         );
 
@@ -585,57 +592,52 @@ mod tests {
 
     #[test]
     fn prepare_cells_by_celltype() {
-        assert_eq!(
-            prepare_cells((&[5], &[CellType::Vertex]), 0).1,
-            vec![1, 1, 5]
-        );
+        assert_eq!(prepare_cells(&[5], &[CellType::Vertex], 0).1, vec![1, 1, 5]);
 
         assert_eq!(
-            prepare_cells((&[5, 6], &[CellType::Edge]), 0).1,
+            prepare_cells(&[5, 6], &[CellType::Edge], 0).1,
             vec![2, 2, 5, 6]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7], &[CellType::Triangle]), 0).1,
+            prepare_cells(&[5, 6, 7], &[CellType::Triangle], 0).1,
             vec![4, 5, 6, 7]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8], &[CellType::Quadrilateral]), 0).1,
+            prepare_cells(&[5, 6, 7, 8], &[CellType::Quadrilateral], 0).1,
             vec![5, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8], &[CellType::Tetrahedron]), 0).1,
+            prepare_cells(&[5, 6, 7, 8], &[CellType::Tetrahedron], 0).1,
             vec![6, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9], &[CellType::Pyramid]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9], &[CellType::Pyramid], 0).1,
             vec![7, 5, 6, 7, 8, 9]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Wedge]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).1,
             vec![8, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0).1,
             vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7], &[CellType::Edge3]), 0).1,
+            prepare_cells(&[5, 6, 7], &[CellType::Edge3], 0).1,
             vec![34, 5, 6, 7]
         );
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13],
-                    &[CellType::Quadrilateral9]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13],
+                &[CellType::Quadrilateral9],
                 0
             )
             .1,
@@ -643,25 +645,19 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).1,
             vec![36, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells(
-                (&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8]),
-                0
-            )
-            .1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8], 0).1,
             vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-                    &[CellType::Tetrahedron10]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+                &[CellType::Tetrahedron10],
                 0
             )
             .1,
@@ -670,10 +666,8 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    &[CellType::Pyramid13]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                &[CellType::Pyramid13],
                 0
             )
             .1,
@@ -682,10 +676,8 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-                    &[CellType::Wedge15]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+                &[CellType::Wedge15],
                 0
             )
             .1,
@@ -694,12 +686,10 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
-                    ],
-                    &[CellType::Wedge18]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
+                ],
+                &[CellType::Wedge18],
                 0
             )
             .1,
@@ -710,12 +700,10 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
-                    ],
-                    &[CellType::Hexahedron20]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                ],
+                &[CellType::Hexahedron20],
                 0
             )
             .1,
@@ -726,13 +714,11 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-                        25, 26, 27, 28
-                    ],
-                    &[CellType::Hexahedron24]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28
+                ],
+                &[CellType::Hexahedron24],
                 0
             )
             .1,
@@ -744,13 +730,11 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-                        25, 26, 27, 28, 29, 30, 31
-                    ],
-                    &[CellType::Hexahedron27]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28, 29, 30, 31
+                ],
+                &[CellType::Hexahedron27],
                 0
             )
             .1,
@@ -763,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_no_cells() {
-        let (topo_type, cells_prep) = prepare_cells((&[], &[]), 5);
+        let (topo_type, cells_prep) = prepare_cells(&[], &[], 5);
 
         assert_eq!(topo_type, TopologyType::Polyvertex);
         assert_eq!(cells_prep, vec![0, 1, 2, 3, 4]);
@@ -774,14 +758,12 @@ mod tests {
         // valid input, must not return an error
         validate_points_and_cells(
             &[0.0; 33],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         )
         .unwrap();
     }
@@ -789,21 +771,19 @@ mod tests {
     #[test]
     fn validate_points_and_cells_only_points() {
         // valid input, must not return an error
-        validate_points_and_cells(&[0.0; 33], (&[], &[])).unwrap();
+        validate_points_and_cells(&[0.0; 33], &[], &[]).unwrap();
     }
 
     #[test]
     fn validate_points_and_cells_points_empty() {
         let res = validate_points_and_cells(
             &[],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -816,14 +796,12 @@ mod tests {
     fn validate_points_and_cells_points_not_3d() {
         let res = validate_points_and_cells(
             &[0.0; 22],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -836,14 +814,12 @@ mod tests {
     fn validate_points_and_cells_conn_index_out_of_bounds() {
         let res = validate_points_and_cells(
             &[0.0; 33],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 70],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 70],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -856,15 +832,13 @@ mod tests {
     fn validate_points_and_cells_conn_mismatch() {
         let res = validate_points_and_cells(
             &[0.0; 33],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Edge,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Edge,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -928,7 +902,8 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; NUM_POINTS * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
             )
             .unwrap();
 
@@ -985,7 +960,8 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; NUM_POINTS * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
             )
             .unwrap();
 
@@ -1028,7 +1004,8 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; NUM_POINTS * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
             )
             .unwrap();
 
@@ -1078,7 +1055,8 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; 10 * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; NUM_CELLS]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; NUM_CELLS],
             )
             .unwrap();
 
