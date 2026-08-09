@@ -133,6 +133,15 @@ impl DataWriter for BinaryWriter {
         self.write_time = None;
         Ok(())
     }
+
+    fn validate_values(&self, data: &Values<'_>) -> IoResult<()> {
+        if let Values::U64(v) = data {
+            for &value in v.iter() {
+                checked_u32(value)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn write_f64_le(vec: &[f64], writer: &mut impl Write) -> IoResult<()> {
@@ -146,19 +155,22 @@ fn write_f64_le(vec: &[f64], writer: &mut impl Write) -> IoResult<()> {
 // connectivity comes back empty and attribute data comes back with corrupted values.
 // Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
 // Values that don't fit in 32 bits are rejected rather than silently truncated.
+fn checked_u32(v: u64) -> IoResult<u32> {
+    u32::try_from(v).map_err(|err| {
+        IoError::new(
+            InvalidInput,
+            format!(
+                "value {v} does not fit in 32 bits: uncompressed Binary output only \
+                 supports integer data up to u32 (Paraview's legacy Xdmf2 reader misreads \
+                 64-bit integers): {err}"
+            ),
+        )
+    })
+}
+
 fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write) -> IoResult<()> {
     for &v in vec {
-        let v = u32::try_from(v).map_err(|err| {
-            IoError::new(
-                InvalidInput,
-                format!(
-                    "value {v} does not fit in 32 bits: uncompressed Binary output only \
-                     supports integer data up to u32 (Paraview's legacy Xdmf2 reader misreads \
-                     64-bit integers): {err}"
-                ),
-            )
-        })?;
-        writer.write_all(&v.to_le_bytes())?;
+        writer.write_all(&checked_u32(v)?.to_le_bytes())?;
     }
     Ok(())
 }
