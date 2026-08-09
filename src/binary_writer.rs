@@ -330,17 +330,26 @@ mod tests {
         assert!(writer.write_time.is_none());
 
         let res_fin = writer.write_data_finalize();
-        std::assert_matches!(res_fin.unwrap_err(), Error::Internal(_));
+        std::assert_matches!(
+            res_fin.unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
 
         let res_write =
             writer.write_data("test_data", attribute::Center::Node, &vec![1.0, 2.0].into());
-        std::assert_matches!(res_write.unwrap_err(), Error::Internal(_));
+        std::assert_matches!(
+            res_write.unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
 
         writer.write_data_initialize("120.05").unwrap();
         assert_eq!(writer.write_time.clone().unwrap(), "120.05");
 
         let res_init = writer.write_data_initialize("0.0");
-        std::assert_matches!(res_init.unwrap_err(), Error::Internal(_));
+        std::assert_matches!(
+            res_init.unwrap_err(),
+            Error::Internal("writing data was already initialized")
+        );
 
         writer.write_data_finalize().unwrap();
         assert!(writer.write_time.is_none());

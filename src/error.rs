@@ -28,16 +28,18 @@ pub enum Error {
     #[cfg(feature = "hdf5")]
     #[error("HDF5 error while {operation}: {source}")]
     Hdf5 {
-        /// Short description of what was being attempted.
-        operation: String,
+        /// Short description of what was being attempted, e.g. "creating mesh group".
+        operation: &'static str,
         /// The underlying HDF5 error.
         #[source]
         source: hdf5::Error,
     },
-    /// The final path component of an output file name is not usable.
+    /// An output path is missing a final component, or that component is not usable as a file
+    /// name. Parent directories are not validated, they may legitimately contain characters that
+    /// are rejected in the file name itself.
     #[error("invalid file name '{path}': {reason}", path = path.display())]
     InvalidFileName {
-        /// The offending path.
+        /// The offending path, as passed by the caller.
         path: PathBuf,
         /// What is wrong with it.
         reason: String,
@@ -104,13 +106,16 @@ pub(crate) fn io_ctx<'a>(
 /// Converts to a `std::io::Error` for consumers that plumb `io::Error` throughout their own
 /// codebase. `Error::Io`'s original [`std::io::ErrorKind`] is preserved; every other variant
 /// (a validation failure, not a filesystem failure) becomes [`std::io::ErrorKind::InvalidInput`].
+///
+/// The [`Error`] is kept as the payload rather than flattened into a string, so the original
+/// cause (and with it e.g. `raw_os_error`) stays reachable via [`std::io::Error::get_ref`].
 impl From<Error> for std::io::Error {
     fn from(err: Error) -> Self {
         let kind = match &err {
             Error::Io { source, .. } => source.kind(),
             _ => std::io::ErrorKind::InvalidInput,
         };
-        Self::new(kind, err.to_string())
+        Self::new(kind, err)
     }
 }
 
@@ -136,10 +141,12 @@ mod error_messages {
         assert_eq!(
             Error::InvalidFileName {
                 path: PathBuf::from("a:b"),
-                reason: "must not contain the following characters".to_string(),
+                reason: "file name component must not contain any of the following characters"
+                    .to_string(),
             }
             .to_string(),
-            "invalid file name 'a:b': must not contain the following characters"
+            "invalid file name 'a:b': file name component must not contain any of the following \
+             characters"
         );
     }
 
@@ -196,10 +203,10 @@ mod error_messages {
     fn invalid_data() {
         assert_eq!(
             Error::InvalidData {
-                reason: "size of point-data 'temperature' must be 10, but is 9".to_string(),
+                reason: "size of point_data 'temperature' must be 10, but is 9".to_string(),
             }
             .to_string(),
-            "invalid data: size of point-data 'temperature' must be 10, but is 9"
+            "invalid data: size of point_data 'temperature' must be 10, but is 9"
         );
     }
 
@@ -227,7 +234,7 @@ mod error_messages {
     #[test]
     fn hdf5() {
         let err = Error::Hdf5 {
-            operation: "creating group".to_string(),
+            operation: "creating group",
             source: hdf5::Error::from("boom".to_string()),
         };
         assert_eq!(err.to_string(), "HDF5 error while creating group: boom");
@@ -242,6 +249,12 @@ mod error_messages {
         };
         let io_err: std::io::Error = err.into();
         assert_eq!(io_err.kind(), std::io::ErrorKind::PermissionDenied);
+
+        // the original error is kept as the payload, not flattened into a string
+        std::assert_matches!(
+            io_err.get_ref().and_then(|e| e.downcast_ref::<Error>()),
+            Some(Error::Io { operation, .. }) if *operation == "creating data file"
+        );
     }
 
     #[test]

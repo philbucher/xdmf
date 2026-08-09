@@ -313,8 +313,8 @@ impl TimeSeriesDataWriter {
         point_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
         cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
     ) -> Result<()> {
-        let point_data = collect_data(point_data, attribute::Center::Node)?;
-        let cell_data = collect_data(cell_data, attribute::Center::Cell)?;
+        let point_data = collect_data(point_data, POINT_DATA)?;
+        let cell_data = collect_data(cell_data, CELL_DATA)?;
 
         let time_bits = self.validate_data(time, &point_data, &cell_data)?;
 
@@ -450,9 +450,15 @@ impl TimeSeriesDataWriter {
         // check if the time step has already been written, keyed on the parsed value rather
         // than the string so different spellings of the same instant are caught too
         if let Some(existing) = self.written_times.get(&time_bits) {
+            // naming the earlier spelling is only informative if it differs from this one
+            let reason = if existing == time {
+                "already written".to_string()
+            } else {
+                format!("already written (as '{existing}')")
+            };
             return Err(Error::InvalidTimeStep {
                 time: time.to_string(),
-                reason: format!("already written (as '{existing}')"),
+                reason,
             });
         }
 
@@ -463,12 +469,12 @@ impl TimeSeriesDataWriter {
             });
         }
 
-        check_data_size(point_data, self.num_points, attribute::Center::Node)?;
-        check_data_size(cell_data, self.num_cells, attribute::Center::Cell)?;
+        check_data_size(point_data, self.num_points, POINT_DATA)?;
+        check_data_size(cell_data, self.num_cells, CELL_DATA)?;
 
         // check that names do not contain forbidden characters
-        validate_data_name(point_data, attribute::Center::Node)?;
-        validate_data_name(cell_data, attribute::Center::Cell)?;
+        validate_data_name(point_data, POINT_DATA)?;
+        validate_data_name(cell_data, CELL_DATA)?;
 
         // reject values the backend's format cannot represent (e.g. binary's u64->u32 range)
         // up front, before write_data_initialize runs, so a caller mistake here can never leave
@@ -481,11 +487,20 @@ impl TimeSeriesDataWriter {
     }
 }
 
+// The helpers below take the data category as a plain label instead of an `attribute::Center`:
+// `attribute::center_to_data_tag` names HDF5 groups and on-disk file segments, and error prose
+// should not change when that storage layout is renamed (or vice versa).
+
+/// Label for point data in user-facing error messages, named after `write_data`'s argument.
+const POINT_DATA: &str = "point_data";
+/// Label for cell data in user-facing error messages, named after `write_data`'s argument.
+const CELL_DATA: &str = "cell_data";
+
 // Collect the caller's iterator, keeping its order but rejecting a name used more than once
 // (which would otherwise produce two attributes of the same name in the same grid).
 fn collect_data<'a>(
     data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
-    center: attribute::Center,
+    label: &str,
 ) -> Result<Vec<(&'a str, DataAttribute, Values<'a>)>> {
     let collected: Vec<_> = data.into_iter().collect();
 
@@ -493,10 +508,7 @@ fn collect_data<'a>(
     for (name, _, _) in &collected {
         if !seen_names.insert(name) {
             return Err(Error::InvalidData {
-                reason: format!(
-                    "name '{name}' of {} is used more than once",
-                    attribute::center_to_data_tag(center)
-                ),
+                reason: format!("name '{name}' of {label} is used more than once"),
             });
         }
     }
@@ -508,15 +520,14 @@ fn collect_data<'a>(
 fn check_data_size(
     data_input: &[(&str, DataAttribute, Values<'_>)],
     num_entities: usize,
-    center: attribute::Center,
+    label: &str,
 ) -> Result<()> {
     for (name, data_attribute, vals) in data_input {
         let exp_size = num_entities * data_attribute.size();
         if vals.len() != exp_size {
             return Err(Error::InvalidData {
                 reason: format!(
-                    "size of {} '{name}' must be {exp_size}, but is {}",
-                    attribute::center_to_data_tag(center),
+                    "size of {label} '{name}' must be {exp_size}, but is {}",
                     vals.len()
                 ),
             });
@@ -525,17 +536,13 @@ fn check_data_size(
     Ok(())
 }
 
-fn validate_data_name(
-    data_input: &[(&str, DataAttribute, Values<'_>)],
-    center: attribute::Center,
-) -> Result<()> {
+fn validate_data_name(data_input: &[(&str, DataAttribute, Values<'_>)], label: &str) -> Result<()> {
     for (name, _, _) in data_input {
         if !is_valid_data_name(name) {
             return Err(Error::InvalidData {
                 reason: format!(
-                    "data name '{name}' of {} is not valid, must be non-empty and contain only \
-                     alphanumeric characters, underscores or dashes",
-                    attribute::center_to_data_tag(center)
+                    "data name '{name}' of {label} is not valid, must be non-empty and contain \
+                     only alphanumeric characters, underscores or dashes"
                 ),
             });
         };
@@ -558,27 +565,30 @@ const INVALID_FILE_NAME_CHARS: [char; 8] = ['?', '\0', ':', '*', '"', '<', '>', 
 /// Validate the file name for the XDMF file.
 fn validate_file_name(file_name: &Path) -> Result<()> {
     // Only validate the final path component, the parent directories are not under our control
-    // and may legitimately contain characters such as ':' (e.g. Windows drive letters).
-    let Some(name) = file_name.file_name().and_then(|name| name.to_str()) else {
+    // and may legitimately contain characters such as ':' (e.g. Windows drive letters). Since the
+    // error carries the whole path, every reason below says which component it is about.
+    let Some(name) = file_name.file_name() else {
+        // e.g. an empty path, or one ending in ".."
         return Err(Error::InvalidFileName {
             path: file_name.to_path_buf(),
-            reason: "must be valid UTF-8".to_string(),
+            reason: "path has no file name component".to_string(),
         });
     };
 
-    if name.is_empty() {
+    let Some(name) = name.to_str() else {
         return Err(Error::InvalidFileName {
             path: file_name.to_path_buf(),
-            reason: "must not be empty".to_string(),
+            reason: "file name component is not valid UTF-8".to_string(),
         });
-    }
+    };
 
     // Check for invalid characters
     if name.chars().any(|c| INVALID_FILE_NAME_CHARS.contains(&c)) {
         return Err(Error::InvalidFileName {
             path: file_name.to_path_buf(),
             reason: format!(
-                "must not contain the following characters: {INVALID_FILE_NAME_CHARS:?}"
+                "file name component must not contain any of the following characters: \
+                 {INVALID_FILE_NAME_CHARS:?}"
             ),
         });
     }
@@ -984,7 +994,7 @@ mod tests {
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
-                if time == "0.1" && reason.contains("already written (as '0.1')")
+                if time == "0.1" && reason == "already written"
         );
 
         // Invalid time step (not a float)
@@ -1037,7 +1047,7 @@ mod tests {
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
-                if time == "0.10" && reason.contains("already written (as '0.1')")
+                if time == "0.10" && reason == "already written (as '0.1')"
         );
 
         // a genuinely different value is accepted
@@ -1202,7 +1212,7 @@ mod tests {
     fn test_validate_data_names() {
         let data = [("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1].into())];
 
-        validate_data_name(&data, attribute::Center::Cell).unwrap();
+        validate_data_name(&data, CELL_DATA).unwrap();
 
         let data_invalid_name = [(
             "cell[_data]_ten",
@@ -1210,7 +1220,7 @@ mod tests {
             vec![0.0; 1].into(),
         )];
 
-        let res = validate_data_name(&data_invalid_name, attribute::Center::Node);
+        let res = validate_data_name(&data_invalid_name, POINT_DATA);
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidData { reason }
@@ -1260,12 +1270,22 @@ mod tests {
         validate_file_name(Path::new("valid_name.txt")).unwrap();
         validate_file_name(Path::new("valid_name-123.txt")).unwrap();
 
+        // only the final component is validated, a parent may legitimately contain ':'
+        validate_file_name(Path::new("C:/some:dir/valid_name.txt")).unwrap();
+
         let res = validate_file_name(Path::new("valid_name:123.txt"));
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidFileName { path, reason }
                 if path == Path::new("valid_name:123.txt")
-                    && reason.contains("must not contain the following characters")
+                    && reason.contains("file name component must not contain any of")
+        );
+
+        let res = validate_file_name(Path::new(""));
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidFileName { path, reason }
+                if path == Path::new("") && reason == "path has no file name component"
         );
     }
 

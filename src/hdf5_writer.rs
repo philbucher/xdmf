@@ -14,11 +14,8 @@ use crate::{
 
 // Attach an operation description to an `hdf5::Error`, mirroring `error::io_ctx` for the
 // filesystem case.
-fn hdf5_ctx(operation: &str) -> impl FnOnce(hdf5::Error) -> Error + '_ {
-    move |source| Error::Hdf5 {
-        operation: operation.to_string(),
-        source,
-    }
+fn hdf5_ctx(operation: &'static str) -> impl FnOnce(hdf5::Error) -> Error {
+    move |source| Error::Hdf5 { operation, source }
 }
 
 const MESH: &str = "mesh";
