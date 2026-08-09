@@ -2,16 +2,13 @@
 
 use std::{
     fs::File,
-    io::{
-        BufWriter, Error as IoError,
-        ErrorKind::{InvalidFilename, InvalidInput},
-        Result as IoResult, Write,
-    },
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    DataStorage, DataWriter,
+    DataStorage, DataWriter, Error, Result,
+    error::io_ctx,
     values::Values,
     xdmf_elements::{
         attribute,
@@ -28,15 +25,12 @@ pub(crate) struct BinaryWriter {
 }
 
 impl BinaryWriter {
-    pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
+    pub fn new(file_name: impl AsRef<Path>) -> Result<Self> {
         let bin_files_dir = file_name.as_ref().to_path_buf().with_extension("bin");
 
-        let folder_name = bin_files_dir.file_name().ok_or_else(|| {
-            IoError::new(
-                InvalidFilename,
-                "Input file name must have a valid file name",
-            )
-        })?;
+        let folder_name = bin_files_dir
+            .file_name()
+            .ok_or(Error::Internal("output path has no file name component"))?;
 
         crate::mpi_safe_create_dir_all(&bin_files_dir)?;
 
@@ -64,25 +58,29 @@ impl DataWriter for BinaryWriter {
         DataStorage::Binary
     }
 
-    fn write_mesh(
-        &mut self,
-        points: &[f64],
-        cells: &[u64],
-    ) -> IoResult<(DataContent, DataContent)> {
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
         let points_file_name = "points.bin";
         let cells_file_name = "cells.bin";
+        let points_path = self.bin_files_dir.join(points_file_name);
+        let cells_path = self.bin_files_dir.join(cells_file_name);
 
-        let mut file_points =
-            BufWriter::new(File::create(self.bin_files_dir.join(points_file_name))?);
-        let mut file_cells =
-            BufWriter::new(File::create(self.bin_files_dir.join(cells_file_name))?);
+        let mut file_points = BufWriter::new(
+            File::create(&points_path).map_err(io_ctx("creating points file", &points_path))?,
+        );
+        let mut file_cells = BufWriter::new(
+            File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
+        );
 
-        write_f64_le(points, &mut file_points)?;
-        write_u64_as_u32_le(cells, &mut file_cells)?;
+        write_f64_le(points, &mut file_points, &points_path)?;
+        write_u64_as_u32_le(cells, &mut file_cells, &cells_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
-        file_points.flush()?;
-        file_cells.flush()?;
+        file_points
+            .flush()
+            .map_err(io_ctx("flushing points file", &points_path))?;
+        file_cells
+            .flush()
+            .map_err(io_ctx("flushing cells file", &cells_path))?;
 
         Ok((
             self.relative_path(points_file_name).into(),
@@ -95,46 +93,51 @@ impl DataWriter for BinaryWriter {
         name: &str,
         center: attribute::Center,
         data: &Values<'_>,
-    ) -> IoResult<DataContent> {
+    ) -> Result<DataContent> {
         let time = self
             .write_time
             .as_ref()
-            .ok_or_else(|| IoError::other("Writing data was not initialized"))?;
+            .ok_or(Error::Internal("writing data was not initialized"))?;
 
         let data_file_name = format!(
             "data_t_{time}_{}_{name}.bin",
             attribute::center_to_data_tag(center)
         );
+        let data_path = self.bin_files_dir.join(&data_file_name);
 
-        let mut data_file = BufWriter::new(File::create(self.bin_files_dir.join(&data_file_name))?);
+        let mut data_file = BufWriter::new(
+            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?,
+        );
 
-        values_to_writer(data, &mut data_file)?;
+        values_to_writer(data, &mut data_file, &data_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
-        data_file.flush()?;
+        data_file
+            .flush()
+            .map_err(io_ctx("flushing data file", &data_path))?;
 
         Ok(self.relative_path(&data_file_name).into())
     }
 
-    fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
+    fn write_data_initialize(&mut self, time: &str) -> Result<()> {
         if self.write_time.is_some() {
-            return Err(IoError::other("Writing data was already initialized"));
+            return Err(Error::Internal("writing data was already initialized"));
         }
 
         self.write_time = Some(time.to_string());
         Ok(())
     }
 
-    fn write_data_finalize(&mut self) -> IoResult<()> {
+    fn write_data_finalize(&mut self) -> Result<()> {
         if self.write_time.is_none() {
-            return Err(IoError::other("Writing data was not initialized"));
+            return Err(Error::Internal("writing data was not initialized"));
         }
 
         self.write_time = None;
         Ok(())
     }
 
-    fn validate_values(&self, data: &Values<'_>) -> IoResult<()> {
+    fn validate_values(&self, data: &Values<'_>) -> Result<()> {
         if let Values::U64(v) = data {
             for &value in v.iter() {
                 checked_u32(value)?;
@@ -144,9 +147,11 @@ impl DataWriter for BinaryWriter {
     }
 }
 
-fn write_f64_le(vec: &[f64], writer: &mut impl Write) -> IoResult<()> {
+fn write_f64_le(vec: &[f64], writer: &mut impl Write, path: &Path) -> Result<()> {
     for &v in vec {
-        writer.write_all(&v.to_le_bytes())?;
+        writer
+            .write_all(&v.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
     }
     Ok(())
 }
@@ -155,30 +160,24 @@ fn write_f64_le(vec: &[f64], writer: &mut impl Write) -> IoResult<()> {
 // connectivity comes back empty and attribute data comes back with corrupted values.
 // Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
 // Values that don't fit in 32 bits are rejected rather than silently truncated.
-fn checked_u32(v: u64) -> IoResult<u32> {
-    u32::try_from(v).map_err(|err| {
-        IoError::new(
-            InvalidInput,
-            format!(
-                "value {v} does not fit in 32 bits: uncompressed Binary output only \
-                 supports integer data up to u32 (Paraview's legacy Xdmf2 reader misreads \
-                 64-bit integers): {err}"
-            ),
-        )
-    })
+fn checked_u32(v: u64) -> Result<u32> {
+    u32::try_from(v).map_err(|_err| Error::IntegerTooLargeForBinary { value: v })
 }
 
-fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write) -> IoResult<()> {
+fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Result<()> {
     for &v in vec {
-        writer.write_all(&checked_u32(v)?.to_le_bytes())?;
+        let v32 = checked_u32(v)?;
+        writer
+            .write_all(&v32.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
     }
     Ok(())
 }
 
-fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> IoResult<()> {
+fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
-        Values::F64(v) => write_f64_le(v, writer),
-        Values::U64(v) => write_u64_as_u32_le(v, writer),
+        Values::F64(v) => write_f64_le(v, writer, path),
+        Values::U64(v) => write_u64_as_u32_le(v, writer, path),
     }
 }
 
@@ -190,7 +189,7 @@ mod tests {
     fn write_f64_le_multiple_values() {
         let vec_f64 = vec![1.0_f64, -2.5];
         let mut buffer = Vec::new();
-        write_f64_le(&vec_f64, &mut buffer).unwrap();
+        write_f64_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f64.to_le_bytes());
         expected.extend_from_slice(&(-2.5_f64).to_le_bytes());
@@ -201,7 +200,7 @@ mod tests {
     fn write_u64_as_u32_le_multiple_values() {
         let vec_u64 = vec![1_u64, 2];
         let mut buffer = Vec::new();
-        write_u64_as_u32_le(&vec_u64, &mut buffer).unwrap();
+        write_u64_as_u32_le(&vec_u64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1_u32.to_le_bytes());
         expected.extend_from_slice(&2_u32.to_le_bytes());
@@ -212,12 +211,12 @@ mod tests {
     fn write_u64_as_u32_le_rejects_values_too_large_for_u32() {
         let vec_u64 = vec![1_u64, u64::from(u32::MAX) + 1];
         let mut buffer = Vec::new();
-        let res = write_u64_as_u32_le(&vec_u64, &mut buffer);
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "value 4294967296 does not fit in 32 bits: uncompressed Binary output only \
-             supports integer data up to u32 (Paraview's legacy Xdmf2 reader misreads \
-             64-bit integers): out of range integral type conversion attempted"
+        let res = write_u64_as_u32_le(&vec_u64, &mut buffer, Path::new("test.bin"));
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::IntegerTooLargeForBinary {
+                value: 4_294_967_296
+            }
         );
     }
 
@@ -225,7 +224,7 @@ mod tests {
     fn values_to_writer_multiple_types() {
         let data_f64: Values = vec![1.0, 2.0].into();
         let mut buffer = Vec::new();
-        values_to_writer(&data_f64, &mut buffer).unwrap();
+        values_to_writer(&data_f64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f64.to_le_bytes());
         expected.extend_from_slice(&2.0_f64.to_le_bytes());
@@ -233,7 +232,7 @@ mod tests {
 
         let data_u64: Values = vec![1_u64, 2].into();
         let mut buffer = Vec::new();
-        values_to_writer(&data_u64, &mut buffer).unwrap();
+        values_to_writer(&data_u64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1_u32.to_le_bytes());
         expected.extend_from_slice(&2_u32.to_le_bytes());
@@ -331,25 +330,25 @@ mod tests {
         assert!(writer.write_time.is_none());
 
         let res_fin = writer.write_data_finalize();
-        assert_eq!(
-            res_fin.unwrap_err().to_string(),
-            "Writing data was not initialized"
+        std::assert_matches!(
+            res_fin.unwrap_err(),
+            Error::Internal("writing data was not initialized")
         );
 
         let res_write =
             writer.write_data("test_data", attribute::Center::Node, &vec![1.0, 2.0].into());
-        assert_eq!(
-            res_write.unwrap_err().to_string(),
-            "Writing data was not initialized"
+        std::assert_matches!(
+            res_write.unwrap_err(),
+            Error::Internal("writing data was not initialized")
         );
 
         writer.write_data_initialize("120.05").unwrap();
         assert_eq!(writer.write_time.clone().unwrap(), "120.05");
 
         let res_init = writer.write_data_initialize("0.0");
-        assert_eq!(
-            res_init.unwrap_err().to_string(),
-            "Writing data was already initialized"
+        std::assert_matches!(
+            res_init.unwrap_err(),
+            Error::Internal("writing data was already initialized")
         );
 
         writer.write_data_finalize().unwrap();

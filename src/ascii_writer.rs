@@ -2,12 +2,13 @@
 
 use std::{
     fs::File,
-    io::{BufWriter, Error as IoError, ErrorKind::InvalidFilename, Result as IoResult, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    DataStorage, DataWriter,
+    DataStorage, DataWriter, Error, Result,
+    error::io_ctx,
     values::Values,
     xdmf_elements::{
         attribute,
@@ -32,11 +33,7 @@ impl DataWriter for AsciiInlineWriter {
         DataStorage::AsciiInline
     }
 
-    fn write_mesh(
-        &mut self,
-        points: &[f64],
-        cells: &[u64],
-    ) -> IoResult<(DataContent, DataContent)> {
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
         Ok((
             array_to_string_fmt(points).into(),
             array_to_string_fmt(cells).into(),
@@ -48,7 +45,7 @@ impl DataWriter for AsciiInlineWriter {
         _name: &str,
         _center: attribute::Center,
         data: &Values<'_>,
-    ) -> IoResult<DataContent> {
+    ) -> Result<DataContent> {
         Ok(values_to_string(data).into())
     }
 }
@@ -62,15 +59,12 @@ pub(crate) struct AsciiWriter {
 }
 
 impl AsciiWriter {
-    pub fn new(file_name: impl AsRef<Path>) -> IoResult<Self> {
+    pub fn new(file_name: impl AsRef<Path>) -> Result<Self> {
         let txt_files_dir = file_name.as_ref().to_path_buf().with_extension("txt");
 
-        let folder_name = txt_files_dir.file_name().ok_or_else(|| {
-            IoError::new(
-                InvalidFilename,
-                "Input file name must have a valid file name",
-            )
-        })?;
+        let folder_name = txt_files_dir
+            .file_name()
+            .ok_or(Error::Internal("output path has no file name component"))?;
 
         crate::mpi_safe_create_dir_all(&txt_files_dir)?;
 
@@ -98,26 +92,32 @@ impl DataWriter for AsciiWriter {
         DataStorage::Ascii
     }
 
-    fn write_mesh(
-        &mut self,
-        points: &[f64],
-        cells: &[u64],
-    ) -> IoResult<(DataContent, DataContent)> {
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
         // create files for points and cells
         let points_file_name = "points.txt";
         let cells_file_name = "cells.txt";
+        let points_path = self.txt_files_dir.join(points_file_name);
+        let cells_path = self.txt_files_dir.join(cells_file_name);
 
-        let mut file_points =
-            BufWriter::new(File::create(self.txt_files_dir.join(points_file_name))?);
-        let mut file_cells =
-            BufWriter::new(File::create(self.txt_files_dir.join(cells_file_name))?);
+        let mut file_points = BufWriter::new(
+            File::create(&points_path).map_err(io_ctx("creating points file", &points_path))?,
+        );
+        let mut file_cells = BufWriter::new(
+            File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
+        );
 
-        array_to_writer_fmt(points, &mut file_points)?;
-        array_to_writer_fmt(cells, &mut file_cells)?;
+        array_to_writer_fmt(points, &mut file_points)
+            .map_err(io_ctx("writing points data", &points_path))?;
+        array_to_writer_fmt(cells, &mut file_cells)
+            .map_err(io_ctx("writing cells data", &cells_path))?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
-        file_points.flush()?;
-        file_cells.flush()?;
+        file_points
+            .flush()
+            .map_err(io_ctx("flushing points file", &points_path))?;
+        file_cells
+            .flush()
+            .map_err(io_ctx("flushing cells file", &cells_path))?;
 
         Ok((
             XInclude::new(self.relative_path(points_file_name), true).into(),
@@ -130,39 +130,44 @@ impl DataWriter for AsciiWriter {
         name: &str,
         center: attribute::Center,
         data: &Values<'_>,
-    ) -> IoResult<DataContent> {
+    ) -> Result<DataContent> {
         let time = self
             .write_time
             .as_ref()
-            .ok_or_else(|| IoError::other("Writing data was not initialized"))?;
+            .ok_or(Error::Internal("writing data was not initialized"))?;
 
         let data_file_name = format!(
             "data_t_{time}_{}_{name}.txt",
             attribute::center_to_data_tag(center)
         );
+        let data_path = self.txt_files_dir.join(&data_file_name);
 
-        let mut data_file = BufWriter::new(File::create(self.txt_files_dir.join(&data_file_name))?);
+        let mut data_file = BufWriter::new(
+            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?,
+        );
 
-        values_to_writer(data, &mut data_file)?;
+        values_to_writer(data, &mut data_file).map_err(io_ctx("writing data", &data_path))?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
-        data_file.flush()?;
+        data_file
+            .flush()
+            .map_err(io_ctx("flushing data file", &data_path))?;
 
         Ok(XInclude::new(self.relative_path(&data_file_name), true).into())
     }
 
-    fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
+    fn write_data_initialize(&mut self, time: &str) -> Result<()> {
         if self.write_time.is_some() {
-            return Err(IoError::other("Writing data was already initialized"));
+            return Err(Error::Internal("writing data was already initialized"));
         }
 
         self.write_time = Some(time.to_string());
         Ok(())
     }
 
-    fn write_data_finalize(&mut self) -> IoResult<()> {
+    fn write_data_finalize(&mut self) -> Result<()> {
         if self.write_time.is_none() {
-            return Err(IoError::other("Writing data was not initialized"));
+            return Err(Error::Internal("writing data was not initialized"));
         }
 
         self.write_time = None;
@@ -211,7 +216,7 @@ where
 }
 
 /// Generic formatter for arrays of either f64 or i32
-pub fn array_to_writer_fmt<T, W>(vec: &[T], writer: &mut W) -> IoResult<()>
+pub fn array_to_writer_fmt<T, W>(vec: &[T], writer: &mut W) -> std::io::Result<()>
 where
     T: FormatNumber,
     W: Write,
@@ -236,7 +241,7 @@ fn values_to_string(data: &Values<'_>) -> String {
     }
 }
 
-fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> IoResult<()> {
+fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> std::io::Result<()> {
     match data {
         Values::F64(v) => array_to_writer_fmt(v, writer),
         Values::U64(v) => array_to_writer_fmt(v, writer),
@@ -381,9 +386,9 @@ mod tests {
         assert!(writer.write_time.is_none());
 
         let res_fin = writer.write_data_finalize();
-        assert_eq!(
-            res_fin.unwrap_err().to_string(),
-            "Writing data was not initialized"
+        std::assert_matches!(
+            res_fin.unwrap_err(),
+            Error::Internal("writing data was not initialized")
         );
 
         let res_write = writer.write_data(
@@ -391,18 +396,18 @@ mod tests {
             attribute::Center::Node,
             &Values::F64(vec![1.0, 2.0].into()),
         );
-        assert_eq!(
-            res_write.unwrap_err().to_string(),
-            "Writing data was not initialized"
+        std::assert_matches!(
+            res_write.unwrap_err(),
+            Error::Internal("writing data was not initialized")
         );
 
         writer.write_data_initialize("120.05").unwrap();
         assert_eq!(writer.write_time.clone().unwrap(), "120.05");
 
         let res_init = writer.write_data_initialize("0.0");
-        assert_eq!(
-            res_init.unwrap_err().to_string(),
-            "Writing data was already initialized"
+        std::assert_matches!(
+            res_init.unwrap_err(),
+            Error::Internal("writing data was already initialized")
         );
 
         writer.write_data_finalize().unwrap();

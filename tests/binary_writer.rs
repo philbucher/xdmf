@@ -110,10 +110,10 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
             vec![u64::from(u32::MAX) + 1].into(),
         )],
     );
-    assert!(
-        res.unwrap_err()
-            .to_string()
-            .contains("does not fit in 32 bits")
+    std::assert_matches!(
+        res.unwrap_err(),
+        xdmf::Error::IntegerTooLargeForBinary { value }
+            if value == u64::from(u32::MAX) + 1
     );
 
     // the rejected value is caught before any file for this step is opened, so nothing is left

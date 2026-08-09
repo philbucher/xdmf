@@ -1,11 +1,7 @@
 //! A library for writing XDMF files, which are commonly used in scientific simulations for visualizing datasets on meshes, for example with [Paraview](https://www.paraview.org/).
 //!
 //! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
-use std::{
-    io::{Error as IoError, ErrorKind::InvalidInput, Result as IoResult},
-    path::Path,
-    str::FromStr,
-};
+use std::{path::Path, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use xdmf_elements::{
@@ -15,6 +11,7 @@ use xdmf_elements::{
 
 mod ascii_writer;
 mod binary_writer;
+mod error;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
 
@@ -23,6 +20,7 @@ mod values;
 pub mod xdmf_elements;
 
 // Re-export types used in the public API
+pub use error::{Error, Result};
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
 pub use values::Values;
 pub use xdmf_elements::CellType;
@@ -55,7 +53,7 @@ pub enum DataStorage {
 impl FromStr for DataStorage {
     type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "ascii" => Ok(Self::Ascii),
             "asciiinline" | "ascii_inline" | "ascii-inline" => Ok(Self::AsciiInline),
@@ -83,26 +81,25 @@ pub(crate) trait DataWriter {
 
     fn data_storage(&self) -> DataStorage;
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64])
-    -> IoResult<(DataContent, DataContent)>;
+    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)>;
 
     fn write_data(
         &mut self,
         name: &str,
         center: attribute::Center,
         data: &Values<'_>,
-    ) -> IoResult<DataContent>;
+    ) -> Result<DataContent>;
 
-    fn write_data_initialize(&mut self, _time: &str) -> IoResult<()> {
+    fn write_data_initialize(&mut self, _time: &str) -> Result<()> {
         Ok(())
     }
 
-    fn write_data_finalize(&mut self) -> IoResult<()> {
+    fn write_data_finalize(&mut self) -> Result<()> {
         Ok(())
     }
 
     // flush the writer, if applicable
-    fn flush(&mut self) -> IoResult<()> {
+    fn flush(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -110,7 +107,7 @@ pub(crate) trait DataWriter {
     /// or touching disk. Called for every attribute before `write_data_initialize` runs, so a
     /// value out of the backend's representable range is reported as an upfront caller error
     /// rather than as a mid-write failure that would otherwise leave the writer poisoned.
-    fn validate_values(&self, _data: &Values<'_>) -> IoResult<()> {
+    fn validate_values(&self, _data: &Values<'_>) -> Result<()> {
         Ok(())
     }
 }
@@ -118,14 +115,13 @@ pub(crate) trait DataWriter {
 // zlib/deflate only accepts levels 0-9; anything else is a caller mistake that should be
 // rejected before a writer is constructed, rather than surfacing as a raw HDF5 error later
 // (`H5Pset_deflate(): invalid deflate level`) from inside `write_mesh`.
-fn validate_deflate_level(deflate_level: Option<u8>) -> IoResult<()> {
+fn validate_deflate_level(deflate_level: Option<u8>) -> Result<()> {
     if let Some(level) = deflate_level
         && level > 9
     {
-        return Err(IoError::new(
-            InvalidInput,
-            format!("deflate_level must be between 0 and 9, but is {level}"),
-        ));
+        return Err(Error::InvalidConfiguration {
+            reason: format!("deflate level {level} is out of range, must be between 0 and 9"),
+        });
     }
     Ok(())
 }
@@ -134,7 +130,7 @@ fn validate_deflate_level(deflate_level: Option<u8>) -> IoResult<()> {
 pub(crate) fn create_writer(
     file_name: &Path,
     data_storage: DataStorage,
-) -> IoResult<Box<dyn DataWriter>> {
+) -> Result<Box<dyn DataWriter>> {
     match data_storage {
         DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiWriter::new(file_name)?)),
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
@@ -149,9 +145,11 @@ pub(crate) fn create_writer(
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                Err(IoError::other(
-                    "Using Hdf5SingleFile DataStorage requires the hdf5 feature.",
-                ))
+                Err(Error::InvalidConfiguration {
+                    reason: format!(
+                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
+                    ),
+                })
             }
         }
         DataStorage::Hdf5MultipleFiles { deflate_level } => {
@@ -165,9 +163,11 @@ pub(crate) fn create_writer(
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                Err(IoError::other(
-                    "Using Hdf5MultipleFiles DataStorage requires the hdf5 feature.",
-                ))
+                Err(Error::InvalidConfiguration {
+                    reason: format!(
+                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
+                    ),
+                })
             }
         }
         DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
@@ -237,14 +237,10 @@ impl From<DataAttribute> for attribute::AttributeType {
 ///
 /// For more details check the [reference](https://github.com/KratosMultiphysics/Kratos/pull/9247).
 /// Its a battle-tested solution tested with > 1000 processes
-pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> IoResult<()> {
+pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
     if !&path.as_ref().exists() {
-        std::fs::create_dir_all(&path).map_err(|e| {
-            IoError::new(
-                e.kind(),
-                format!("Failed to create directory {path:?}: {e}"),
-            )
-        })?;
+        std::fs::create_dir_all(&path)
+            .map_err(error::io_ctx("creating directory", path.as_ref()))?;
     }
 
     if !path.as_ref().exists() {
@@ -398,13 +394,13 @@ mod tests {
         validate_deflate_level(Some(0)).unwrap();
         validate_deflate_level(Some(9)).unwrap();
 
-        assert_eq!(
-            validate_deflate_level(Some(10)).unwrap_err().to_string(),
-            "deflate_level must be between 0 and 9, but is 10"
+        std::assert_matches!(
+            validate_deflate_level(Some(10)).unwrap_err(),
+            Error::InvalidConfiguration { reason } if reason.contains("deflate level 10")
         );
-        assert_eq!(
-            validate_deflate_level(Some(255)).unwrap_err().to_string(),
-            "deflate_level must be between 0 and 9, but is 255"
+        std::assert_matches!(
+            validate_deflate_level(Some(255)).unwrap_err(),
+            Error::InvalidConfiguration { reason } if reason.contains("deflate level 255")
         );
     }
 
@@ -424,10 +420,7 @@ mod tests {
             let Err(err) = create_writer(&file_name, storage) else {
                 panic!("expected an error for deflate_level 10");
             };
-            assert_eq!(
-                err.to_string(),
-                "deflate_level must be between 0 and 9, but is 10"
-            );
+            std::assert_matches!(err, Error::InvalidConfiguration { reason } if reason.contains("deflate level 10"));
         }
     }
 }
