@@ -5,9 +5,6 @@ use std::path::{Path, PathBuf};
 /// Result alias using this crate's [`Error`] type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Characters not allowed in the final path component of an XDMF file name.
-pub(crate) const INVALID_FILE_NAME_CHARS: [char; 8] = ['?', '\0', ':', '*', '"', '<', '>', '|'];
-
 /// The error type for all fallible operations in this crate.
 ///
 /// Most variants carry a `reason` describing the specific failure in prose rather than as their

@@ -13,7 +13,7 @@ use std::{
 
 use crate::{
     CellType, DataAttribute, DataStorage, DataWriter, Error, Result, Values, create_writer,
-    error::{INVALID_FILE_NAME_CHARS, io_ctx},
+    error::io_ctx,
     mpi_safe_create_dir_all,
     xdmf_elements::{
         Information, Xdmf, attribute,
@@ -551,6 +551,9 @@ fn is_valid_data_name(name: &str) -> bool {
     name.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
+
+/// Characters not allowed in the final path component of an XDMF file name.
+const INVALID_FILE_NAME_CHARS: [char; 8] = ['?', '\0', ':', '*', '"', '<', '>', '|'];
 
 /// Validate the file name for the XDMF file.
 fn validate_file_name(file_name: &Path) -> Result<()> {
