@@ -1,0 +1,5 @@
+[files]
+extend-exclude = [
+    # Plan records: prose full of foreign-API keywords, quoted misspellings and shorthand.
+    "plans/",
+]
