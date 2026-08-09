@@ -2,7 +2,6 @@
 //!
 //! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
 use std::{
-    collections::BTreeMap,
     io::{Error as IoError, Result as IoResult},
     path::Path,
     str::FromStr,
@@ -27,9 +26,6 @@ pub mod xdmf_elements;
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
 pub use values::Values;
 pub use xdmf_elements::CellType;
-
-/// Map for data, relates name to attribute and values
-pub type DataMap = BTreeMap<String, (DataAttribute, Values)>;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,7 +90,7 @@ pub(crate) trait DataWriter {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent>;
 
     fn write_data_initialize(&mut self, _time: &str) -> IoResult<()> {

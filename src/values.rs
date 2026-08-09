@@ -1,5 +1,7 @@
 //! This module contains the wrapper type for using a common interface for different data types.
 
+use std::borrow::Cow;
+
 use crate::{
     DataAttribute,
     xdmf_elements::{
@@ -9,26 +11,42 @@ use crate::{
 };
 
 /// Wrapper around different types of data, used to provide a unified interface.
-pub enum Values {
-    /// vector of f64 values
-    F64(Vec<f64>),
-    /// vector of u64 values
-    U64(Vec<u64>),
+///
+/// Backed by [`Cow`] rather than an owned `Vec`, so a caller that already holds the data in a
+/// slice can wrap it without copying and hand the same buffer to every time step.
+#[derive(Debug)]
+pub enum Values<'a> {
+    /// f64 values
+    F64(Cow<'a, [f64]>),
+    /// u64 values
+    U64(Cow<'a, [u64]>),
 }
 
-impl From<Vec<f64>> for Values {
+impl From<Vec<f64>> for Values<'_> {
     fn from(vec: Vec<f64>) -> Self {
-        Self::F64(vec)
+        Self::F64(Cow::Owned(vec))
     }
 }
 
-impl From<Vec<u64>> for Values {
+impl From<Vec<u64>> for Values<'_> {
     fn from(vec: Vec<u64>) -> Self {
-        Self::U64(vec)
+        Self::U64(Cow::Owned(vec))
     }
 }
 
-impl Values {
+impl<'a> From<&'a [f64]> for Values<'a> {
+    fn from(slice: &'a [f64]) -> Self {
+        Self::F64(Cow::Borrowed(slice))
+    }
+}
+
+impl<'a> From<&'a [u64]> for Values<'a> {
+    fn from(slice: &'a [u64]) -> Self {
+        Self::U64(Cow::Borrowed(slice))
+    }
+}
+
+impl Values<'_> {
     pub(crate) fn precision(&self, format: Format) -> u8 {
         match self {
             Self::F64(_) => 8,
@@ -89,7 +107,7 @@ mod tests {
         let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
 
         let values = vec_f64.into();
-        matches!(values, Values::F64(_));
+        std::assert_matches!(values, Values::F64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
         assert_eq!(values.precision(Format::XML), 8);
@@ -117,7 +135,7 @@ mod tests {
     fn vec_u64() {
         let vec_u64 = vec![1_u64, 2, 3, 4, 5, 6];
         let values = vec_u64.into();
-        matches!(values, Values::U64(_));
+        std::assert_matches!(values, Values::U64(_));
 
         assert_eq!(values.number_type(), NumberType::UInt);
         assert_eq!(values.precision(Format::XML), 8);
@@ -128,5 +146,26 @@ mod tests {
             Dimensions(vec![6])
         );
         assert_eq!(values.len(), 6);
+    }
+
+    #[test]
+    fn borrowed_slices() {
+        let vec_f64 = vec![1., 2., 3., 4., 5., 6.];
+        let values = Values::from(vec_f64.as_slice());
+        std::assert_matches!(values, Values::F64(Cow::Borrowed(_)));
+
+        assert_eq!(values.number_type(), NumberType::Float);
+        assert_eq!(
+            values.dimensions(DataAttribute::Vector),
+            Dimensions(vec![2, 3])
+        );
+        assert_eq!(values.len(), 6);
+
+        let vec_u64 = vec![1_u64, 2, 3];
+        let values = Values::from(vec_u64.as_slice());
+        std::assert_matches!(values, Values::U64(Cow::Borrowed(_)));
+
+        assert_eq!(values.number_type(), NumberType::UInt);
+        assert_eq!(values.len(), 3);
     }
 }

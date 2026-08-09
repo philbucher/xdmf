@@ -104,60 +104,48 @@ fn main() -> IoResult<()> {
         });
 
         let point_data = [
+            ("temperature", DataAttribute::Scalar, temperature.into()),
             (
-                "temperature".to_string(),
-                (DataAttribute::Scalar, temperature.into()),
+                "displacement",
+                DataAttribute::Vector,
+                displacement
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<f64>>()
+                    .into(),
             ),
             (
-                "displacement".to_string(),
-                (
-                    DataAttribute::Vector,
-                    displacement
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<f64>>()
-                        .into(),
-                ),
+                "velocity_gradient",
+                DataAttribute::Tensor,
+                velocity_gradient
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<f64>>()
+                    .into(),
             ),
-            (
-                "velocity_gradient".to_string(),
-                (
-                    DataAttribute::Tensor,
-                    velocity_gradient
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<f64>>()
-                        .into(),
-                ),
-            ),
-        ]
-        .into_iter()
-        .collect();
+        ];
 
         let cell_data = [
             (
-                "region_id".to_string(),
-                (DataAttribute::Scalar, REGION_ID.to_vec().into()),
+                "region_id",
+                DataAttribute::Scalar,
+                REGION_ID.to_vec().into(),
             ),
             (
-                "stress".to_string(),
-                (
-                    DataAttribute::Tensor6,
-                    stress
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<f64>>()
-                        .into(),
-                ),
+                "stress",
+                DataAttribute::Tensor6,
+                stress
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<f64>>()
+                    .into(),
             ),
-        ]
-        .into_iter()
-        .collect();
+        ];
 
-        xdmf_writer.write_data(&step.to_string(), Some(&point_data), Some(&cell_data))?;
+        xdmf_writer.write_data(&step.to_string(), point_data, cell_data)?;
     }
 
     let xdmf_file_name = base_path

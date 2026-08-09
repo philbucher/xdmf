@@ -23,7 +23,7 @@ use xdmf::TimeSeriesWriter;
 // construct the writer (using HDF5 for heavy data storage)
 let xdmf_writer = TimeSeriesWriter::new(
     "xdmf_writing",
-    xdmf::DataStorage::Hdf5SingleFile
+    xdmf::DataStorage::Hdf5SingleFile { deflate_level: None }
 ).expect("failed to create XDMF writer");
 
 // define 3 points and 2 cells (a line and a triangle)
@@ -34,25 +34,18 @@ let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
 // write the mesh
 let mut time_series_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types)).expect("failed to write mesh");
 
-// define some point and cell data for time step 0.0
-let point_data = vec![(
-       "point_data".to_string(),
-       (xdmf::DataAttribute::Vector, vec![0.0; 9].into()),
-   )]
-   .into_iter()
-   .collect();
-
-let cell_data = vec![(
-       "cell_data".to_string(),
-       (xdmf::DataAttribute::Scalar, vec![0.0, 1.0].into()),
-   )]
-   .into_iter()
-   .collect();
+// the data buffers, reused across time steps: `Values` only borrows them
+let point_values = vec![0.0; 9];
+let cell_values = vec![0.0, 1.0];
 
 // write the data for 10 time steps
 for i in 0..10 {
     time_series_writer
-        .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+        .write_data(
+            &i.to_string(),
+            [("point_data", xdmf::DataAttribute::Vector, point_values.as_slice().into())],
+            [("cell_data", xdmf::DataAttribute::Scalar, cell_values.as_slice().into())],
+        )
         .expect("failed to write time step data");
 }
 ~~~
@@ -85,7 +78,6 @@ Initial comparisons show smaller storage sizes as well as faster write times. Th
 - MPI support <!-- (writing to one file => writing separate independent files can already work if file names passed have ranks) -->
 - SubMesh support, so that parts of the mesh can be visualized with the MultiBlock inspector
 - Reading files. Hopefully even concurrently, perhaps consuming to safe space.
-- Maybe binary support (could be nice for platforms that dont have HDF installed)
 
 <!-- ## TODOs
 
