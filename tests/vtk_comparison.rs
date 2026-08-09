@@ -147,9 +147,7 @@ mod tests {
             let cell_types = vec![xdmf::CellType::Hexahedron; connectivity.len() / 8];
             let conn: Vec<u64> = connectivity.iter().map(|&x| x as u64).collect();
 
-            let writer = writer
-                .write_mesh(&coordinates, (&conn, &cell_types))
-                .unwrap();
+            let writer = writer.write_mesh(&coordinates, &conn, &cell_types).unwrap();
 
             self.writer = Some(writer);
 
@@ -160,23 +158,17 @@ mod tests {
             let vec_data: Vec<f64> = (0..data.len() * 3).map(|j| (j % 3) as f64).collect();
             let start = Instant::now();
 
-            let point_data = vec![
-                (
-                    "pressure".to_string(),
-                    (xdmf::DataAttribute::Scalar, data.to_vec().into()),
-                ),
-                (
-                    "velocity".to_string(),
-                    (xdmf::DataAttribute::Vector, vec_data.into()),
-                ),
-            ]
-            .into_iter()
-            .collect();
-
             self.writer
                 .as_mut()
                 .unwrap()
-                .write_data(format!("{time}").as_str(), Some(&point_data), None)
+                .write_data(
+                    format!("{time}").as_str(),
+                    [
+                        ("pressure", xdmf::DataAttribute::Scalar, data.into()),
+                        ("velocity", xdmf::DataAttribute::Vector, vec_data.into()),
+                    ],
+                    [],
+                )
                 .unwrap();
 
             // Implement step writing logic here

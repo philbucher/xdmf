@@ -98,7 +98,7 @@ impl DataWriter for SingleFileHdf5Writer {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         let time = self
             .write_time
@@ -214,7 +214,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         // also double check that the name does not already exist
 
@@ -297,7 +297,7 @@ fn write_mesh(
 fn write_values(
     group: &H5Group,
     dataset_name: &str,
-    vals: &Values,
+    vals: &Values<'_>,
     deflate_level: u8,
 ) -> IoResult<String> {
     let data_set = match vals {
@@ -468,7 +468,7 @@ mod tests {
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0]),
+            &Values::F64(vec![1.0, 2.0].into()),
         );
         assert_eq!(
             res_write.unwrap_err().to_string(),
@@ -504,7 +504,7 @@ mod tests {
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0]),
+            &Values::F64(vec![1.0, 2.0].into()),
         );
         assert_eq!(
             res_write.unwrap_err().to_string(),
@@ -632,7 +632,7 @@ mod tests {
             .write_data(
                 "dummy_point_data",
                 attribute::Center::Node,
-                &Values::F64(data_points.clone()),
+                &Values::F64(data_points.as_slice().into()),
             )
             .unwrap();
 
@@ -642,7 +642,7 @@ mod tests {
             .write_data(
                 "some_cell_data",
                 attribute::Center::Cell,
-                &Values::F64(data_cells.clone()),
+                &Values::F64(data_cells.as_slice().into()),
             )
             .unwrap();
 
@@ -695,7 +695,7 @@ mod tests {
             .write_data(
                 "dummy_point_data",
                 attribute::Center::Node,
-                &Values::F64(data_points.clone()),
+                &Values::F64(data_points.as_slice().into()),
             )
             .unwrap();
 
@@ -705,7 +705,7 @@ mod tests {
             .write_data(
                 "some_cell_data",
                 attribute::Center::Cell,
-                &Values::F64(data_cells.clone()),
+                &Values::F64(data_cells.as_slice().into()),
             )
             .unwrap();
 

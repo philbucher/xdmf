@@ -94,7 +94,7 @@ impl DataWriter for BinaryWriter {
         &mut self,
         name: &str,
         center: attribute::Center,
-        data: &Values,
+        data: &Values<'_>,
     ) -> IoResult<DataContent> {
         let time = self
             .write_time
@@ -163,7 +163,7 @@ fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write) -> IoResult<()> {
     Ok(())
 }
 
-fn values_to_writer(data: &Values, writer: &mut impl Write) -> IoResult<()> {
+fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> IoResult<()> {
     match data {
         Values::F64(v) => write_f64_le(v, writer),
         Values::U64(v) => write_u64_as_u32_le(v, writer),

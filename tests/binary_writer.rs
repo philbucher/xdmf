@@ -35,28 +35,23 @@ fn write_and_verify_binary() {
     let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&coords, (&connectivity, &cell_types))
+        .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
-    let point_data = vec![(
-        "temperature".to_string(),
-        (
-            xdmf::DataAttribute::Scalar,
-            vec![10.0, 11.0, 12.0, 13.0].into(),
-        ),
-    )]
-    .into_iter()
-    .collect();
-
-    let cell_data = vec![(
-        "region_id".to_string(),
-        (xdmf::DataAttribute::Scalar, vec![100_u64, 200].into()),
-    )]
-    .into_iter()
-    .collect();
-
     xdmf_writer
-        .write_data("0", Some(&point_data), Some(&cell_data))
+        .write_data(
+            "0",
+            [(
+                "temperature",
+                xdmf::DataAttribute::Scalar,
+                vec![10.0, 11.0, 12.0, 13.0].into(),
+            )],
+            [(
+                "region_id",
+                xdmf::DataAttribute::Scalar,
+                vec![100_u64, 200].into(),
+            )],
+        )
         .unwrap();
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -103,20 +98,18 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
 
     let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&coords, (&connectivity, &cell_types))
+        .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
-    let cell_data = vec![(
-        "region_id".to_string(),
-        (
+    let res = xdmf_writer.write_data(
+        "0",
+        [],
+        [(
+            "region_id",
             xdmf::DataAttribute::Scalar,
             vec![u64::from(u32::MAX) + 1].into(),
-        ),
-    )]
-    .into_iter()
-    .collect();
-
-    let res = xdmf_writer.write_data("0", None, Some(&cell_data));
+        )],
+    );
     assert!(
         res.unwrap_err()
             .to_string()

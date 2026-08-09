@@ -6,13 +6,14 @@
 //! The concept is inspired by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     io::{BufWriter, Error as IoError, ErrorKind::InvalidInput, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    CellType, DataMap, DataStorage, DataWriter, create_writer, mpi_safe_create_dir_all,
+    CellType, DataAttribute, DataStorage, DataWriter, Values, create_writer,
+    mpi_safe_create_dir_all,
     xdmf_elements::{
         Information, Xdmf, attribute,
         data_item::{DataItem, NumberType},
@@ -66,23 +67,24 @@ impl TimeSeriesWriter {
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
-    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, (&connectivity, &cell_types));
+    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types);
     /// ```
     pub fn write_mesh(
         mut self,
         points: &[f64],
-        cells: (&[u64], &[CellType]),
+        connectivity: &[u64],
+        cell_types: &[CellType],
     ) -> IoResult<TimeSeriesDataWriter> {
-        validate_points_and_cells(points, cells)?;
+        validate_points_and_cells(points, connectivity, cell_types)?;
 
         let num_points = points.len() / 3;
-        let num_cells = if cells.1.is_empty() {
+        let num_cells = if cell_types.is_empty() {
             num_points
         } else {
-            cells.1.len()
+            cell_types.len()
         };
 
-        let (topo_type, prepared_cells) = prepare_cells(cells, num_points);
+        let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
 
@@ -143,7 +145,11 @@ impl TimeSeriesWriter {
 }
 
 // Validate that the points and cells are valid
-fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> IoResult<()> {
+fn validate_points_and_cells(
+    points: &[f64],
+    connectivity: &[u64],
+    cell_types: &[CellType],
+) -> IoResult<()> {
     // at least one point is required
     if points.is_empty() {
         return Err(IoError::new(InvalidInput, "At least one point is required"));
@@ -155,7 +161,7 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     }
 
     // check cells connectivity indices
-    let max_connectivity_index = cells.0.iter().max();
+    let max_connectivity_index = connectivity.iter().max();
 
     if let Some(&max_index) = max_connectivity_index
         && max_index as usize >= points.len() / 3
@@ -171,13 +177,13 @@ fn validate_points_and_cells(points: &[f64], cells: (&[u64], &[CellType])) -> Io
     }
 
     // check that the number of connectivities matches the expected number based on the cell types
-    let exp_num_points: usize = cells.1.iter().map(|ct| ct.num_points()).sum();
-    if exp_num_points != cells.0.len() {
+    let exp_num_points: usize = cell_types.iter().map(|ct| ct.num_points()).sum();
+    if exp_num_points != connectivity.len() {
         return Err(IoError::new(
             InvalidInput,
             format!(
                 "Size of connectivities not match the expected number based on the cell types: {} != {}",
-                cells.0.len(),
+                connectivity.len(),
                 exp_num_points
             ),
         ));
@@ -205,17 +211,21 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 /// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
 /// and for poly-cells, the number of points is also added.
 /// TODO if all cells are the same, then the type information can be stored as `TopologyType`
-fn prepare_cells(cells: (&[u64], &[CellType]), num_points: usize) -> (TopologyType, Vec<u64>) {
-    if cells.1.is_empty() {
+fn prepare_cells(
+    connectivity: &[u64],
+    cell_types: &[CellType],
+    num_points: usize,
+) -> (TopologyType, Vec<u64>) {
+    if cell_types.is_empty() {
         // if there are no cells, use polyvertex on nodes
         // this is required by paraview to visualize only points
         return (TopologyType::Polyvertex, (0..num_points as u64).collect());
     }
 
-    let mut cells_with_types = Vec::with_capacity(cells.0.len() + cells.1.len());
+    let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
     let mut index = 0_usize;
 
-    for cell_type in cells.1 {
+    for cell_type in cell_types {
         let num_points = cell_type.num_points();
         cells_with_types.push(*cell_type as u64);
 
@@ -224,7 +234,7 @@ fn prepare_cells(cells: (&[u64], &[CellType]), num_points: usize) -> (TopologyTy
             cells_with_types.push(n_points_poly);
         }
 
-        cells_with_types.extend_from_slice(&cells.0[index..index + num_points]);
+        cells_with_types.extend_from_slice(&connectivity[index..index + num_points]);
 
         index += num_points; // move index to the next cell
     }
@@ -247,6 +257,9 @@ pub struct TimeSeriesDataWriter {
 impl TimeSeriesDataWriter {
     /// Write point and cell data for a specific time step.
     ///
+    /// Each entry is a `(name, attribute, values)` triple; pass an empty iterator (e.g. `[]`) to
+    /// write no data of that kind. Attributes appear in the output in the order given here.
+    ///
     /// Accepts str for time to avoid dealing with formatting, thus leaving it to the user.
     /// Sizes of the data arrays are validated to ensure consistency with the mesh and defined dat types.
     /// ```rust
@@ -261,75 +274,72 @@ impl TimeSeriesDataWriter {
     ///
     /// // write the mesh
     /// let mut time_series_writer = xdmf_writer
-    ///     .write_mesh(&coords, (&connectivity, &cell_types))
+    ///     .write_mesh(&coords, &connectivity, &cell_types)
     ///     .expect("failed to write mesh");
     ///
-    /// // define some point and cell data for time step 0.0
-    /// let point_data = vec![(
-    ///     "point_data".to_string(),
-    ///     (xdmf::DataAttribute::Vector, vec![0.0; 9].into()),
-    /// )]
-    /// .into_iter()
-    /// .collect();
-    ///
-    /// let cell_data = vec![(
-    ///     "cell_data".to_string(),
-    ///     (xdmf::DataAttribute::Scalar, vec![0.0, 1.0].into()),
-    /// )]
-    /// .into_iter()
-    /// .collect();
+    /// // buffers are reused across time steps, `Values` only borrows them
+    /// let point_values = vec![0.0; 9];
+    /// let cell_values = vec![0.0, 1.0];
     ///
     /// // write the data for 10 time steps
     /// for i in 0..10 {
     ///     time_series_writer
-    ///         .write_data(&i.to_string(), Some(&point_data), Some(&cell_data))
+    ///         .write_data(
+    ///             &i.to_string(),
+    ///             [(
+    ///                 "point_data",
+    ///                 xdmf::DataAttribute::Vector,
+    ///                 point_values.as_slice().into(),
+    ///             )],
+    ///             [(
+    ///                 "cell_data",
+    ///                 xdmf::DataAttribute::Scalar,
+    ///                 cell_values.as_slice().into(),
+    ///             )],
+    ///         )
     ///         .expect("failed to write time step data");
     /// }
     /// ```
-    pub fn write_data(
+    pub fn write_data<'a>(
         &mut self,
         time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
+        point_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
+        cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
     ) -> IoResult<()> {
-        self.validate_data(time, point_data, cell_data)?;
+        let point_data = collect_data(point_data, "point")?;
+        let cell_data = collect_data(cell_data, "cell")?;
+
+        self.validate_data(time, &point_data, &cell_data)?;
 
         self.writer.write_data_initialize(time)?;
         let format = self.writer.format();
 
-        let mut new_attributes = Vec::new();
+        let mut new_attributes = Vec::with_capacity(point_data.len() + cell_data.len());
 
-        let mut create_attributes =
-            |data_map: Option<&DataMap>, center: attribute::Center| -> IoResult<()> {
-                for (data_name, data) in data_map.unwrap_or(&BTreeMap::new()) {
-                    let vals = &data.1;
+        for (data, center) in [
+            (point_data, attribute::Center::Node),
+            (cell_data, attribute::Center::Cell),
+        ] {
+            for (data_name, data_attribute, vals) in data {
+                let data_item = DataItem {
+                    name: None,
+                    dimensions: Some(vals.dimensions(data_attribute)),
+                    number_type: Some(vals.number_type()),
+                    format: Some(format),
+                    precision: Some(vals.precision(format)),
+                    endian: format.endian(),
+                    data: self.writer.write_data(data_name, center, &vals)?,
+                    reference: None,
+                };
 
-                    let data_item = DataItem {
-                        name: None,
-                        dimensions: Some(vals.dimensions(data.0)),
-                        number_type: Some(vals.number_type()),
-                        format: Some(format),
-                        precision: Some(vals.precision(format)),
-                        endian: format.endian(),
-                        data: self.writer.write_data(data_name, center, vals)?,
-                        reference: None,
-                    };
-
-                    let attribute = attribute::Attribute {
-                        name: data_name.clone(),
-                        attribute_type: data.0.into(),
-                        center,
-                        data_items: vec![data_item],
-                    };
-
-                    new_attributes.push(attribute);
-                }
-
-                Ok(())
-            };
-
-        create_attributes(point_data, attribute::Center::Node)?;
-        create_attributes(cell_data, attribute::Center::Cell)?;
+                new_attributes.push(attribute::Attribute {
+                    name: data_name.to_string(),
+                    attribute_type: data_attribute.into(),
+                    center,
+                    data_items: vec![data_item],
+                });
+            }
+        }
 
         self.attributes.push((time.to_string(), new_attributes));
         self.written_times.insert(time.to_string());
@@ -394,8 +404,8 @@ impl TimeSeriesDataWriter {
     fn validate_data(
         &self,
         time: &str,
-        point_data: Option<&DataMap>,
-        cell_data: Option<&DataMap>,
+        point_data: &[(&str, DataAttribute, Values<'_>)],
+        cell_data: &[(&str, DataAttribute, Values<'_>)],
     ) -> IoResult<()> {
         // check if time can be parsed as a float
         if time.parse::<f64>().is_err() {
@@ -414,10 +424,7 @@ impl TimeSeriesDataWriter {
         }
 
         // check if some data is provided
-        if (point_data.unwrap_or(&BTreeMap::new()).len()
-            + cell_data.unwrap_or(&BTreeMap::new()).len())
-            == 0
-        {
+        if point_data.len() + cell_data.len() == 0 {
             return Err(IoError::new(
                 InvalidInput,
                 "At least one of point_data or cell_data must be provided",
@@ -433,38 +440,62 @@ impl TimeSeriesDataWriter {
     }
 }
 
+// Collect the caller's iterator, keeping its order but rejecting a name used more than once
+// (which would otherwise produce two attributes of the same name in the same grid).
+fn collect_data<'a>(
+    data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
+    label: &str,
+) -> IoResult<Vec<(&'a str, DataAttribute, Values<'a>)>> {
+    let collected: Vec<_> = data.into_iter().collect();
+
+    let mut seen_names = HashSet::with_capacity(collected.len());
+    for (name, _, _) in &collected {
+        if !seen_names.insert(name) {
+            return Err(IoError::new(
+                InvalidInput,
+                format!("Name '{name}' of {label}-data is used more than once"),
+            ));
+        }
+    }
+
+    Ok(collected)
+}
+
 // check sizes of point_data and cell_data
-fn check_data_size(data_input: Option<&DataMap>, num_entities: usize, label: &str) -> IoResult<()> {
-    if let Some(data_map) = data_input {
-        for (name, data) in data_map {
-            let exp_size = num_entities * data.0.size();
-            if data.1.len() != exp_size {
-                return Err(IoError::new(
-                    InvalidInput,
-                    format!(
-                        "Size of {label}-data '{name}' must be {}, but is {}",
-                        exp_size,
-                        data.1.len()
-                    ),
-                ));
-            }
+fn check_data_size(
+    data_input: &[(&str, DataAttribute, Values<'_>)],
+    num_entities: usize,
+    label: &str,
+) -> IoResult<()> {
+    for (name, data_attribute, vals) in data_input {
+        let exp_size = num_entities * data_attribute.size();
+        if vals.len() != exp_size {
+            return Err(IoError::new(
+                InvalidInput,
+                format!(
+                    "Size of {label}-data '{name}' must be {}, but is {}",
+                    exp_size,
+                    vals.len()
+                ),
+            ));
         }
     }
     Ok(())
 }
 
-fn validate_data_name(data_input: Option<&DataMap>, label: &str) -> IoResult<()> {
-    if let Some(data_map) = data_input {
-        for name in data_map.keys() {
-            if !is_valid_data_name(name) {
-                return Err(IoError::new(
-                    InvalidInput,
-                    format!(
-                        "Data name '{name}' of {label}-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes",
-                    ),
-                ));
-            };
-        }
+fn validate_data_name(
+    data_input: &[(&str, DataAttribute, Values<'_>)],
+    label: &str,
+) -> IoResult<()> {
+    for (name, _, _) in data_input {
+        if !is_valid_data_name(name) {
+            return Err(IoError::new(
+                InvalidInput,
+                format!(
+                    "Data name '{name}' of {label}-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes",
+                ),
+            ));
+        };
     }
     Ok(())
 }
@@ -542,15 +573,13 @@ mod tests {
     #[test]
     fn test_prepare_cells() {
         let (topo_type, cells_prep) = prepare_cells(
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                &[
-                    CellType::Vertex,
-                    CellType::Edge,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            &[
+                CellType::Vertex,
+                CellType::Edge,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
             0,
         );
 
@@ -563,57 +592,52 @@ mod tests {
 
     #[test]
     fn prepare_cells_by_celltype() {
-        assert_eq!(
-            prepare_cells((&[5], &[CellType::Vertex]), 0).1,
-            vec![1, 1, 5]
-        );
+        assert_eq!(prepare_cells(&[5], &[CellType::Vertex], 0).1, vec![1, 1, 5]);
 
         assert_eq!(
-            prepare_cells((&[5, 6], &[CellType::Edge]), 0).1,
+            prepare_cells(&[5, 6], &[CellType::Edge], 0).1,
             vec![2, 2, 5, 6]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7], &[CellType::Triangle]), 0).1,
+            prepare_cells(&[5, 6, 7], &[CellType::Triangle], 0).1,
             vec![4, 5, 6, 7]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8], &[CellType::Quadrilateral]), 0).1,
+            prepare_cells(&[5, 6, 7, 8], &[CellType::Quadrilateral], 0).1,
             vec![5, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8], &[CellType::Tetrahedron]), 0).1,
+            prepare_cells(&[5, 6, 7, 8], &[CellType::Tetrahedron], 0).1,
             vec![6, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9], &[CellType::Pyramid]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9], &[CellType::Pyramid], 0).1,
             vec![7, 5, 6, 7, 8, 9]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Wedge]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).1,
             vec![8, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0).1,
             vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7], &[CellType::Edge3]), 0).1,
+            prepare_cells(&[5, 6, 7], &[CellType::Edge3], 0).1,
             vec![34, 5, 6, 7]
         );
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13],
-                    &[CellType::Quadrilateral9]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13],
+                &[CellType::Quadrilateral9],
                 0
             )
             .1,
@@ -621,25 +645,19 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells((&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6]), 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).1,
             vec![36, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells(
-                (&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8]),
-                0
-            )
-            .1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8], 0).1,
             vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-                    &[CellType::Tetrahedron10]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+                &[CellType::Tetrahedron10],
                 0
             )
             .1,
@@ -648,10 +666,8 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    &[CellType::Pyramid13]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                &[CellType::Pyramid13],
                 0
             )
             .1,
@@ -660,10 +676,8 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-                    &[CellType::Wedge15]
-                ),
+                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+                &[CellType::Wedge15],
                 0
             )
             .1,
@@ -672,12 +686,10 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
-                    ],
-                    &[CellType::Wedge18]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
+                ],
+                &[CellType::Wedge18],
                 0
             )
             .1,
@@ -688,12 +700,10 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
-                    ],
-                    &[CellType::Hexahedron20]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                ],
+                &[CellType::Hexahedron20],
                 0
             )
             .1,
@@ -704,13 +714,11 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-                        25, 26, 27, 28
-                    ],
-                    &[CellType::Hexahedron24]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28
+                ],
+                &[CellType::Hexahedron24],
                 0
             )
             .1,
@@ -722,13 +730,11 @@ mod tests {
 
         assert_eq!(
             prepare_cells(
-                (
-                    &[
-                        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-                        25, 26, 27, 28, 29, 30, 31
-                    ],
-                    &[CellType::Hexahedron27]
-                ),
+                &[
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28, 29, 30, 31
+                ],
+                &[CellType::Hexahedron27],
                 0
             )
             .1,
@@ -741,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_no_cells() {
-        let (topo_type, cells_prep) = prepare_cells((&[], &[]), 5);
+        let (topo_type, cells_prep) = prepare_cells(&[], &[], 5);
 
         assert_eq!(topo_type, TopologyType::Polyvertex);
         assert_eq!(cells_prep, vec![0, 1, 2, 3, 4]);
@@ -752,14 +758,12 @@ mod tests {
         // valid input, must not return an error
         validate_points_and_cells(
             &[0.0; 33],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         )
         .unwrap();
     }
@@ -767,21 +771,19 @@ mod tests {
     #[test]
     fn validate_points_and_cells_only_points() {
         // valid input, must not return an error
-        validate_points_and_cells(&[0.0; 33], (&[], &[])).unwrap();
+        validate_points_and_cells(&[0.0; 33], &[], &[]).unwrap();
     }
 
     #[test]
     fn validate_points_and_cells_points_empty() {
         let res = validate_points_and_cells(
             &[],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -794,14 +796,12 @@ mod tests {
     fn validate_points_and_cells_points_not_3d() {
         let res = validate_points_and_cells(
             &[0.0; 22],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -814,14 +814,12 @@ mod tests {
     fn validate_points_and_cells_conn_index_out_of_bounds() {
         let res = validate_points_and_cells(
             &[0.0; 33],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 70],
-                &[
-                    CellType::Vertex,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 70],
+            &[
+                CellType::Vertex,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -834,15 +832,13 @@ mod tests {
     fn validate_points_and_cells_conn_mismatch() {
         let res = validate_points_and_cells(
             &[0.0; 33],
-            (
-                &[0, 1, 2, 3, 4, 5, 6, 7],
-                &[
-                    CellType::Vertex,
-                    CellType::Edge,
-                    CellType::Triangle,
-                    CellType::Quadrilateral,
-                ],
-            ),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            &[
+                CellType::Vertex,
+                CellType::Edge,
+                CellType::Triangle,
+                CellType::Quadrilateral,
+            ],
         );
 
         assert_eq!(
@@ -906,55 +902,93 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; NUM_POINTS * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
             )
             .unwrap();
 
-        let point_data = vec![(
-            "point_data1".to_string(),
-            (DataAttribute::Scalar, vec![5.0; NUM_POINTS].into()),
-        )]
-        .into_iter()
-        .collect();
+        let values = vec![5.0; NUM_POINTS];
+        let point_data = || {
+            [(
+                "point_data1",
+                DataAttribute::Scalar,
+                values.as_slice().into(),
+            )]
+        };
 
         // Valid time step
-        writer.write_data("0.1", Some(&point_data), None).unwrap();
+        writer.write_data("0.1", point_data(), []).unwrap();
 
-        // Missing data
-        let exp_err_missing_data = "At least one of point_data or cell_data must be provided";
-
-        // neither point_data nor cell_data provided
-        let res = writer.write_data("1.0", None, None);
-        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
-
-        // (empty) point_data provided, but cell_data is None
-        let res = writer.write_data("1.0", Some(&BTreeMap::new()), None);
-        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
-
-        // (empty) cell_data provided, but point_data is None
-        let res = writer.write_data("1.0", None, Some(&BTreeMap::new()));
-        assert_eq!(res.unwrap_err().to_string(), exp_err_missing_data);
+        // no data at all provided
+        let res = writer.write_data("1.0", [], []);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "At least one of point_data or cell_data must be provided"
+        );
 
         // Invalid time step (already exists)
-        let res = writer.write_data("0.1", Some(&point_data), None);
+        let res = writer.write_data("0.1", point_data(), []);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Time step '0.1' has already been written"
         );
 
         // Invalid time step (not a float)
-        let res = writer.write_data("invalid_time", None, None);
+        let res = writer.write_data("invalid_time", [], []);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Time must be a valid float, and not 'invalid_time'"
         );
 
         // Invalid time step (empty)
-        let res = writer.write_data("", None, None);
+        let res = writer.write_data("", [], []);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Time must be a valid float, and not ''"
         );
+    }
+
+    #[test]
+    fn test_validate_data_duplicate_names() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_POINTS: usize = 10;
+
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; NUM_POINTS * 3],
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
+            )
+            .unwrap();
+
+        let values = vec![5.0; NUM_POINTS];
+
+        let res = writer.write_data(
+            "0.0",
+            [
+                ("duplicate", DataAttribute::Scalar, values.as_slice().into()),
+                ("duplicate", DataAttribute::Scalar, values.as_slice().into()),
+            ],
+            [],
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Name 'duplicate' of point-data is used more than once"
+        );
+
+        // the same name for point- and cell-data is allowed, they are separate entities
+        let cell_values = vec![5.0; 4];
+        writer
+            .write_data(
+                "0.0",
+                [("data", DataAttribute::Scalar, values.as_slice().into())],
+                [("data", DataAttribute::Scalar, cell_values.as_slice().into())],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -970,75 +1004,40 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; NUM_POINTS * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; 4]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
             )
             .unwrap();
 
-        // scalar point data
-        let point_data_scalar = vec![(
-            "point_data_sca".to_string(),
-            (DataAttribute::Scalar, vec![5.0; NUM_POINTS - 1].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_scalar), None);
+        let mut err_for = |name: &str, attribute: DataAttribute, len: usize| -> String {
+            writer
+                .write_data("0.0", [(name, attribute, vec![5.0; len].into())], [])
+                .unwrap_err()
+                .to_string()
+        };
+
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("point_data_sca", DataAttribute::Scalar, NUM_POINTS - 1),
             "Size of point-data 'point_data_sca' must be 10, but is 9"
         );
-
-        // vector point data
-        let point_data_vector = vec![(
-            "point_data_vec".to_string(),
-            (DataAttribute::Vector, vec![5.0; NUM_POINTS * 2].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_vector), None);
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("point_data_vec", DataAttribute::Vector, NUM_POINTS * 2),
             "Size of point-data 'point_data_vec' must be 30, but is 20"
         );
-
-        // Tensor point data
-        let point_data_tensor = vec![(
-            "point_data_ten".to_string(),
-            (DataAttribute::Tensor, vec![5.0; NUM_POINTS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_tensor), None);
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("point_data_ten", DataAttribute::Tensor, NUM_POINTS * 3),
             "Size of point-data 'point_data_ten' must be 90, but is 30"
         );
-
-        // Tensor6 point data
-        let point_data_tensor6 = vec![(
-            "point_data_ten6".to_string(),
-            (DataAttribute::Tensor6, vec![5.0; NUM_POINTS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_tensor6), None);
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("point_data_ten6", DataAttribute::Tensor6, NUM_POINTS * 3),
             "Size of point-data 'point_data_ten6' must be 60, but is 30"
         );
-
-        // Matrix point data
-        let point_data_matrix = vec![(
-            "point_data_mat".to_string(),
-            (
-                DataAttribute::Matrix(2, 1),
-                vec![5.0; NUM_POINTS * 3 - 1].into(),
-            ),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", Some(&point_data_matrix), None);
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for(
+                "point_data_mat",
+                DataAttribute::Matrix(2, 1),
+                NUM_POINTS * 3 - 1
+            ),
             "Size of point-data 'point_data_mat' must be 20, but is 29"
         );
     }
@@ -1056,98 +1055,57 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 &[0.0; 10 * 3],
-                (&[0, 2, 3, 4], &[CellType::Vertex; NUM_CELLS]),
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; NUM_CELLS],
             )
             .unwrap();
 
-        // scalar cell data
-        let cell_data_scalar = vec![(
-            "cell_data_sca".to_string(),
-            (DataAttribute::Scalar, vec![5.0; NUM_CELLS - 1].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_scalar));
+        let mut err_for = |name: &str, attribute: DataAttribute, len: usize| -> String {
+            writer
+                .write_data("0.0", [], [(name, attribute, vec![5.0; len].into())])
+                .unwrap_err()
+                .to_string()
+        };
+
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("cell_data_sca", DataAttribute::Scalar, NUM_CELLS - 1),
             "Size of cell-data 'cell_data_sca' must be 4, but is 3"
         );
-
-        // vector cell data
-        let cell_data_vector = vec![(
-            "cell_data_vec".to_string(),
-            (DataAttribute::Vector, vec![5.0; NUM_CELLS * 2].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_vector));
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("cell_data_vec", DataAttribute::Vector, NUM_CELLS * 2),
             "Size of cell-data 'cell_data_vec' must be 12, but is 8"
         );
-
-        // Tensor cell data
-        let cell_data_tensor = vec![(
-            "cell_data_ten".to_string(),
-            (DataAttribute::Tensor, vec![5.0; NUM_CELLS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_tensor));
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("cell_data_ten", DataAttribute::Tensor, NUM_CELLS * 3),
             "Size of cell-data 'cell_data_ten' must be 36, but is 12"
         );
-
-        // Tensor6 cell data
-        let cell_data_tensor6 = vec![(
-            "cell_data_ten6".to_string(),
-            (DataAttribute::Tensor6, vec![5.0; NUM_CELLS * 3].into()),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_tensor6));
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for("cell_data_ten6", DataAttribute::Tensor6, NUM_CELLS * 3),
             "Size of cell-data 'cell_data_ten6' must be 24, but is 12"
         );
-
-        // Matrix cell data
-        let cell_data_matrix = vec![(
-            "cell_data_mat".to_string(),
-            (
-                DataAttribute::Matrix(2, 1),
-                vec![5.0; NUM_CELLS * 3 - 1].into(),
-            ),
-        )]
-        .into_iter()
-        .collect();
-        let res = writer.write_data("0.0", None, Some(&cell_data_matrix));
         assert_eq!(
-            res.unwrap_err().to_string(),
+            err_for(
+                "cell_data_mat",
+                DataAttribute::Matrix(2, 1),
+                NUM_CELLS * 3 - 1
+            ),
             "Size of cell-data 'cell_data_mat' must be 8, but is 11"
         );
     }
 
     #[test]
     fn test_validate_data_names() {
-        let data = vec![(
-            "cell_data_ten".to_string(),
-            (DataAttribute::Scalar, vec![0.0; 1].into()),
-        )]
-        .into_iter()
-        .collect();
+        let data = [("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1].into())];
 
-        validate_data_name(Some(&data), "cell").unwrap();
+        validate_data_name(&data, "cell").unwrap();
 
-        let data_invalid_name = vec![(
-            "cell[_data]_ten".to_string(),
-            (DataAttribute::Scalar, vec![0.0; 1].into()),
-        )]
-        .into_iter()
-        .collect();
+        let data_invalid_name = [(
+            "cell[_data]_ten",
+            DataAttribute::Scalar,
+            vec![0.0; 1].into(),
+        )];
 
-        let res = validate_data_name(Some(&data_invalid_name), "point");
+        let res = validate_data_name(&data_invalid_name, "point");
         assert_eq!(
             res.unwrap_err().to_string(),
             "Data name 'cell[_data]_ten' of point-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes"
@@ -1256,7 +1214,7 @@ mod tests {
                 &mut self,
                 name: &str,
                 _center: attribute::Center,
-                _data: &crate::values::Values,
+                _data: &Values<'_>,
             ) -> IoResult<DataContent> {
                 Ok(DataContent::Raw(format!("data_for_{name}")))
             }
@@ -1276,17 +1234,12 @@ mod tests {
             written_times: HashSet::new(),
         };
 
-        let point_data = vec![(
-            "scalar_data".to_string(),
-            (DataAttribute::Scalar, vec![0.0; 0].into()),
-        )]
-        .into_iter()
-        .collect();
+        let point_data = || [("scalar_data", DataAttribute::Scalar, vec![0.0; 0].into())];
 
-        writer.write_data("0.0", Some(&point_data), None).unwrap();
-        writer.write_data("1.0", Some(&point_data), None).unwrap();
-        writer.write_data("2.0", Some(&point_data), None).unwrap();
-        writer.write_data("10.0", Some(&point_data), None).unwrap();
+        writer.write_data("0.0", point_data(), []).unwrap();
+        writer.write_data("1.0", point_data(), []).unwrap();
+        writer.write_data("2.0", point_data(), []).unwrap();
+        writer.write_data("10.0", point_data(), []).unwrap();
 
         // Check that the data are in the correct order
 
