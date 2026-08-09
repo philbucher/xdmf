@@ -27,14 +27,15 @@ them. Revisit deliberately, not by drift.
   `(&str, DataAttribute, Values)` triples instead of `DataMap`) and `API_IMPROVEMENTS_PLAN.md`
   item 3 (flattened `write_mesh`'s cell tuple). Details and links in `API_IMPROVEMENTS_PLAN.md`'s
   top-of-file status note and in `02_performance.md` part F.
-- **2026-08-09, not yet committed.** The remaining `API_IMPROVEMENTS_PLAN.md` items: item 1
-  (writer poisoning — `write_data_finalize` now always runs, and a new `DataWriter::validate_values`
-  lets `BinaryWriter` catch its u64→u32 range check before `write_data_initialize` rather than
-  mid-write), item 2 (time dedup now keyed on `f64::to_bits` instead of the string), and item 4
-  (`deflate_level` validated in `create_writer` before any writer is built). Full details in each
-  item's own "DONE" note in `API_IMPROVEMENTS_PLAN.md`. **This closes out M0's items**, except for
-  the O(steps²) light-data rewrite (`02_performance.md` part B, decision 6), which is a separate,
-  larger piece of M0/M2 and was never part of `API_IMPROVEMENTS_PLAN.md`.
+- **2026-08-09, PR #19 "small fixes and improvements" (`fa2bbee`, merged to `main`).** The
+  remaining `API_IMPROVEMENTS_PLAN.md` items: item 1 (writer poisoning — `write_data_finalize`
+  now always runs, and a new `DataWriter::validate_values` lets `BinaryWriter` catch its u64→u32
+  range check before `write_data_initialize` rather than mid-write), item 2 (time dedup now keyed
+  on `f64::to_bits` instead of the string), and item 4 (`deflate_level` validated in
+  `create_writer` before any writer is built). Full details in each item's own "DONE" note in
+  `API_IMPROVEMENTS_PLAN.md`. **This closes out M0's items**, except for the O(steps²) light-data
+  rewrite (`02_performance.md` part B, decision 6), which is a separate, larger piece of M0/M2 and
+  was never part of `API_IMPROVEMENTS_PLAN.md`.
 
 ## Sub-plans
 
@@ -124,8 +125,7 @@ PR #18), `src/binary_writer.rs` (already on main), `.github/workflows/paraview.y
 
 - ~~`reader.rs` and `xdmf_write_{data,mesh}.xdmf2` are untracked files sitting in the repo root~~ —
   **done.** Both are gone from the working tree as of 2026-08-09.
-- **Still open:** `plans/` itself (this file included) is untracked — `git status` still shows the
-  whole directory as `??`. Commit it so the planning docs are on `main`, not just on disk.
+- ~~`plans/` itself (this file included) is untracked~~ — **done.** Committed in `efc2db1`.
 
 ## Release strategy
 

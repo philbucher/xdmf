@@ -16,9 +16,10 @@ That PR also carried item 3 below (the `write_mesh` flattening) and a doc note o
 impls warning that they move the buffer — see `02_performance.md` part F for the buffer-reuse
 follow-up that is still open.
 
-**Items 1, 2, and 4 are now done too (2026-08-09, not yet committed — see the note in each
-section below).** M0 is complete except for the O(steps²) light-data rewrite, which was never
-part of this document — see `02_performance.md` part B.
+**Items 1, 2, and 4 are done too, merged to `main` (2026-08-09, PR #19 "small fixes and
+improvements", commit `fa2bbee`) — see the note in each section below.** M0 is complete except
+for the O(steps²) light-data rewrite, which was never part of this document — see
+`02_performance.md` part B.
 
 Items 1 and 2 are defects with confirmed reproductions. Items 3 and 4 are interface cleanups.
 Item 5 is a decision to make, not a change to schedule.
@@ -27,7 +28,7 @@ Item 5 is a decision to make, not a change to schedule.
 
 ## 1. A mid-write error permanently poisons the writer
 
-**DONE (2026-08-09, not yet committed).** Both parts landed:
+**DONE (2026-08-09, merged to `main` in PR #19, commit `fa2bbee`).** Both parts landed:
 `TimeSeriesDataWriter::write_data` now runs the attribute-writing loop through a private
 `write_attributes` helper and always calls `self.writer.write_data_finalize()` after it,
 regardless of whether it succeeded — the write error (if any) wins over a finalize error rather
@@ -97,9 +98,10 @@ its own failure mode. Recommend leaving them for now and revisiting only if it b
 
 ## 2. Time-step dedup is textual while validation is numeric
 
-**DONE (2026-08-09, not yet committed).** `written_times` is now `HashMap<u64, String>`, keyed on
-`f64::to_bits` of the parsed time (as this section already recommended), with the value being the
-spelling first used. The message is `Time step '{time}' has already been written` when the exact
+**DONE (2026-08-09, merged to `main` in PR #19, commit `fa2bbee`).** `written_times` is now
+`HashMap<u64, String>`, keyed on `f64::to_bits` of the parsed time (as this section already
+recommended), with the value being the spelling first used. The message is
+`Time step '{time}' has already been written` when the exact
 same spelling repeats, or `Time step '{time}' has already been written (as '{existing}')` when a
 different spelling of the same value is rejected — chosen over always appending the `(as ...)`
 clause because for the same-spelling case it would just repeat the string back at the caller.
@@ -204,8 +206,9 @@ bundle it with the mechanical flattening.
 
 ## 4. Reject invalid `deflate_level` at construction
 
-**DONE (2026-08-09, not yet committed).** `create_writer` (`src/lib.rs`) now calls
-`validate_deflate_level` for both `Hdf5SingleFile` and `Hdf5MultipleFiles` before the
+**DONE (2026-08-09, merged to `main` in PR #19, commit `fa2bbee`).** `create_writer`
+(`src/lib.rs`) now calls `validate_deflate_level` for both `Hdf5SingleFile` and
+`Hdf5MultipleFiles` before the
 feature-gated branch, so it fires the same way with or without the `hdf5` feature enabled (an
 invalid level is now reported before the "requires the hdf5 feature" error would otherwise win).
 The rest of this section is kept for the record.
