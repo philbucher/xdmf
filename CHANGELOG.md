@@ -11,9 +11,11 @@ All notable changes to this crate are documented here. Format loosely follows
   dedicated `xdmf::Error` enum and `xdmf::Result<T>` alias (`src/error.rs`). Every fallible
   function in the crate (`TimeSeriesWriter`/`TimeSeriesDataWriter` methods,
   `mpi_safe_create_dir_all`) now returns `xdmf::Result<T>`. `Error` is a flat, `thiserror`-based
-  enum with one variant per failure mode (`NoPoints`, `DataSizeMismatch`, `DuplicateTime`,
-  `IntegerTooLargeForBinary`, `Hdf5` (`hdf5` feature only), ...), so callers can match on the
-  specific failure instead of substring-matching an error message.
+  enum grouped by failure category (`Io`, `Hdf5` (`hdf5` feature only), `InvalidFileName`,
+  `InvalidConfiguration`, `InvalidMesh`, `InvalidTimeStep`, `InvalidData`,
+  `IntegerTooLargeForBinary`, `Internal`), so callers can match on the category instead of
+  substring-matching an error message. Most variants carry a `reason: String` describing the
+  specific failure in prose rather than their own dedicated variant/fields.
 
   **Migration for consumers matching on old messages:** replace
   `err.to_string() == "..."` / substring checks with `matches!(err, xdmf::Error::SomeVariant { .. })`.

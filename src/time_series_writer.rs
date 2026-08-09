@@ -12,8 +12,7 @@ use std::{
 };
 
 use crate::{
-    CellType, DataAttribute, DataCenter, DataStorage, DataWriter, Error, Result, Values,
-    create_writer,
+    CellType, DataAttribute, DataStorage, DataWriter, Error, Result, Values, create_writer,
     error::{INVALID_FILE_NAME_CHARS, io_ctx},
     mpi_safe_create_dir_all,
     xdmf_elements::{
@@ -154,12 +153,19 @@ fn validate_points_and_cells(
 ) -> Result<()> {
     // at least one point is required
     if points.is_empty() {
-        return Err(Error::NoPoints);
+        return Err(Error::InvalidMesh {
+            reason: "at least one point is required".to_string(),
+        });
     }
 
     // check that points are a multiple of 3 (x, y, z)
     if !points.len().is_multiple_of(3) {
-        return Err(Error::PointsNotThreeDimensional { len: points.len() });
+        return Err(Error::InvalidMesh {
+            reason: format!(
+                "points must have 3 dimensions, but {} is not a multiple of 3",
+                points.len()
+            ),
+        });
     }
 
     // check cells connectivity indices
@@ -168,18 +174,22 @@ fn validate_points_and_cells(
     if let Some(&max_index) = max_connectivity_index
         && max_index as usize >= points.len() / 3
     {
-        return Err(Error::ConnectivityIndexOutOfBounds {
-            index: max_index,
-            num_points: points.len() / 3,
+        return Err(Error::InvalidMesh {
+            reason: format!(
+                "connectivity index {max_index} is out of bounds, the mesh only has {} points",
+                points.len() / 3
+            ),
         });
     }
 
     // check that the number of connectivities matches the expected number based on the cell types
     let exp_num_points: usize = cell_types.iter().map(|ct| ct.num_points()).sum();
     if exp_num_points != connectivity.len() {
-        return Err(Error::ConnectivitySizeMismatch {
-            actual: connectivity.len(),
-            expected: exp_num_points,
+        return Err(Error::InvalidMesh {
+            reason: format!(
+                "size of connectivity ({}) does not match the number expected from the cell types ({exp_num_points})",
+                connectivity.len()
+            ),
         });
     }
 
@@ -303,8 +313,8 @@ impl TimeSeriesDataWriter {
         point_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
         cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
     ) -> Result<()> {
-        let point_data = collect_data(point_data, DataCenter::Point)?;
-        let cell_data = collect_data(cell_data, DataCenter::Cell)?;
+        let point_data = collect_data(point_data, attribute::Center::Node)?;
+        let cell_data = collect_data(cell_data, attribute::Center::Cell)?;
 
         let time_bits = self.validate_data(time, &point_data, &cell_data)?;
 
@@ -431,31 +441,34 @@ impl TimeSeriesDataWriter {
     ) -> Result<u64> {
         let parsed_time = time
             .parse::<f64>()
-            .map_err(|_parse_error| Error::InvalidTime {
+            .map_err(|_parse_error| Error::InvalidTimeStep {
                 time: time.to_string(),
+                reason: "must be a valid float".to_string(),
             })?;
         let time_bits = parsed_time.to_bits();
 
         // check if the time step has already been written, keyed on the parsed value rather
         // than the string so different spellings of the same instant are caught too
         if let Some(existing) = self.written_times.get(&time_bits) {
-            return Err(Error::DuplicateTime {
+            return Err(Error::InvalidTimeStep {
                 time: time.to_string(),
-                existing: existing.clone(),
+                reason: format!("already written (as '{existing}')"),
             });
         }
 
         // check if some data is provided
         if point_data.len() + cell_data.len() == 0 {
-            return Err(Error::NoData);
+            return Err(Error::InvalidData {
+                reason: "at least one of point_data or cell_data must be provided".to_string(),
+            });
         }
 
-        check_data_size(point_data, self.num_points, DataCenter::Point)?;
-        check_data_size(cell_data, self.num_cells, DataCenter::Cell)?;
+        check_data_size(point_data, self.num_points, attribute::Center::Node)?;
+        check_data_size(cell_data, self.num_cells, attribute::Center::Cell)?;
 
         // check that names do not contain forbidden characters
-        validate_data_name(point_data, DataCenter::Point)?;
-        validate_data_name(cell_data, DataCenter::Cell)?;
+        validate_data_name(point_data, attribute::Center::Node)?;
+        validate_data_name(cell_data, attribute::Center::Cell)?;
 
         // reject values the backend's format cannot represent (e.g. binary's u64->u32 range)
         // up front, before write_data_initialize runs, so a caller mistake here can never leave
@@ -472,16 +485,18 @@ impl TimeSeriesDataWriter {
 // (which would otherwise produce two attributes of the same name in the same grid).
 fn collect_data<'a>(
     data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
-    center: DataCenter,
+    center: attribute::Center,
 ) -> Result<Vec<(&'a str, DataAttribute, Values<'a>)>> {
     let collected: Vec<_> = data.into_iter().collect();
 
     let mut seen_names = HashSet::with_capacity(collected.len());
     for (name, _, _) in &collected {
         if !seen_names.insert(name) {
-            return Err(Error::DuplicateDataName {
-                center,
-                name: (*name).to_string(),
+            return Err(Error::InvalidData {
+                reason: format!(
+                    "name '{name}' of {} is used more than once",
+                    attribute::center_to_data_tag(center)
+                ),
             });
         }
     }
@@ -493,16 +508,17 @@ fn collect_data<'a>(
 fn check_data_size(
     data_input: &[(&str, DataAttribute, Values<'_>)],
     num_entities: usize,
-    center: DataCenter,
+    center: attribute::Center,
 ) -> Result<()> {
     for (name, data_attribute, vals) in data_input {
         let exp_size = num_entities * data_attribute.size();
         if vals.len() != exp_size {
-            return Err(Error::DataSizeMismatch {
-                center,
-                name: (*name).to_string(),
-                expected: exp_size,
-                actual: vals.len(),
+            return Err(Error::InvalidData {
+                reason: format!(
+                    "size of {} '{name}' must be {exp_size}, but is {}",
+                    attribute::center_to_data_tag(center),
+                    vals.len()
+                ),
             });
         }
     }
@@ -511,13 +527,16 @@ fn check_data_size(
 
 fn validate_data_name(
     data_input: &[(&str, DataAttribute, Values<'_>)],
-    center: DataCenter,
+    center: attribute::Center,
 ) -> Result<()> {
     for (name, _, _) in data_input {
         if !is_valid_data_name(name) {
-            return Err(Error::InvalidDataName {
-                center,
-                name: (*name).to_string(),
+            return Err(Error::InvalidData {
+                reason: format!(
+                    "data name '{name}' of {} is not valid, must be non-empty and contain only \
+                     alphanumeric characters, underscores or dashes",
+                    attribute::center_to_data_tag(center)
+                ),
             });
         };
     }
@@ -538,17 +557,26 @@ fn validate_file_name(file_name: &Path) -> Result<()> {
     // Only validate the final path component, the parent directories are not under our control
     // and may legitimately contain characters such as ':' (e.g. Windows drive letters).
     let Some(name) = file_name.file_name().and_then(|name| name.to_str()) else {
-        return Err(Error::NonUtf8FileName);
+        return Err(Error::InvalidFileName {
+            path: file_name.to_path_buf(),
+            reason: "must be valid UTF-8".to_string(),
+        });
     };
 
     if name.is_empty() {
-        return Err(Error::EmptyFileName);
+        return Err(Error::InvalidFileName {
+            path: file_name.to_path_buf(),
+            reason: "must not be empty".to_string(),
+        });
     }
 
     // Check for invalid characters
     if name.chars().any(|c| INVALID_FILE_NAME_CHARS.contains(&c)) {
-        return Err(Error::InvalidFileNameChars {
-            name: name.to_string(),
+        return Err(Error::InvalidFileName {
+            path: file_name.to_path_buf(),
+            reason: format!(
+                "must not contain the following characters: {INVALID_FILE_NAME_CHARS:?}"
+            ),
         });
     }
 
@@ -805,7 +833,10 @@ mod tests {
             ],
         );
 
-        std::assert_matches!(res.unwrap_err(), Error::NoPoints);
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason } if reason.contains("at least one point")
+        );
     }
 
     #[test]
@@ -822,7 +853,7 @@ mod tests {
 
         std::assert_matches!(
             res.unwrap_err(),
-            Error::PointsNotThreeDimensional { len: 22 }
+            Error::InvalidMesh { reason } if reason.contains("22 is not a multiple of 3")
         );
     }
 
@@ -840,10 +871,9 @@ mod tests {
 
         std::assert_matches!(
             res.unwrap_err(),
-            Error::ConnectivityIndexOutOfBounds {
-                index: 70,
-                num_points: 11
-            }
+            Error::InvalidMesh { reason }
+                if reason.contains("connectivity index 70")
+                    && reason.contains("only has 11 points")
         );
     }
 
@@ -862,10 +892,8 @@ mod tests {
 
         std::assert_matches!(
             res.unwrap_err(),
-            Error::ConnectivitySizeMismatch {
-                actual: 8,
-                expected: 10
-            }
+            Error::InvalidMesh { reason }
+                if reason.contains("connectivity (8)") && reason.contains("cell types (10)")
         );
     }
 
@@ -943,28 +971,33 @@ mod tests {
 
         // no data at all provided
         let res = writer.write_data("1.0", [], []);
-        std::assert_matches!(res.unwrap_err(), Error::NoData);
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidData { reason } if reason.contains("at least one of point_data or cell_data")
+        );
 
         // Invalid time step (already exists)
         let res = writer.write_data("0.1", point_data(), []);
         std::assert_matches!(
             res.unwrap_err(),
-            Error::DuplicateTime { time, existing }
-                if time == "0.1" && existing == "0.1"
+            Error::InvalidTimeStep { time, reason }
+                if time == "0.1" && reason.contains("already written (as '0.1')")
         );
 
         // Invalid time step (not a float)
         let res = writer.write_data("invalid_time", [], []);
         std::assert_matches!(
             res.unwrap_err(),
-            Error::InvalidTime { time } if time == "invalid_time"
+            Error::InvalidTimeStep { time, reason }
+                if time == "invalid_time" && reason.contains("must be a valid float")
         );
 
         // Invalid time step (empty)
         let res = writer.write_data("", [], []);
         std::assert_matches!(
             res.unwrap_err(),
-            Error::InvalidTime { time } if time.is_empty()
+            Error::InvalidTimeStep { time, reason }
+                if time.is_empty() && reason.contains("must be a valid float")
         );
     }
 
@@ -1000,8 +1033,8 @@ mod tests {
         let res = writer.write_data("0.10", point_data(), []);
         std::assert_matches!(
             res.unwrap_err(),
-            Error::DuplicateTime { time, existing }
-                if time == "0.10" && existing == "0.1"
+            Error::InvalidTimeStep { time, reason }
+                if time == "0.10" && reason.contains("already written (as '0.1')")
         );
 
         // a genuinely different value is accepted
@@ -1037,11 +1070,11 @@ mod tests {
         );
         std::assert_matches!(
             res.unwrap_err(),
-            Error::DuplicateDataName { center: DataCenter::Point, name }
-                if name == "duplicate"
+            Error::InvalidData { reason }
+                if reason.contains("name 'duplicate' of point_data is used more than once")
         );
 
-        // the same name for point- and cell-data is allowed, they are separate entities
+        // the same name for point_data and cell_data is allowed, they are separate entities
         let cell_values = vec![5.0; 4];
         writer
             .write_data(
@@ -1078,23 +1111,23 @@ mod tests {
 
         std::assert_matches!(
             err_for("point_data_sca", DataAttribute::Scalar, NUM_POINTS - 1),
-            Error::DataSizeMismatch { center: DataCenter::Point, name, expected: 10, actual: 9 }
-                if name == "point_data_sca"
+            Error::InvalidData { reason }
+                if reason == "size of point_data 'point_data_sca' must be 10, but is 9"
         );
         std::assert_matches!(
             err_for("point_data_vec", DataAttribute::Vector, NUM_POINTS * 2),
-            Error::DataSizeMismatch { center: DataCenter::Point, name, expected: 30, actual: 20 }
-                if name == "point_data_vec"
+            Error::InvalidData { reason }
+                if reason == "size of point_data 'point_data_vec' must be 30, but is 20"
         );
         std::assert_matches!(
             err_for("point_data_ten", DataAttribute::Tensor, NUM_POINTS * 3),
-            Error::DataSizeMismatch { center: DataCenter::Point, name, expected: 90, actual: 30 }
-                if name == "point_data_ten"
+            Error::InvalidData { reason }
+                if reason == "size of point_data 'point_data_ten' must be 90, but is 30"
         );
         std::assert_matches!(
             err_for("point_data_ten6", DataAttribute::Tensor6, NUM_POINTS * 3),
-            Error::DataSizeMismatch { center: DataCenter::Point, name, expected: 60, actual: 30 }
-                if name == "point_data_ten6"
+            Error::InvalidData { reason }
+                if reason == "size of point_data 'point_data_ten6' must be 60, but is 30"
         );
         std::assert_matches!(
             err_for(
@@ -1102,8 +1135,8 @@ mod tests {
                 DataAttribute::Matrix(2, 1),
                 NUM_POINTS * 3 - 1
             ),
-            Error::DataSizeMismatch { center: DataCenter::Point, name, expected: 20, actual: 29 }
-                if name == "point_data_mat"
+            Error::InvalidData { reason }
+                if reason == "size of point_data 'point_data_mat' must be 20, but is 29"
         );
     }
 
@@ -1133,23 +1166,23 @@ mod tests {
 
         std::assert_matches!(
             err_for("cell_data_sca", DataAttribute::Scalar, NUM_CELLS - 1),
-            Error::DataSizeMismatch { center: DataCenter::Cell, name, expected: 4, actual: 3 }
-                if name == "cell_data_sca"
+            Error::InvalidData { reason }
+                if reason == "size of cell_data 'cell_data_sca' must be 4, but is 3"
         );
         std::assert_matches!(
             err_for("cell_data_vec", DataAttribute::Vector, NUM_CELLS * 2),
-            Error::DataSizeMismatch { center: DataCenter::Cell, name, expected: 12, actual: 8 }
-                if name == "cell_data_vec"
+            Error::InvalidData { reason }
+                if reason == "size of cell_data 'cell_data_vec' must be 12, but is 8"
         );
         std::assert_matches!(
             err_for("cell_data_ten", DataAttribute::Tensor, NUM_CELLS * 3),
-            Error::DataSizeMismatch { center: DataCenter::Cell, name, expected: 36, actual: 12 }
-                if name == "cell_data_ten"
+            Error::InvalidData { reason }
+                if reason == "size of cell_data 'cell_data_ten' must be 36, but is 12"
         );
         std::assert_matches!(
             err_for("cell_data_ten6", DataAttribute::Tensor6, NUM_CELLS * 3),
-            Error::DataSizeMismatch { center: DataCenter::Cell, name, expected: 24, actual: 12 }
-                if name == "cell_data_ten6"
+            Error::InvalidData { reason }
+                if reason == "size of cell_data 'cell_data_ten6' must be 24, but is 12"
         );
         std::assert_matches!(
             err_for(
@@ -1157,8 +1190,8 @@ mod tests {
                 DataAttribute::Matrix(2, 1),
                 NUM_CELLS * 3 - 1
             ),
-            Error::DataSizeMismatch { center: DataCenter::Cell, name, expected: 8, actual: 11 }
-                if name == "cell_data_mat"
+            Error::InvalidData { reason }
+                if reason == "size of cell_data 'cell_data_mat' must be 8, but is 11"
         );
     }
 
@@ -1166,7 +1199,7 @@ mod tests {
     fn test_validate_data_names() {
         let data = [("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1].into())];
 
-        validate_data_name(&data, DataCenter::Cell).unwrap();
+        validate_data_name(&data, attribute::Center::Cell).unwrap();
 
         let data_invalid_name = [(
             "cell[_data]_ten",
@@ -1174,11 +1207,11 @@ mod tests {
             vec![0.0; 1].into(),
         )];
 
-        let res = validate_data_name(&data_invalid_name, DataCenter::Point);
+        let res = validate_data_name(&data_invalid_name, attribute::Center::Node);
         std::assert_matches!(
             res.unwrap_err(),
-            Error::InvalidDataName { center: DataCenter::Point, name }
-                if name == "cell[_data]_ten"
+            Error::InvalidData { reason }
+                if reason.contains("data name 'cell[_data]_ten' of point_data is not valid")
         );
     }
 
@@ -1227,7 +1260,9 @@ mod tests {
         let res = validate_file_name(Path::new("valid_name:123.txt"));
         std::assert_matches!(
             res.unwrap_err(),
-            Error::InvalidFileNameChars { name } if name == "valid_name:123.txt"
+            Error::InvalidFileName { path, reason }
+                if path == Path::new("valid_name:123.txt")
+                    && reason.contains("must not contain the following characters")
         );
     }
 
@@ -1429,7 +1464,7 @@ mod tests {
 
             fn write_data_initialize(&mut self, time: &str) -> Result<()> {
                 if self.write_time.is_some() {
-                    return Err(Error::DataWriteAlreadyInitialized);
+                    return Err(Error::Internal("writing data was already initialized"));
                 }
                 self.write_time = Some(time.to_string());
                 Ok(())
@@ -1437,7 +1472,7 @@ mod tests {
 
             fn write_data_finalize(&mut self) -> Result<()> {
                 if self.write_time.is_none() {
-                    return Err(Error::DataWriteNotInitialized);
+                    return Err(Error::Internal("writing data was not initialized"));
                 }
                 self.write_time = None;
                 Ok(())
@@ -1472,8 +1507,8 @@ mod tests {
 
         // The failed step must not have consumed the time slot ("0.0" is retried, not a new
         // time) and must not have left the backing writer poisoned: `FlakyWriter` itself would
-        // fail with `Error::DataWriteAlreadyInitialized` here if `write_data_finalize` had
-        // been skipped on the error path above.
+        // fail with `Error::Internal("writing data was already initialized")` here if
+        // `write_data_finalize` had been skipped on the error path above.
         writer
             .write_data(
                 "0.0",

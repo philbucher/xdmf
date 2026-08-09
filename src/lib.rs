@@ -20,7 +20,7 @@ mod values;
 pub mod xdmf_elements;
 
 // Re-export types used in the public API
-pub use error::{DataCenter, Error, Result};
+pub use error::{Error, Result};
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
 pub use values::Values;
 pub use xdmf_elements::CellType;
@@ -119,7 +119,9 @@ fn validate_deflate_level(deflate_level: Option<u8>) -> Result<()> {
     if let Some(level) = deflate_level
         && level > 9
     {
-        return Err(Error::DeflateLevelOutOfRange { level });
+        return Err(Error::InvalidConfiguration {
+            reason: format!("deflate level {level} is out of range, must be between 0 and 9"),
+        });
     }
     Ok(())
 }
@@ -143,9 +145,10 @@ pub(crate) fn create_writer(
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                Err(Error::StorageRequiresFeature {
-                    storage: data_storage,
-                    feature: "hdf5",
+                Err(Error::InvalidConfiguration {
+                    reason: format!(
+                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
+                    ),
                 })
             }
         }
@@ -160,9 +163,10 @@ pub(crate) fn create_writer(
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                Err(Error::StorageRequiresFeature {
-                    storage: data_storage,
-                    feature: "hdf5",
+                Err(Error::InvalidConfiguration {
+                    reason: format!(
+                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
+                    ),
                 })
             }
         }
@@ -392,11 +396,11 @@ mod tests {
 
         std::assert_matches!(
             validate_deflate_level(Some(10)).unwrap_err(),
-            Error::DeflateLevelOutOfRange { level: 10 }
+            Error::InvalidConfiguration { reason } if reason.contains("deflate level 10")
         );
         std::assert_matches!(
             validate_deflate_level(Some(255)).unwrap_err(),
-            Error::DeflateLevelOutOfRange { level: 255 }
+            Error::InvalidConfiguration { reason } if reason.contains("deflate level 255")
         );
     }
 
@@ -416,7 +420,7 @@ mod tests {
             let Err(err) = create_writer(&file_name, storage) else {
                 panic!("expected an error for deflate_level 10");
             };
-            std::assert_matches!(err, Error::DeflateLevelOutOfRange { level: 10 });
+            std::assert_matches!(err, Error::InvalidConfiguration { reason } if reason.contains("deflate level 10"));
         }
     }
 }

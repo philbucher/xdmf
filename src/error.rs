@@ -2,8 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{DataStorage, xdmf_elements::attribute};
-
 /// Result alias using this crate's [`Error`] type.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -11,9 +9,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) const INVALID_FILE_NAME_CHARS: [char; 8] = ['?', '\0', ':', '*', '"', '<', '>', '|'];
 
 /// The error type for all fallible operations in this crate.
+///
+/// Most variants carry a `reason` describing the specific failure in prose rather than as their
+/// own variant/fields, so callers wanting to react to a *category* of failure (a bad mesh, a bad
+/// time step, ...) can match on the variant, while the exact wording is covered by this crate's
+/// own message-family tests rather than being part of the API contract.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    // --- I/O -----------------------------------------------------------
     /// A filesystem operation failed.
     #[error("{operation} failed for {path}: {source}", path = path.display())]
     Io {
@@ -25,150 +27,6 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
-
-    // --- writer construction --------------------------------------------
-    /// A file name contains a character that is not allowed.
-    #[error(
-        "File name '{name}' cannot contain the following characters: {INVALID_FILE_NAME_CHARS:?}"
-    )]
-    InvalidFileNameChars {
-        /// The offending file name.
-        name: String,
-    },
-    /// A file name was empty.
-    #[error("File name must not be empty")]
-    EmptyFileName,
-    /// A file name was not valid UTF-8.
-    #[error("File name must be valid UTF-8")]
-    NonUtf8FileName,
-    /// A `deflate_level` was outside the 0-9 range accepted by zlib.
-    #[error("deflate level {level} is out of range, must be between 0 and 9")]
-    DeflateLevelOutOfRange {
-        /// The rejected level.
-        level: u8,
-    },
-    /// The chosen [`DataStorage`] requires a Cargo feature that is not enabled.
-    #[error("Using {storage:?} DataStorage requires the '{feature}' feature")]
-    StorageRequiresFeature {
-        /// The storage variant that was requested.
-        storage: DataStorage,
-        /// The feature that must be enabled to use it.
-        feature: &'static str,
-    },
-
-    // --- mesh -------------------------------------------------------------
-    /// No points were given when writing a mesh.
-    #[error("At least one point is required")]
-    NoPoints,
-    /// The points array length was not a multiple of 3.
-    #[error("Points must have 3 dimensions, but {len} is not a multiple of 3")]
-    PointsNotThreeDimensional {
-        /// The actual length of the points array.
-        len: usize,
-    },
-    /// A connectivity index referenced a point that does not exist.
-    #[error("Connectivity index {index} is out of bounds, the mesh only has {num_points} points")]
-    ConnectivityIndexOutOfBounds {
-        /// The offending index.
-        index: u64,
-        /// The number of points in the mesh.
-        num_points: usize,
-    },
-    /// The connectivity array length did not match what the cell types require.
-    #[error(
-        "Size of connectivity ({actual}) does not match the number expected from the cell types ({expected})"
-    )]
-    ConnectivitySizeMismatch {
-        /// The actual length of the connectivity array.
-        actual: usize,
-        /// The length expected from the given cell types.
-        expected: usize,
-    },
-    /// `write_mesh` was called more than once on the same writer.
-    #[error("Mesh was already written")]
-    MeshAlreadyWritten,
-    /// Internal invariant: a backend's `write_data`/`write_data_finalize` was called before its
-    /// `write_data_initialize`. Not reachable through the public `TimeSeriesDataWriter` API,
-    /// which always pairs the two; guards against a future regression in that pairing.
-    #[error("Writing data was not initialized")]
-    DataWriteNotInitialized,
-    /// Internal invariant: a backend's `write_data_initialize` was called again before the
-    /// previous call was finalized. See [`Error::DataWriteNotInitialized`].
-    #[error("Writing data was already initialized")]
-    DataWriteAlreadyInitialized,
-    /// Internal invariant: an HDF5 file path constructed by this crate had no resolvable parent
-    /// directory and file name.
-    #[error("Could not get parent and file name")]
-    Hdf5PathResolution,
-    /// Internal invariant: a backend derived its data-file name from an output path with no
-    /// final path component. Not reachable through the public `TimeSeriesWriter` API, which
-    /// already rejects such paths via [`Error::NonUtf8FileName`]/[`Error::EmptyFileName`] before
-    /// any backend is constructed.
-    #[error("Input file name must have a valid file name")]
-    MissingFileNameComponent,
-
-    // --- time steps ---------------------------------------------------------
-    /// A time step string could not be parsed as a float.
-    #[error("Time must be a valid float, and not '{time}'")]
-    InvalidTime {
-        /// The unparsable string.
-        time: String,
-    },
-    /// The same time step (by parsed value) was written more than once.
-    #[error("Time step '{time}' has already been written (as '{existing}')")]
-    DuplicateTime {
-        /// The spelling passed this time.
-        time: String,
-        /// The spelling first used for this time value.
-        existing: String,
-    },
-    /// `write_data` was called with neither point data nor cell data.
-    #[error("At least one of point_data or cell_data must be provided")]
-    NoData,
-
-    // --- attributes -----------------------------------------------------------
-    /// A data field's length did not match what the mesh and `DataAttribute` require.
-    #[error("Size of {center}-data '{name}' must be {expected}, but is {actual}")]
-    DataSizeMismatch {
-        /// Whether the field is point- or cell-data.
-        center: DataCenter,
-        /// The field's name.
-        name: String,
-        /// The length required by the mesh size and `DataAttribute`.
-        expected: usize,
-        /// The actual length given.
-        actual: usize,
-    },
-    /// A data field's name contains characters that are not allowed.
-    #[error(
-        "Data name '{name}' of {center}-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes"
-    )]
-    InvalidDataName {
-        /// Whether the field is point- or cell-data.
-        center: DataCenter,
-        /// The offending name.
-        name: String,
-    },
-    /// The same data field name was used more than once in a single `write_data` call.
-    #[error("Name '{name}' of {center}-data is used more than once")]
-    DuplicateDataName {
-        /// Whether the field is point- or cell-data.
-        center: DataCenter,
-        /// The duplicated name.
-        name: String,
-    },
-
-    // --- storage-specific -------------------------------------------------
-    /// A value does not fit the numeric range the `Binary` backend can represent.
-    #[error(
-        "value {value} does not fit in 32 bits: uncompressed Binary output only supports integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
-    )]
-    IntegerTooLargeForBinary {
-        /// The out-of-range value.
-        value: u64,
-    },
-
-    // --- hdf5 ---------------------------------------------------------------
     /// An HDF5 library call failed.
     #[cfg(feature = "hdf5")]
     #[error("HDF5 error while {operation}: {source}")]
@@ -179,33 +37,56 @@ pub enum Error {
         #[source]
         source: hdf5::Error,
     },
-}
-
-/// Whether a data field is associated with mesh points or mesh cells.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DataCenter {
-    /// Data associated with mesh points (nodes).
-    Point,
-    /// Data associated with mesh cells.
-    Cell,
-}
-
-impl std::fmt::Display for DataCenter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Point => write!(f, "point"),
-            Self::Cell => write!(f, "cell"),
-        }
-    }
-}
-
-impl From<DataCenter> for attribute::Center {
-    fn from(center: DataCenter) -> Self {
-        match center {
-            DataCenter::Point => Self::Node,
-            DataCenter::Cell => Self::Cell,
-        }
-    }
+    /// The final path component of an output file name is not usable.
+    #[error("invalid file name '{path}': {reason}", path = path.display())]
+    InvalidFileName {
+        /// The offending path.
+        path: PathBuf,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// A writer construction option (e.g. `deflate_level`, `DataStorage`) is invalid or requires
+    /// a Cargo feature that is not enabled.
+    #[error("invalid configuration: {reason}")]
+    InvalidConfiguration {
+        /// What is wrong with the configuration.
+        reason: String,
+    },
+    /// The points/connectivity/cell types given to `write_mesh` are inconsistent, or a mesh was
+    /// already written.
+    #[error("invalid mesh: {reason}")]
+    InvalidMesh {
+        /// What is wrong with the mesh.
+        reason: String,
+    },
+    /// A time step string is not a valid float, or was already written.
+    #[error("invalid time step '{time}': {reason}")]
+    InvalidTimeStep {
+        /// The offending time step string.
+        time: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// A data field given to `write_data` is invalid (wrong size, bad name, duplicate name, or
+    /// no data given at all).
+    #[error("invalid data: {reason}")]
+    InvalidData {
+        /// What is wrong with the data.
+        reason: String,
+    },
+    /// A value does not fit the numeric range the `Binary` backend can represent.
+    #[error(
+        "value {value} does not fit in 32 bits: uncompressed Binary output only supports integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
+    )]
+    IntegerTooLargeForBinary {
+        /// The out-of-range value.
+        value: u64,
+    },
+    /// An internal invariant was violated. Not reachable through the public API; guards against
+    /// a future regression in the state-machine pairing between a backend's
+    /// `write_data_initialize`/`write_data_finalize` calls, or in this crate's own path handling.
+    #[error("internal invariant violated: {0}")]
+    Internal(&'static str),
 }
 
 /// Attach filesystem-operation context to a [`std::io::Error`], for use with `map_err`.
@@ -254,132 +135,74 @@ mod error_messages {
     }
 
     #[test]
-    fn writer_construction() {
+    fn invalid_file_name() {
         assert_eq!(
-            Error::InvalidFileNameChars {
-                name: "a:b".to_string()
+            Error::InvalidFileName {
+                path: PathBuf::from("a:b"),
+                reason: "must not contain the following characters".to_string(),
             }
             .to_string(),
-            "File name 'a:b' cannot contain the following characters: ['?', '\\0', ':', '*', '\"', '<', '>', '|']"
-        );
-        assert_eq!(
-            Error::EmptyFileName.to_string(),
-            "File name must not be empty"
-        );
-        assert_eq!(
-            Error::DeflateLevelOutOfRange { level: 10 }.to_string(),
-            "deflate level 10 is out of range, must be between 0 and 9"
-        );
-        assert_eq!(
-            Error::StorageRequiresFeature {
-                storage: DataStorage::Hdf5SingleFile {
-                    deflate_level: None
-                },
-                feature: "hdf5",
-            }
-            .to_string(),
-            "Using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature"
+            "invalid file name 'a:b': must not contain the following characters"
         );
     }
 
     #[test]
-    fn mesh() {
+    fn invalid_configuration() {
         assert_eq!(
-            Error::NoPoints.to_string(),
-            "At least one point is required"
-        );
-        assert_eq!(
-            Error::PointsNotThreeDimensional { len: 22 }.to_string(),
-            "Points must have 3 dimensions, but 22 is not a multiple of 3"
-        );
-        assert_eq!(
-            Error::ConnectivityIndexOutOfBounds {
-                index: 70,
-                num_points: 11
+            Error::InvalidConfiguration {
+                reason: "deflate level 10 is out of range, must be between 0 and 9".to_string(),
             }
             .to_string(),
-            "Connectivity index 70 is out of bounds, the mesh only has 11 points"
+            "invalid configuration: deflate level 10 is out of range, must be between 0 and 9"
         );
         assert_eq!(
-            Error::ConnectivitySizeMismatch {
-                actual: 8,
-                expected: 10
+            Error::InvalidConfiguration {
+                reason: "using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature".to_string(),
             }
             .to_string(),
-            "Size of connectivity (8) does not match the number expected from the cell types (10)"
-        );
-        assert_eq!(
-            Error::MeshAlreadyWritten.to_string(),
-            "Mesh was already written"
-        );
-        assert_eq!(
-            Error::DataWriteNotInitialized.to_string(),
-            "Writing data was not initialized"
-        );
-        assert_eq!(
-            Error::DataWriteAlreadyInitialized.to_string(),
-            "Writing data was already initialized"
-        );
-        assert_eq!(
-            Error::Hdf5PathResolution.to_string(),
-            "Could not get parent and file name"
-        );
-        assert_eq!(
-            Error::MissingFileNameComponent.to_string(),
-            "Input file name must have a valid file name"
+            "invalid configuration: using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature"
         );
     }
 
     #[test]
-    fn time_steps() {
+    fn invalid_mesh() {
         assert_eq!(
-            Error::InvalidTime {
-                time: "not_a_float".to_string()
+            Error::InvalidMesh {
+                reason: "at least one point is required".to_string(),
             }
             .to_string(),
-            "Time must be a valid float, and not 'not_a_float'"
+            "invalid mesh: at least one point is required"
+        );
+    }
+
+    #[test]
+    fn invalid_time_step() {
+        assert_eq!(
+            Error::InvalidTimeStep {
+                time: "not_a_float".to_string(),
+                reason: "must be a valid float".to_string(),
+            }
+            .to_string(),
+            "invalid time step 'not_a_float': must be a valid float"
         );
         assert_eq!(
-            Error::DuplicateTime {
+            Error::InvalidTimeStep {
                 time: "0.10".to_string(),
-                existing: "0.1".to_string()
+                reason: "already written (as '0.1')".to_string(),
             }
             .to_string(),
-            "Time step '0.10' has already been written (as '0.1')"
-        );
-        assert_eq!(
-            Error::NoData.to_string(),
-            "At least one of point_data or cell_data must be provided"
+            "invalid time step '0.10': already written (as '0.1')"
         );
     }
 
     #[test]
-    fn attributes() {
+    fn invalid_data() {
         assert_eq!(
-            Error::DataSizeMismatch {
-                center: DataCenter::Point,
-                name: "temperature".to_string(),
-                expected: 10,
-                actual: 9,
+            Error::InvalidData {
+                reason: "size of point-data 'temperature' must be 10, but is 9".to_string(),
             }
             .to_string(),
-            "Size of point-data 'temperature' must be 10, but is 9"
-        );
-        assert_eq!(
-            Error::InvalidDataName {
-                center: DataCenter::Cell,
-                name: "bad name".to_string(),
-            }
-            .to_string(),
-            "Data name 'bad name' of cell-data is not valid, must be non-empty and contain only alphanumeric characters, underscores or dashes"
-        );
-        assert_eq!(
-            Error::DuplicateDataName {
-                center: DataCenter::Point,
-                name: "duplicate".to_string(),
-            }
-            .to_string(),
-            "Name 'duplicate' of point-data is used more than once"
+            "invalid data: size of point-data 'temperature' must be 10, but is 9"
         );
     }
 
@@ -395,6 +218,14 @@ mod error_messages {
         );
     }
 
+    #[test]
+    fn internal() {
+        assert_eq!(
+            Error::Internal("writing data was not initialized").to_string(),
+            "internal invariant violated: writing data was not initialized"
+        );
+    }
+
     #[cfg(feature = "hdf5")]
     #[test]
     fn hdf5() {
@@ -403,12 +234,6 @@ mod error_messages {
             source: hdf5::Error::from("boom".to_string()),
         };
         assert_eq!(err.to_string(), "HDF5 error while creating group: boom");
-    }
-
-    #[test]
-    fn data_center_display() {
-        assert_eq!(DataCenter::Point.to_string(), "point");
-        assert_eq!(DataCenter::Cell.to_string(), "cell");
     }
 
     #[test]
@@ -424,7 +249,10 @@ mod error_messages {
 
     #[test]
     fn from_error_for_io_error_defaults_to_invalid_input() {
-        let io_err: std::io::Error = Error::NoPoints.into();
+        let io_err: std::io::Error = Error::InvalidMesh {
+            reason: "at least one point is required".to_string(),
+        }
+        .into();
         assert_eq!(io_err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

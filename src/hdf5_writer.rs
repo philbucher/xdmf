@@ -52,7 +52,7 @@ impl SingleFileHdf5Writer {
 
         let h5_file_name = h5_file_name_full
             .file_name()
-            .ok_or(Error::MissingFileNameComponent)?;
+            .ok_or(Error::Internal("output path has no file name component"))?;
 
         let h5_file = H5File::create(&h5_file_name_full).map_err(hdf5_ctx("creating HDF5 file"))?;
 
@@ -78,7 +78,9 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
-            return Err(Error::MeshAlreadyWritten);
+            return Err(Error::InvalidMesh {
+                reason: "mesh was already written".to_string(),
+            });
         }
 
         let mesh_group = self
@@ -105,7 +107,7 @@ impl DataWriter for SingleFileHdf5Writer {
         let time = self
             .write_time
             .as_ref()
-            .ok_or(Error::DataWriteNotInitialized)?;
+            .ok_or(Error::Internal("writing data was not initialized"))?;
 
         let group_name = &format!(
             "{}/t_{time}/{}",
@@ -135,7 +137,7 @@ impl DataWriter for SingleFileHdf5Writer {
 
     fn write_data_initialize(&mut self, time: &str) -> Result<()> {
         if self.write_time.is_some() {
-            return Err(Error::DataWriteAlreadyInitialized);
+            return Err(Error::Internal("writing data was already initialized"));
         }
 
         self.write_time = Some(time.to_string());
@@ -143,7 +145,7 @@ impl DataWriter for SingleFileHdf5Writer {
     }
     fn write_data_finalize(&mut self) -> Result<()> {
         if self.write_time.is_none() {
-            return Err(Error::DataWriteNotInitialized);
+            return Err(Error::Internal("writing data was not initialized"));
         }
 
         self.write_time = None;
@@ -169,7 +171,7 @@ impl MultipleFilesHdf5Writer {
 
         h5_files_dir
             .file_name()
-            .ok_or(Error::MissingFileNameComponent)?;
+            .ok_or(Error::Internal("output path has no file name component"))?;
 
         crate::mpi_safe_create_dir_all(&h5_files_dir)?;
 
@@ -199,7 +201,9 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let (data_name_points, data_name_cells) =
             write_mesh(&h5_file, points, cells, self.deflate_level)?;
 
-        let rel_file_name = parent_and_filename(&file_name).ok_or(Error::Hdf5PathResolution)?;
+        let rel_file_name = parent_and_filename(&file_name).ok_or(Error::Internal(
+            "could not resolve parent directory and file name for an HDF5 path",
+        ))?;
 
         Ok((
             full_path(&rel_file_name, &data_name_points).into(),
@@ -218,7 +222,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         let data_file = self
             .h5_data_file
             .as_ref()
-            .ok_or(Error::DataWriteNotInitialized)?;
+            .ok_or(Error::Internal("writing data was not initialized"))?;
 
         let group_name = attribute::center_to_data_tag(center);
 
@@ -238,15 +242,16 @@ impl DataWriter for MultipleFilesHdf5Writer {
             self.deflate_level,
         )?;
 
-        let rel_file_name =
-            parent_and_filename(data_file.filename()).ok_or(Error::Hdf5PathResolution)?;
+        let rel_file_name = parent_and_filename(data_file.filename()).ok_or(Error::Internal(
+            "could not resolve parent directory and file name for an HDF5 path",
+        ))?;
 
         Ok(full_path(&rel_file_name, &data_path).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> Result<()> {
         if self.h5_data_file.is_some() {
-            return Err(Error::DataWriteAlreadyInitialized);
+            return Err(Error::Internal("writing data was already initialized"));
         }
 
         let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
@@ -258,7 +263,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
     fn write_data_finalize(&mut self) -> Result<()> {
         if self.h5_data_file.is_none() {
-            return Err(Error::DataWriteNotInitialized);
+            return Err(Error::Internal("writing data was not initialized"));
         }
 
         // TODO check if this flushes the file etc
@@ -466,20 +471,29 @@ mod tests {
         assert!(writer.write_time.is_none());
 
         let res_fin = writer.write_data_finalize();
-        std::assert_matches!(res_fin.unwrap_err(), Error::DataWriteNotInitialized);
+        std::assert_matches!(
+            res_fin.unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
 
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
             &Values::F64(vec![1.0, 2.0].into()),
         );
-        std::assert_matches!(res_write.unwrap_err(), Error::DataWriteNotInitialized);
+        std::assert_matches!(
+            res_write.unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
 
         writer.write_data_initialize("1250.9").unwrap();
         assert_eq!(writer.write_time.clone().unwrap(), "1250.9");
 
         let res_init = writer.write_data_initialize("0.0");
-        std::assert_matches!(res_init.unwrap_err(), Error::DataWriteAlreadyInitialized);
+        std::assert_matches!(
+            res_init.unwrap_err(),
+            Error::Internal("writing data was already initialized")
+        );
 
         writer.write_data_finalize().unwrap();
         assert!(writer.write_time.is_none());
@@ -493,14 +507,20 @@ mod tests {
         assert!(writer.h5_data_file.is_none());
 
         let res_fin = writer.write_data_finalize();
-        std::assert_matches!(res_fin.unwrap_err(), Error::DataWriteNotInitialized);
+        std::assert_matches!(
+            res_fin.unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
 
         let res_write = writer.write_data(
             "test_data",
             attribute::Center::Node,
             &Values::F64(vec![1.0, 2.0].into()),
         );
-        std::assert_matches!(res_write.unwrap_err(), Error::DataWriteNotInitialized);
+        std::assert_matches!(
+            res_write.unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
 
         let exp_file_name = file_name.with_extension("h5").join("data_t_0.123.h5");
         writer.write_data_initialize("0.123").unwrap();
@@ -513,7 +533,10 @@ mod tests {
         assert!(exp_file_name.exists());
 
         let res_init = writer.write_data_initialize("0.0");
-        std::assert_matches!(res_init.unwrap_err(), Error::DataWriteAlreadyInitialized);
+        std::assert_matches!(
+            res_init.unwrap_err(),
+            Error::Internal("writing data was already initialized")
+        );
 
         writer.write_data_finalize().unwrap();
         assert!(writer.h5_data_file.is_none());

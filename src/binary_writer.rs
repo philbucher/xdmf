@@ -30,7 +30,7 @@ impl BinaryWriter {
 
         let folder_name = bin_files_dir
             .file_name()
-            .ok_or(Error::MissingFileNameComponent)?;
+            .ok_or(Error::Internal("output path has no file name component"))?;
 
         crate::mpi_safe_create_dir_all(&bin_files_dir)?;
 
@@ -97,7 +97,7 @@ impl DataWriter for BinaryWriter {
         let time = self
             .write_time
             .as_ref()
-            .ok_or(Error::DataWriteNotInitialized)?;
+            .ok_or(Error::Internal("writing data was not initialized"))?;
 
         let data_file_name = format!(
             "data_t_{time}_{}_{name}.bin",
@@ -121,7 +121,7 @@ impl DataWriter for BinaryWriter {
 
     fn write_data_initialize(&mut self, time: &str) -> Result<()> {
         if self.write_time.is_some() {
-            return Err(Error::DataWriteAlreadyInitialized);
+            return Err(Error::Internal("writing data was already initialized"));
         }
 
         self.write_time = Some(time.to_string());
@@ -130,7 +130,7 @@ impl DataWriter for BinaryWriter {
 
     fn write_data_finalize(&mut self) -> Result<()> {
         if self.write_time.is_none() {
-            return Err(Error::DataWriteNotInitialized);
+            return Err(Error::Internal("writing data was not initialized"));
         }
 
         self.write_time = None;
@@ -330,17 +330,17 @@ mod tests {
         assert!(writer.write_time.is_none());
 
         let res_fin = writer.write_data_finalize();
-        std::assert_matches!(res_fin.unwrap_err(), Error::DataWriteNotInitialized);
+        std::assert_matches!(res_fin.unwrap_err(), Error::Internal(_));
 
         let res_write =
             writer.write_data("test_data", attribute::Center::Node, &vec![1.0, 2.0].into());
-        std::assert_matches!(res_write.unwrap_err(), Error::DataWriteNotInitialized);
+        std::assert_matches!(res_write.unwrap_err(), Error::Internal(_));
 
         writer.write_data_initialize("120.05").unwrap();
         assert_eq!(writer.write_time.clone().unwrap(), "120.05");
 
         let res_init = writer.write_data_initialize("0.0");
-        std::assert_matches!(res_init.unwrap_err(), Error::DataWriteAlreadyInitialized);
+        std::assert_matches!(res_init.unwrap_err(), Error::Internal(_));
 
         writer.write_data_finalize().unwrap();
         assert!(writer.write_time.is_none());
