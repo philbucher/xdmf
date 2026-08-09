@@ -22,12 +22,15 @@ pub enum Values<'a> {
     U64(Cow<'a, [u64]>),
 }
 
+/// Moves `vec` into the value. If the same buffer is reused across multiple `write_data` calls,
+/// borrow it instead (`buf.as_slice().into()`)
 impl From<Vec<f64>> for Values<'_> {
     fn from(vec: Vec<f64>) -> Self {
         Self::F64(Cow::Owned(vec))
     }
 }
 
+/// Moves `vec` into the value; see the `f64` impl above for the buffer-reuse caveat.
 impl From<Vec<u64>> for Values<'_> {
     fn from(vec: Vec<u64>) -> Self {
         Self::U64(Cow::Owned(vec))
