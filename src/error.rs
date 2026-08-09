@@ -73,7 +73,10 @@ pub enum Error {
         /// What is wrong with the data.
         reason: String,
     },
-    /// A value does not fit the numeric range the `Binary` backend can represent.
+    /// A value does not fit the numeric range the `Binary` backend can represent: ParaView's
+    /// legacy Xdmf2 reader silently misreads 64-bit integers in `Format="Binary"` data items
+    /// (connectivity comes back empty, attribute data corrupted), so they are narrowed to 32 bits
+    /// and out-of-range values are rejected rather than truncated.
     #[error(
         "value {value} does not fit in 32 bits: uncompressed Binary output only supports integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
     )]
@@ -83,7 +86,8 @@ pub enum Error {
     },
     /// An internal invariant was violated. Not reachable through the public API; guards against
     /// a future regression in the state-machine pairing between a backend's
-    /// `write_data_initialize`/`write_data_finalize` calls, or in this crate's own path handling.
+    /// `write_data_initialize`/`write_data_finalize` calls, in this crate's own path handling, or
+    /// in serializing its element types to XML.
     #[error("internal invariant violated: {0}")]
     Internal(&'static str),
 }
@@ -104,16 +108,27 @@ pub(crate) fn io_ctx<'a>(
 }
 
 /// Converts to a `std::io::Error` for consumers that plumb `io::Error` throughout their own
-/// codebase. `Error::Io`'s original [`std::io::ErrorKind`] is preserved; every other variant
-/// (a validation failure, not a filesystem failure) becomes [`std::io::ErrorKind::InvalidInput`].
+/// codebase. `Error::Io`'s original [`std::io::ErrorKind`] is preserved and the variants
+/// describing bad caller input become [`std::io::ErrorKind::InvalidInput`]. `Hdf5` and `Internal`
+/// are neither, so they become [`std::io::ErrorKind::Other`] rather than blaming the caller for
+/// e.g. a full disk hit inside the HDF5 library.
 ///
 /// The [`Error`] is kept as the payload rather than flattened into a string, so the original
 /// cause (and with it e.g. `raw_os_error`) stays reachable via [`std::io::Error::get_ref`].
 impl From<Error> for std::io::Error {
     fn from(err: Error) -> Self {
+        // matched exhaustively so that a new variant has to decide which kind it maps to
         let kind = match &err {
             Error::Io { source, .. } => source.kind(),
-            _ => std::io::ErrorKind::InvalidInput,
+            #[cfg(feature = "hdf5")]
+            Error::Hdf5 { .. } => std::io::ErrorKind::Other,
+            Error::Internal(_) => std::io::ErrorKind::Other,
+            Error::InvalidFileName { .. }
+            | Error::InvalidConfiguration { .. }
+            | Error::InvalidMesh { .. }
+            | Error::InvalidTimeStep { .. }
+            | Error::InvalidData { .. }
+            | Error::IntegerTooLargeForBinary { .. } => std::io::ErrorKind::InvalidInput,
         };
         Self::new(kind, err)
     }
@@ -161,10 +176,10 @@ mod error_messages {
         );
         assert_eq!(
             Error::InvalidConfiguration {
-                reason: "using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature".to_string(),
+                reason: "the Hdf5SingleFile DataStorage requires the 'hdf5' feature".to_string(),
             }
             .to_string(),
-            "invalid configuration: using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature"
+            "invalid configuration: the Hdf5SingleFile DataStorage requires the 'hdf5' feature"
         );
     }
 
@@ -258,11 +273,27 @@ mod error_messages {
     }
 
     #[test]
-    fn from_error_for_io_error_defaults_to_invalid_input() {
+    fn from_error_for_io_error_maps_bad_input_to_invalid_input() {
         let io_err: std::io::Error = Error::InvalidMesh {
             reason: "at least one point is required".to_string(),
         }
         .into();
         assert_eq!(io_err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn from_error_for_io_error_maps_non_caller_failures_to_other() {
+        let io_err: std::io::Error = Error::Internal("writing data was not initialized").into();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::Other);
+
+        #[cfg(feature = "hdf5")]
+        {
+            let io_err: std::io::Error = Error::Hdf5 {
+                operation: "writing dataset",
+                source: hdf5::Error::from("boom".to_string()),
+            }
+            .into();
+            assert_eq!(io_err.kind(), std::io::ErrorKind::Other);
+        }
     }
 }

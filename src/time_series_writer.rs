@@ -7,7 +7,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -417,15 +416,17 @@ impl TimeSeriesDataWriter {
         // Write the XDMF file to a temporary file first to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
 
-        let mut xdmf_file = BufWriter::new(
-            std::fs::File::create(&temp_xdmf_file_name)
-                .map_err(io_ctx("creating XDMF file", &temp_xdmf_file_name))?,
-        );
-        xdmf.write_to(&mut xdmf_file)
-            .map_err(io_ctx("writing XDMF XML", &temp_xdmf_file_name))?;
-        xdmf_file
-            .flush()
-            .map_err(io_ctx("flushing XDMF file", &temp_xdmf_file_name))?;
+        // Serialized into memory rather than straight into the file, so that the two ways this
+        // can fail stay distinguishable: writing into a `Vec` never fails on I/O, hence a failure
+        // of `write_to` is a bug in this crate's own element types and not a filesystem problem.
+        // The light data is metadata, so the buffer is small except for `AsciiInline`, which is
+        // documented as being for small datasets anyway.
+        let mut xdmf_xml = Vec::new();
+        xdmf.write_to(&mut xdmf_xml)
+            .map_err(|_serialize_error| Error::Internal("serializing the XDMF XML failed"))?;
+
+        std::fs::write(&temp_xdmf_file_name, &xdmf_xml)
+            .map_err(io_ctx("writing XDMF file", &temp_xdmf_file_name))?;
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
             .map_err(io_ctx("renaming XDMF file", &temp_xdmf_file_name))

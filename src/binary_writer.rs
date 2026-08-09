@@ -156,10 +156,9 @@ fn write_f64_le(vec: &[f64], writer: &mut impl Write, path: &Path) -> Result<()>
     Ok(())
 }
 
-// Paraview's legacy Xdmf reader silently misreads 64-bit integers in `Format="Binary"` `DataItem`s:
-// connectivity comes back empty and attribute data comes back with corrupted values.
-// Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
-// Values that don't fit in 32 bits are rejected rather than silently truncated.
+// Integers are narrowed to 4 bytes (matching `Format::uint_precision()` in the `DataItem`) because
+// Paraview's legacy Xdmf reader silently misreads 64-bit ones, see `Error::IntegerTooLargeForBinary`.
+// Values that don't fit are rejected rather than silently truncated.
 fn checked_u32(v: u64) -> Result<u32> {
     u32::try_from(v).map_err(|_err| Error::IntegerTooLargeForBinary { value: v })
 }

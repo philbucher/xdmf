@@ -51,11 +51,22 @@ impl Xdmf {
     /// Write the serialized XDMF to the given writer.
     ///
     /// "Pretty-printing" with 4 spaces for indentation is used to format the output, making it human-readable.
+    ///
+    /// Returns [`std::io::Result`] rather than this crate's [`Result`](crate::Result): the failures
+    /// belong to the caller's `writer`, not to a path or a storage backend this crate knows about.
+    /// A failure that is not the writer's is a bug in the element types and keeps
+    /// [`std::io::ErrorKind::Other`], everything else reports the writer's own kind unchanged.
     pub fn write_to(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         let mut file_writer = quick_xml::Writer::new_with_indent(writer, b' ', 4);
         file_writer
             .write_serializable(XDMF_TAG, self)
-            .map_err(std::io::Error::other)
+            .map_err(|err| {
+                let kind = match &err {
+                    quick_xml::SeError::Io(source) => source.kind(),
+                    _ => std::io::ErrorKind::Other,
+                };
+                std::io::Error::new(kind, err)
+            })
     }
 }
 

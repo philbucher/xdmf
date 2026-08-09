@@ -115,6 +115,7 @@ pub(crate) trait DataWriter {
 // zlib/deflate only accepts levels 0-9; anything else is a caller mistake that should be
 // rejected before a writer is constructed, rather than surfacing as a raw HDF5 error later
 // (`H5Pset_deflate(): invalid deflate level`) from inside `write_mesh`.
+#[cfg(feature = "hdf5")]
 fn validate_deflate_level(deflate_level: Option<u8>) -> Result<()> {
     if let Some(level) = deflate_level
         && level > 9
@@ -134,43 +135,36 @@ pub(crate) fn create_writer(
     match data_storage {
         DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiWriter::new(file_name)?)),
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
+        #[cfg(feature = "hdf5")]
         DataStorage::Hdf5SingleFile { deflate_level } => {
             validate_deflate_level(deflate_level)?;
-            #[cfg(feature = "hdf5")]
-            {
-                Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
-                    file_name,
-                    deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
-                )?))
-            }
-            #[cfg(not(feature = "hdf5"))]
-            {
-                Err(Error::InvalidConfiguration {
-                    reason: format!(
-                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
-                    ),
-                })
-            }
+            Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
+                file_name,
+                deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
+            )?))
         }
+        #[cfg(feature = "hdf5")]
         DataStorage::Hdf5MultipleFiles { deflate_level } => {
             validate_deflate_level(deflate_level)?;
-            #[cfg(feature = "hdf5")]
-            {
-                Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
-                    file_name,
-                    deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
-                )?))
-            }
-            #[cfg(not(feature = "hdf5"))]
-            {
-                Err(Error::InvalidConfiguration {
-                    reason: format!(
-                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
-                    ),
-                })
-            }
+            Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
+                file_name,
+                deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
+            )?))
         }
+        // Without the feature there is nothing to configure, so the missing feature is reported
+        // instead of validating the options of a backend that cannot be used at all.
+        #[cfg(not(feature = "hdf5"))]
+        DataStorage::Hdf5SingleFile { .. } => Err(hdf5_feature_required("Hdf5SingleFile")),
+        #[cfg(not(feature = "hdf5"))]
+        DataStorage::Hdf5MultipleFiles { .. } => Err(hdf5_feature_required("Hdf5MultipleFiles")),
         DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
+    }
+}
+
+#[cfg(not(feature = "hdf5"))]
+fn hdf5_feature_required(storage: &str) -> Error {
+    Error::InvalidConfiguration {
+        reason: format!("the {storage} DataStorage requires the 'hdf5' feature"),
     }
 }
 
@@ -388,6 +382,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "hdf5")]
     #[test]
     fn test_validate_deflate_level() {
         validate_deflate_level(None).unwrap();
@@ -404,6 +399,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "hdf5")]
     #[test]
     fn create_writer_rejects_invalid_deflate_level() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
@@ -421,6 +417,38 @@ mod tests {
                 panic!("expected an error for deflate_level 10");
             };
             std::assert_matches!(err, Error::InvalidConfiguration { reason } if reason.contains("deflate level 10"));
+        }
+    }
+
+    #[cfg(not(feature = "hdf5"))]
+    #[test]
+    fn create_writer_reports_the_missing_hdf5_feature() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+
+        // the deflate level is out of range too, but the missing feature is what has to be fixed
+        for (storage, exp_name) in [
+            (
+                DataStorage::Hdf5SingleFile {
+                    deflate_level: Some(10),
+                },
+                "Hdf5SingleFile",
+            ),
+            (
+                DataStorage::Hdf5MultipleFiles {
+                    deflate_level: Some(10),
+                },
+                "Hdf5MultipleFiles",
+            ),
+        ] {
+            let Err(err) = create_writer(&file_name, storage) else {
+                panic!("expected an error for {exp_name} without the hdf5 feature");
+            };
+            std::assert_matches!(
+                err,
+                Error::InvalidConfiguration { reason }
+                    if reason == format!("the {exp_name} DataStorage requires the 'hdf5' feature")
+            );
         }
     }
 }
