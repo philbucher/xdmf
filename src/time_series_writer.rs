@@ -6,7 +6,7 @@
 //! The concept is inspired by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{BufWriter, Error as IoError, ErrorKind::InvalidInput, Result as IoResult, Write},
     path::{Path, PathBuf},
 };
@@ -133,7 +133,7 @@ impl TimeSeriesWriter {
             grid: Grid::new_uniform("mesh", geometry, topology),
             data_items: vec![data_item_coords, data_item_connectivity],
             attributes: vec![],
-            written_times: HashSet::new(),
+            written_times: HashMap::new(),
             num_points,
             num_cells,
         };
@@ -249,7 +249,10 @@ pub struct TimeSeriesDataWriter {
     grid: Grid,
     data_items: Vec<DataItem>,
     attributes: Vec<(String, Vec<attribute::Attribute>)>,
-    written_times: HashSet<String>,
+    // Keyed on `f64::to_bits` of the parsed time, not the caller's string, so two spellings of
+    // the same instant (e.g. "0.1" and "0.10") are recognized as the same duplicate. The value
+    // is the spelling first used, for the error message.
+    written_times: HashMap<u64, String>,
     num_points: usize,
     num_cells: usize,
 }
@@ -309,11 +312,32 @@ impl TimeSeriesDataWriter {
         let point_data = collect_data(point_data, "point")?;
         let cell_data = collect_data(cell_data, "cell")?;
 
-        self.validate_data(time, &point_data, &cell_data)?;
+        let time_bits = self.validate_data(time, &point_data, &cell_data)?;
 
         self.writer.write_data_initialize(time)?;
-        let format = self.writer.format();
 
+        // Run `write_data_finalize` regardless of whether writing the attributes below
+        // succeeds, so a mid-write failure leaves the backing writer's `write_data_initialize`/
+        // `write_data_finalize` pairing balanced instead of poisoning every later time step.
+        // The write error (if any) must win over a finalize error, not be masked by it.
+        let write_result = self.write_attributes(&point_data, &cell_data);
+        let finalize_result = self.writer.write_data_finalize();
+
+        let new_attributes = write_result?;
+        finalize_result?;
+
+        self.attributes.push((time.to_string(), new_attributes));
+        self.written_times.insert(time_bits, time.to_string());
+
+        self.write()
+    }
+
+    fn write_attributes(
+        &mut self,
+        point_data: &[(&str, DataAttribute, Values<'_>)],
+        cell_data: &[(&str, DataAttribute, Values<'_>)],
+    ) -> IoResult<Vec<attribute::Attribute>> {
+        let format = self.writer.format();
         let mut new_attributes = Vec::with_capacity(point_data.len() + cell_data.len());
 
         for (data, center) in [
@@ -323,30 +347,25 @@ impl TimeSeriesDataWriter {
             for (data_name, data_attribute, vals) in data {
                 let data_item = DataItem {
                     name: None,
-                    dimensions: Some(vals.dimensions(data_attribute)),
+                    dimensions: Some(vals.dimensions(*data_attribute)),
                     number_type: Some(vals.number_type()),
                     format: Some(format),
                     precision: Some(vals.precision(format)),
                     endian: format.endian(),
-                    data: self.writer.write_data(data_name, center, &vals)?,
+                    data: self.writer.write_data(data_name, center, vals)?,
                     reference: None,
                 };
 
                 new_attributes.push(attribute::Attribute {
-                    name: data_name.to_string(),
-                    attribute_type: data_attribute.into(),
+                    name: (*data_name).to_string(),
+                    attribute_type: (*data_attribute).into(),
                     center,
                     data_items: vec![data_item],
                 });
             }
         }
 
-        self.attributes.push((time.to_string(), new_attributes));
-        self.written_times.insert(time.to_string());
-
-        self.writer.write_data_finalize()?;
-
-        self.write()
+        Ok(new_attributes)
     }
 
     fn write(&mut self) -> IoResult<()> {
@@ -401,26 +420,31 @@ impl TimeSeriesDataWriter {
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
     }
 
+    // Returns the bit pattern of the parsed time on success, so the caller does not have to
+    // re-parse (and re-unwrap) a value already known to be a valid float.
     fn validate_data(
         &self,
         time: &str,
         point_data: &[(&str, DataAttribute, Values<'_>)],
         cell_data: &[(&str, DataAttribute, Values<'_>)],
-    ) -> IoResult<()> {
-        // check if time can be parsed as a float
-        if time.parse::<f64>().is_err() {
-            return Err(IoError::new(
+    ) -> IoResult<u64> {
+        let parsed_time = time.parse::<f64>().map_err(|_parse_error| {
+            IoError::new(
                 InvalidInput,
                 format!("Time must be a valid float, and not '{time}'"),
-            ));
-        }
+            )
+        })?;
+        let time_bits = parsed_time.to_bits();
 
-        // check if the time step has already been written
-        if self.written_times.contains(time) {
-            return Err(IoError::new(
-                InvalidInput,
-                format!("Time step '{time}' has already been written"),
-            ));
+        // check if the time step has already been written, keyed on the parsed value rather
+        // than the string so different spellings of the same instant are caught too
+        if let Some(existing) = self.written_times.get(&time_bits) {
+            let message = if existing == time {
+                format!("Time step '{time}' has already been written")
+            } else {
+                format!("Time step '{time}' has already been written (as '{existing}')")
+            };
+            return Err(IoError::new(InvalidInput, message));
         }
 
         // check if some data is provided
@@ -436,7 +460,16 @@ impl TimeSeriesDataWriter {
 
         // check that names do not contain forbidden characters
         validate_data_name(point_data, "point")?;
-        validate_data_name(cell_data, "cell")
+        validate_data_name(cell_data, "cell")?;
+
+        // reject values the backend's format cannot represent (e.g. binary's u64->u32 range)
+        // up front, before write_data_initialize runs, so a caller mistake here can never leave
+        // the writer poisoned for the next call
+        for (_, _, vals) in point_data.iter().chain(cell_data.iter()) {
+            self.writer.validate_values(vals)?;
+        }
+
+        Ok(time_bits)
     }
 }
 
@@ -949,6 +982,45 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_data_dedup_is_numeric_not_textual() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_POINTS: usize = 10;
+
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; NUM_POINTS * 3],
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
+            )
+            .unwrap();
+
+        let values = vec![5.0; NUM_POINTS];
+        let point_data = || {
+            [(
+                "point_data1",
+                DataAttribute::Scalar,
+                values.as_slice().into(),
+            )]
+        };
+
+        writer.write_data("0.1", point_data(), []).unwrap();
+
+        // a different spelling of the same numeric value is still a duplicate
+        let res = writer.write_data("0.10", point_data(), []);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Time step '0.10' has already been written (as '0.1')"
+        );
+
+        // a genuinely different value is accepted
+        writer.write_data("0.2", point_data(), []).unwrap();
+    }
+
+    #[test]
     fn test_validate_data_duplicate_names() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
@@ -1161,33 +1233,33 @@ mod tests {
         );
     }
 
+    fn dummy_geometry() -> Geometry {
+        Geometry {
+            geometry_type: GeometryType::XYZ,
+            data_item: DataItem {
+                dimensions: Some(Dimensions(vec![5, 3])),
+                data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
+                number_type: Some(NumberType::Float),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn dummy_topology() -> Topology {
+        Topology {
+            topology_type: TopologyType::Triangle,
+            number_of_elements: "2".into(),
+            data_item: DataItem {
+                dimensions: Some(Dimensions(vec![6])),
+                number_type: Some(NumberType::Int),
+                data: "0 1 2 2 3 4".into(),
+                ..Default::default()
+            },
+        }
+    }
+
     #[test]
     fn test_write_data_preserve_order() {
-        fn dummy_geometry() -> Geometry {
-            Geometry {
-                geometry_type: GeometryType::XYZ,
-                data_item: DataItem {
-                    dimensions: Some(Dimensions(vec![5, 3])),
-                    data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
-                    number_type: Some(NumberType::Float),
-                    ..Default::default()
-                },
-            }
-        }
-
-        fn dummy_topology() -> Topology {
-            Topology {
-                topology_type: TopologyType::Triangle,
-                number_of_elements: "2".into(),
-                data_item: DataItem {
-                    dimensions: Some(Dimensions(vec![6])),
-                    number_type: Some(NumberType::Int),
-                    data: "0 1 2 2 3 4".into(),
-                    ..Default::default()
-                },
-            }
-        }
-
         struct DummyWriter;
 
         impl DataWriter for DummyWriter {
@@ -1231,7 +1303,7 @@ mod tests {
             num_points: 0,
             num_cells: 0,
             attributes: Vec::new(),
-            written_times: HashSet::new(),
+            written_times: HashMap::new(),
         };
 
         let point_data = || [("scalar_data", DataAttribute::Scalar, vec![0.0; 0].into())];
@@ -1308,5 +1380,104 @@ mod tests {
         // std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
 
         pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    }
+
+    #[test]
+    fn write_data_survives_a_mid_write_failure() {
+        // A backend that fails while writing one attribute, after already having written an
+        // earlier one -- reproducing the shape of the original binary-backend bug (now caught
+        // upfront for that specific case by `DataWriter::validate_values`, but the
+        // `write_data_finalize`-always-runs fix in `TimeSeriesDataWriter::write_data` is generic
+        // and backend-agnostic, so it needs its own backend-agnostic regression test).
+        struct FlakyWriter {
+            write_time: Option<String>,
+        }
+
+        impl DataWriter for FlakyWriter {
+            fn format(&self) -> Format {
+                Format::XML
+            }
+
+            fn data_storage(&self) -> DataStorage {
+                DataStorage::AsciiInline
+            }
+
+            fn write_mesh(
+                &mut self,
+                _points: &[f64],
+                _cells: &[u64],
+            ) -> IoResult<(DataContent, DataContent)> {
+                Ok((
+                    DataContent::Raw("points".to_string()),
+                    DataContent::Raw("cells".to_string()),
+                ))
+            }
+
+            fn write_data(
+                &mut self,
+                name: &str,
+                _center: attribute::Center,
+                _data: &Values<'_>,
+            ) -> IoResult<DataContent> {
+                if name == "boom" {
+                    return Err(IoError::other("simulated mid-write failure"));
+                }
+                Ok(DataContent::Raw(format!("data_for_{name}")))
+            }
+
+            fn write_data_initialize(&mut self, time: &str) -> IoResult<()> {
+                if self.write_time.is_some() {
+                    return Err(IoError::other("Writing data was already initialized"));
+                }
+                self.write_time = Some(time.to_string());
+                Ok(())
+            }
+
+            fn write_data_finalize(&mut self) -> IoResult<()> {
+                if self.write_time.is_none() {
+                    return Err(IoError::other("Writing data was not initialized"));
+                }
+                self.write_time = None;
+                Ok(())
+            }
+        }
+
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("mid_write_failure.xdmf2");
+
+        let mut writer = TimeSeriesDataWriter {
+            xdmf_file_name: xdmf_file_path,
+            writer: Box::new(FlakyWriter { write_time: None }),
+            grid: Grid::new_uniform("test", dummy_geometry(), dummy_topology()),
+            data_items: Vec::new(),
+            num_points: 0,
+            num_cells: 0,
+            attributes: Vec::new(),
+            written_times: HashMap::new(),
+        };
+
+        // "ok" is written successfully before "boom" fails, so this genuinely fails partway
+        // through the attribute loop, after `write_data_initialize` already ran.
+        let res = writer.write_data(
+            "0.0",
+            [
+                ("ok", DataAttribute::Scalar, vec![0.0; 0].into()),
+                ("boom", DataAttribute::Scalar, vec![0.0; 0].into()),
+            ],
+            [],
+        );
+        assert_eq!(res.unwrap_err().to_string(), "simulated mid-write failure");
+
+        // The failed step must not have consumed the time slot ("0.0" is retried, not a new
+        // time) and must not have left the backing writer poisoned: `FlakyWriter` itself would
+        // fail with "Writing data was already initialized" here if `write_data_finalize` had
+        // been skipped on the error path above.
+        writer
+            .write_data(
+                "0.0",
+                [("ok", DataAttribute::Scalar, vec![0.0; 0].into())],
+                [],
+            )
+            .unwrap();
     }
 }

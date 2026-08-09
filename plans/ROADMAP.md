@@ -26,10 +26,15 @@ them. Revisit deliberately, not by drift.
   part of M0: the `write_data` rework (`Values<'a>` is now `Cow`-backed, `write_data` takes flat
   `(&str, DataAttribute, Values)` triples instead of `DataMap`) and `API_IMPROVEMENTS_PLAN.md`
   item 3 (flattened `write_mesh`'s cell tuple). Details and links in `API_IMPROVEMENTS_PLAN.md`'s
-  top-of-file status note and in `02_performance.md` part F. **Still open in M0:** items 1
-  (writer poisoning), 2 (time dedup message), and 4 (deflate range validation); the O(steps²)
-  light-data rewrite (`02_performance.md` part B, decision 6) is a separate, larger piece of M0/M2
-  and did not land in this PR.
+  top-of-file status note and in `02_performance.md` part F.
+- **2026-08-09, not yet committed.** The remaining `API_IMPROVEMENTS_PLAN.md` items: item 1
+  (writer poisoning — `write_data_finalize` now always runs, and a new `DataWriter::validate_values`
+  lets `BinaryWriter` catch its u64→u32 range check before `write_data_initialize` rather than
+  mid-write), item 2 (time dedup now keyed on `f64::to_bits` instead of the string), and item 4
+  (`deflate_level` validated in `create_writer` before any writer is built). Full details in each
+  item's own "DONE" note in `API_IMPROVEMENTS_PLAN.md`. **This closes out M0's items**, except for
+  the O(steps²) light-data rewrite (`02_performance.md` part B, decision 6), which is a separate,
+  larger piece of M0/M2 and was never part of `API_IMPROVEMENTS_PLAN.md`.
 
 ## Sub-plans
 

@@ -14,7 +14,11 @@ Status of the already-completed change, for context:
 **Merged to `main` (2026-08-09, PR #18 "Several improvements to the API", commit `aa3c501`).**
 That PR also carried item 3 below (the `write_mesh` flattening) and a doc note on the `Vec` `From`
 impls warning that they move the buffer — see `02_performance.md` part F for the buffer-reuse
-follow-up that is still open. Items 1, 2, and 4 below did not land in that PR and remain open.
+follow-up that is still open.
+
+**Items 1, 2, and 4 are now done too (2026-08-09, not yet committed — see the note in each
+section below).** M0 is complete except for the O(steps²) light-data rewrite, which was never
+part of this document — see `02_performance.md` part B.
 
 Items 1 and 2 are defects with confirmed reproductions. Items 3 and 4 are interface cleanups.
 Item 5 is a decision to make, not a change to schedule.
@@ -22,6 +26,20 @@ Item 5 is a decision to make, not a change to schedule.
 ---
 
 ## 1. A mid-write error permanently poisons the writer
+
+**DONE (2026-08-09, not yet committed).** Both parts landed:
+`TimeSeriesDataWriter::write_data` now runs the attribute-writing loop through a private
+`write_attributes` helper and always calls `self.writer.write_data_finalize()` after it,
+regardless of whether it succeeded — the write error (if any) wins over a finalize error rather
+than being masked by it. Separately, a new `DataWriter::validate_values` trait method (default
+no-op) lets a backend reject values it cannot represent before `write_data_initialize` ever runs;
+`BinaryWriter` overrides it to run the existing u64→u32 range check (factored out as
+`checked_u32`) up front. In practice this means the confirmed repro (an out-of-range `u64` in
+cell/point data) no longer reaches the mid-write failure path at all — it is now a plain upfront
+validation error, same as a size or name mismatch. The open question below (delete partially
+written files?) is now moot for the binary-range case specifically, since nothing is written
+before the check; it stays relevant in principle for other backends that might fail mid-write in
+the future. The rest of this section is kept for the record.
 
 **Severity: high.** This is the item to do first.
 
@@ -78,6 +96,16 @@ its own failure mode. Recommend leaving them for now and revisiting only if it b
 ---
 
 ## 2. Time-step dedup is textual while validation is numeric
+
+**DONE (2026-08-09, not yet committed).** `written_times` is now `HashMap<u64, String>`, keyed on
+`f64::to_bits` of the parsed time (as this section already recommended), with the value being the
+spelling first used. The message is `Time step '{time}' has already been written` when the exact
+same spelling repeats, or `Time step '{time}' has already been written (as '{existing}')` when a
+different spelling of the same value is rejected — chosen over always appending the `(as ...)`
+clause because for the same-spelling case it would just repeat the string back at the caller.
+`validate_data` returns the parsed bit pattern on success so `write_data` doesn't need to
+re-parse (and `unwrap`) a value already known to be valid. The rest of this section is kept for
+the record.
 
 **Severity: medium.** Cheap fix, prevents a malformed output file.
 
@@ -176,6 +204,12 @@ bundle it with the mechanical flattening.
 
 ## 4. Reject invalid `deflate_level` at construction
 
+**DONE (2026-08-09, not yet committed).** `create_writer` (`src/lib.rs`) now calls
+`validate_deflate_level` for both `Hdf5SingleFile` and `Hdf5MultipleFiles` before the
+feature-gated branch, so it fires the same way with or without the `hdf5` feature enabled (an
+invalid level is now reported before the "requires the hdf5 feature" error would otherwise win).
+The rest of this section is kept for the record.
+
 **Severity: low.**
 
 ### Problem
@@ -258,9 +292,10 @@ the doctests at a temp directory or add the pattern to `.gitignore`.
 
 Items 1–4 together are one round of breaking changes. Since the crate is pre-1.0 and not keeping
 backward compatibility, landing them close together keeps the number of releases that break
-callers to one. **Items 1, 2, and 4 are still open** — item 3 and the `write_data` change landed
-together on 2026-08-09; the "one release" goal from this paragraph did not hold in practice, so
-whoever picks up 1/2/4 should expect a further breaking release, not a free ride on the same one.
+callers to one. In practice this document's items landed as two separate changes: item 3 with the
+`write_data` rework on 2026-08-09 (PR #18, merged), and items 1, 2, and 4 together, also on
+2026-08-09 but as a second, not-yet-committed change — so M0 ends up as two breaking releases
+rather than the one this paragraph originally aimed for.
 
 ---
 

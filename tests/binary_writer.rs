@@ -115,4 +115,18 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
             .to_string()
             .contains("does not fit in 32 bits")
     );
+
+    // the rejected value is caught before any file for this step is opened, so nothing is left
+    // on disk that the XDMF file doesn't reference
+    let bin_dir = xdmf_file_path.with_extension("bin");
+    assert!(!bin_dir.join("data_t_0_cell_data_region_id.bin").exists());
+
+    // the writer must not be left poisoned by the failed step: a following valid step succeeds
+    xdmf_writer
+        .write_data(
+            "1",
+            [],
+            [("region_id", xdmf::DataAttribute::Scalar, vec![7_u64].into())],
+        )
+        .unwrap();
 }

@@ -2,7 +2,7 @@
 //!
 //! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
 use std::{
-    io::{Error as IoError, Result as IoResult},
+    io::{Error as IoError, ErrorKind::InvalidInput, Result as IoResult},
     path::Path,
     str::FromStr,
 };
@@ -105,6 +105,29 @@ pub(crate) trait DataWriter {
     fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
+
+    /// Validate that `data` can be represented by this backend's format, without mutating state
+    /// or touching disk. Called for every attribute before `write_data_initialize` runs, so a
+    /// value out of the backend's representable range is reported as an upfront caller error
+    /// rather than as a mid-write failure that would otherwise leave the writer poisoned.
+    fn validate_values(&self, _data: &Values<'_>) -> IoResult<()> {
+        Ok(())
+    }
+}
+
+// zlib/deflate only accepts levels 0-9; anything else is a caller mistake that should be
+// rejected before a writer is constructed, rather than surfacing as a raw HDF5 error later
+// (`H5Pset_deflate(): invalid deflate level`) from inside `write_mesh`.
+fn validate_deflate_level(deflate_level: Option<u8>) -> IoResult<()> {
+    if let Some(level) = deflate_level
+        && level > 9
+    {
+        return Err(IoError::new(
+            InvalidInput,
+            format!("deflate_level must be between 0 and 9, but is {level}"),
+        ));
+    }
+    Ok(())
 }
 
 /// Create a writer for the heavy data, based on the chosen data storage.
@@ -116,6 +139,7 @@ pub(crate) fn create_writer(
         DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiWriter::new(file_name)?)),
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
         DataStorage::Hdf5SingleFile { deflate_level } => {
+            validate_deflate_level(deflate_level)?;
             #[cfg(feature = "hdf5")]
             {
                 Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
@@ -125,13 +149,13 @@ pub(crate) fn create_writer(
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                let _ = deflate_level;
                 Err(IoError::other(
                     "Using Hdf5SingleFile DataStorage requires the hdf5 feature.",
                 ))
             }
         }
         DataStorage::Hdf5MultipleFiles { deflate_level } => {
+            validate_deflate_level(deflate_level)?;
             #[cfg(feature = "hdf5")]
             {
                 Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
@@ -141,7 +165,6 @@ pub(crate) fn create_writer(
             }
             #[cfg(not(feature = "hdf5"))]
             {
-                let _ = deflate_level;
                 Err(IoError::other(
                     "Using Hdf5MultipleFiles DataStorage requires the hdf5 feature.",
                 ))
@@ -367,5 +390,44 @@ mod tests {
             err,
             "Invalid DataStorage variant: ''. Valid options are: 'Ascii', 'AsciiInline', 'Hdf5SingleFile', 'Hdf5MultipleFiles', 'Binary'"
         );
+    }
+
+    #[test]
+    fn test_validate_deflate_level() {
+        validate_deflate_level(None).unwrap();
+        validate_deflate_level(Some(0)).unwrap();
+        validate_deflate_level(Some(9)).unwrap();
+
+        assert_eq!(
+            validate_deflate_level(Some(10)).unwrap_err().to_string(),
+            "deflate_level must be between 0 and 9, but is 10"
+        );
+        assert_eq!(
+            validate_deflate_level(Some(255)).unwrap_err().to_string(),
+            "deflate_level must be between 0 and 9, but is 255"
+        );
+    }
+
+    #[test]
+    fn create_writer_rejects_invalid_deflate_level() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+
+        for storage in [
+            DataStorage::Hdf5SingleFile {
+                deflate_level: Some(10),
+            },
+            DataStorage::Hdf5MultipleFiles {
+                deflate_level: Some(10),
+            },
+        ] {
+            let Err(err) = create_writer(&file_name, storage) else {
+                panic!("expected an error for deflate_level 10");
+            };
+            assert_eq!(
+                err.to_string(),
+                "deflate_level must be between 0 and 9, but is 10"
+            );
+        }
     }
 }
