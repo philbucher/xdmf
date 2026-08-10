@@ -51,8 +51,16 @@ them. Revisit deliberately, not by drift.
   above: `DataItem` now has `text`/`include` fields instead of a flattened `DataContent`, and
   deserializes in both directions (new tests in `data_item.rs`). `cargo nextest run` (with and
   without `hdf5`), clippy (both feature sets, `-D warnings`), and `cargo test --doc` are all green.
-  Details in `05_reader.md` risk 1. Remaining M5 prerequisite: the `Values::F32`/`ValueType` slice
-  of M3.
+  Details in `05_reader.md` risk 1.
+- **2026-08-10, `Values::F32` + sealed `ValueType` slice of M3 landed.** The second (and last) M5
+  prerequisite: `Values` gained `F32`, all three writer backends (`ascii`/`binary`/`hdf5`) handle it,
+  and the sealed `ValueType` trait (`f64`/`f32`/`u64`) plus `Values::as_slice`/`as_mut_slice` are in,
+  cherry-picked from `origin/multiple-features` per `03_values_and_f32.md`'s note that it deliberately
+  didn't. `cargo nextest run` (128/115 tests with/without `hdf5`), clippy (both feature sets), and
+  `cargo test --doc` are green. **Both M5 prerequisites are now done — the reader module itself
+  (`src/reader/`, `TimeSeriesReader`/`TimeSeriesDataReader`) is next.** The opt-in f64→f32 downcast
+  and its compressed-size measurement gate (the rest of `03_values_and_f32.md`) remain unstarted and
+  are not on the M5 critical path.
 
 ## Sub-plans
 

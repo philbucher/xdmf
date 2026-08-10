@@ -156,6 +156,15 @@ fn write_f64_le(vec: &[f64], writer: &mut impl Write, path: &Path) -> Result<()>
     Ok(())
 }
 
+fn write_f32_le(vec: &[f32], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for &v in vec {
+        writer
+            .write_all(&v.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
+    }
+    Ok(())
+}
+
 // Paraview's legacy Xdmf reader silently misreads 64-bit integers in `Format="Binary"` `DataItem`s:
 // connectivity comes back empty and attribute data comes back with corrupted values.
 // Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
@@ -177,6 +186,7 @@ fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Res
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
         Values::F64(v) => write_f64_le(v, writer, path),
+        Values::F32(v) => write_f32_le(v, writer, path),
         Values::U64(v) => write_u64_as_u32_le(v, writer, path),
     }
 }

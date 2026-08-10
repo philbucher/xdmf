@@ -15,11 +15,18 @@ Two of them, both small, both cheaper now than retrofitted:
 
 1. **The `DataItem` deserialization fix** — done. Risk 1 below has landed: `DataItem` now has
    `text`/`include` fields instead of the flattened `DataContent`, and it deserializes.
-2. **The `Values::F32` + sealed `ValueType` slice of M3.** `ROADMAP.md` orders M3 before M5 precisely
-   because `f32` is a variant every `DataReader` backend has to handle; `ValueType` and the
-   `ValuesMut` enum below are shared plumbing for both milestones. Skipping ahead means touching all
-   three backends twice. The rest of M3 (the opt-in f64→f32 downcast on write, ParaView
-   verification) is not needed by the reader and can stay in its own milestone.
+2. **The `Values::F32` + sealed `ValueType` slice of M3 — done.** `Values` gained an `F32(Cow<'a,
+   [f32]>)` variant, all three writer backends handle it, and the sealed `ValueType` trait
+   (`f64`/`f32`/`u64`, cherry-picked from the `multiple-features` branch) plus `Values::as_slice`/
+   `as_mut_slice` are in. **`ValueType` itself is deliberately not re-exported from `lib.rs` yet** —
+   `as_slice`/`as_mut_slice` are inherent methods on `Values`, so `values.as_slice::<f64>()` compiles
+   for an external caller without the trait ever being in scope, and nothing today needs to name it
+   otherwise. Export it once `read_point_data<T: ValueType>` (below) actually lands and a caller
+   needs to write that bound themselves. `dimensions()` was restructured to compute `len` once and
+   match on the attribute alone, per `03_values_and_f32.md`. `ValuesMut` (the mutable mirror
+   `DataReader::read` will take) is still to do — it belongs to the reader trait itself, not to this
+   slice. The rest of M3 (the opt-in f64→f32 downcast on write, ParaView verification) is not needed
+   by the reader and stays in its own milestone.
 
 M2 and M4 do *not* block this milestone. Decision 6 keeps the `.xdmf2` a complete, openable file
 after every step, so the append+patch-tail rewrite does not change what the reader parses; blocks are

@@ -310,6 +310,7 @@ fn write_values(
 ) -> Result<String> {
     let data_set = match vals {
         Values::F64(_) => group.new_dataset::<f64>(),
+        Values::F32(_) => group.new_dataset::<f32>(),
         Values::U64(_) => group.new_dataset::<u64>(),
     };
 
@@ -322,6 +323,7 @@ fn write_values(
 
     match vals {
         Values::F64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
+        Values::F32(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
         Values::U64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
     };
 

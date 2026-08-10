@@ -3,6 +3,13 @@
 `README.md`: *"f32 bit floats should be added to `Values`"*. Decision 4 in `ROADMAP.md`: add the
 variant **and** an opt-in f64→f32 downcast on write. Not a full numeric type set.
 
+> **Part 1 DONE (2026-08-10)** — landed early as an M5 prerequisite (`05_reader.md`'s "Prerequisites"
+> section), not in milestone order. `Values::F32`, the writer-backend arms, and the sealed
+> `ValueType` trait (cherry-picked from `origin/multiple-features`, contrary to the note below that
+> it deliberately wasn't) are all in — see the `2026-08-10` entry in `ROADMAP.md`'s Progress log.
+> **Part 2, the opt-in f64→f32 downcast and its measurement gate, is still unstarted**; everything
+> below about it is still the plan to execute.
+
 ## Why the downcast is worth having as well
 
 Adding `Values::F32` only helps callers that already hold `f32` data. Most solvers compute in f64,
@@ -172,6 +179,9 @@ is a separate mechanism and stays separate.
   backend's narrowing check entirely, and `U8` would suit cell-type/flag arrays. Rejected for now
   (decision 4): each new variant multiplies the match arms in every writer *and* every reader
   backend. Revisit if a real caller needs one.
-- **`ValueType` sealed trait + `as_slice::<T>()`** (present on the `multiple-features` branch): not
-  cherry-picked here. Its caller is the reader — see `05_reader.md`. Adding it now would be
-  speculative public API per `CLAUDE.md`.
+- **`ValueType` sealed trait + `as_slice::<T>()`** (present on the `multiple-features` branch): the
+  reasoning below turned out to not apply. Originally deferred as speculative public API per
+  `CLAUDE.md` with "its caller is the reader", but `05_reader.md`'s prerequisites made it a named,
+  written-down dependency of M5 before any reader code exists — a real, if not-yet-written, caller —
+  so it was cherry-picked in on 2026-08-10 alongside `Values::F32`. See the DONE callout at the top
+  of this file.
