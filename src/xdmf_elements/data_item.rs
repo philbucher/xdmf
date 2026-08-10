@@ -32,10 +32,10 @@ pub struct DataItem {
     pub endian: Option<Endian>,
 
     // Deliberately two plain fields rather than `#[serde(flatten)]` over a `DataContent` enum:
-    // that combination does not deserialize with quick-xml (only serializes), see `05_reader.md`
-    // risk 1. The split `rename` on `include` is required: quick-xml's serializer needs the
-    // literal `xi:include` to emit the namespace prefix, but its deserializer strips the prefix
-    // and reports the field as `include` — a single shared name silently fails to deserialize.
+    // that combination does not deserialize with quick-xml (only serializes). The split `rename`
+    // on `include` is required: quick-xml's serializer needs the literal `xi:include` to emit the
+    // namespace prefix, but its deserializer strips the prefix and reports the field as `include`.
+    // A single shared name silently fails to deserialize.
     #[serde(rename = "$text", skip_serializing_if = "Option::is_none", default)]
     #[doc(hidden)]
     pub text: Option<String>,
@@ -111,13 +111,19 @@ impl XInclude {
             parse: include_as_text.then(|| "text".to_string()), // xml is default
         }
     }
+
+    /// The `href` path, relative to the `.xdmf` file.
+    pub(crate) fn file_path(&self) -> &str {
+        &self.file_path
+    }
 }
 
 /// Specifies where (ascii) data is stored, either inline or in an external file.
 ///
 /// This is an internal writer-side value, not the wire representation: [`DataItem`] itself
-/// carries `text`/`include` as two plain fields (see `05_reader.md` risk 1 for why), so backends
-/// return a `DataContent` and [`DataContent::into_parts`] splits it into those two fields.
+/// carries `text`/`include` as two plain fields, not a flattened enum (`#[serde(flatten)]` over
+/// an enum does not deserialize with quick-xml), so backends return a `DataContent` and
+/// [`DataContent::into_parts`] splits it into those two fields.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DataContent {
     /// Store the data as raw text

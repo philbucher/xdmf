@@ -9,6 +9,47 @@ on a common subset of foreign XDMF2; reject everything else with an explicit `Un
 
 The sketch that was in `reader.rs` at the repo root is folded into this document — delete that file.
 
+> **DONE (2026-08-10)** — `TimeSeriesReader`/`TimeSeriesDataReader` landed in `src/reader/`,
+> matching the API below with a few deliberate deviations, kept here rather than edited into the
+> sketch so the reasoning stays attached:
+>
+> - **`point_data_info`/`cell_data_info` return `DataInfo` by value, not `&DataInfo`.** The
+>   original signature (`Result<&DataInfo>`) has the same borrow hazard the "borrow problem" bullet
+>   below already rejected once (a `&DataInfo` held across a later `&mut self` read call), just in a
+>   smaller, easier-to-miss form — it "usually" compiles because of NLL, until a caller collects
+>   several `DataInfo`s before reading any of them. `DataInfo` is cheap (one `String` clone), so it
+>   is built fresh per call instead.
+> - **No `DataReader` trait; a free-function dispatcher (`reader::data_reader::read_data_item`)
+>   instead.** The trait was motivated by "one reader per format," but every `DataItem` already
+>   carries its own `Format` and mixed-format documents are legal, so the format is known at each
+>   call site — there is no place a `Box<dyn DataReader>` would actually be stored and reused across
+>   calls of different formats. `ValuesMut` (below) still exists; it is just the parameter of a
+>   plain function per format (`ascii_reader::read`/`binary_reader::read`/`hdf5_reader::read`)
+>   rather than of a trait method.
+> - **`ValueType` is still not re-exported from `lib.rs`.** `read_point_data<T: ValueType>` doesn't
+>   change that: a caller writes `reader.read_point_data::<f64>(...)` with a concrete type, same as
+>   `Values::as_slice::<f64>()` — the trait only needs exporting once a caller wants to write a
+>   generic `fn foo<T: xdmf::ValueType>` themselves, which still has no real caller.
+> - **`block_names()` always returns `&[]`.** M4 (`write_mesh_with_blocks`) has not landed in the
+>   writer yet, so there is nothing to read blocks back from.
+> - **Attribute-level `Reference` is `Unsupported`, not resolved.** Reference resolution (risk 2)
+>   is implemented only for the mesh's `Geometry`/`Topology` `DataItem`s, which is the only place
+>   this crate's own writer ever produces a `Reference`. Extend `light_data::resolve_reference` to
+>   attribute `DataItem`s if a foreign file turns up using it there.
+> - **`ItemType` is not checked** — `DataItem` has no field for it (this crate's element model
+>   never gained one), so a foreign file using `HyperSlab`/`Function`/etc. fails XML parsing with a
+>   generic `InvalidFile`, not the clean `Unsupported` message the "Explicitly unsupported" section
+>   describes. Adding the field and the check is follow-up work, not done here.
+> - **No `tests/reader_fixtures/` of hand-written foreign XDMF2 files, and no one-test-per-category
+>   fixture for every `Unsupported`/`InvalidFile` case.** The round-trip suite in
+>   `tests/time_series_reader.rs` covers the stated acceptance criterion (this crate's own output,
+>   every storage mode) plus the `f32` widen/narrow rules and an out-of-bounds-step check; it does
+>   not cover the "common subset of foreign XDMF2" claim from decision 2, nor exhaustively test
+>   every named-unsupported-feature message.
+>
+> Everything else below — the API shape, the four implementation risks, the architecture
+> decision to drive off `DataItem` rather than `DataStorage` — is accurate to what shipped.
+
 ## Prerequisites (do these before writing any reader code)
 
 Two of them, both small, both cheaper now than retrofitted:

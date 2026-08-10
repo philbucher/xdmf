@@ -185,6 +185,36 @@ impl CellType {
             Self::Hexahedron27 => 27,
         }
     }
+
+    /// The inverse of the `as u64` cast used when writing `Mixed` topology connectivity
+    /// (`time_series_writer::prepare_cells`). `None` for a code this crate does not recognize.
+    ///
+    /// Single source of truth for the code table, shared by the writer (via the discriminants
+    /// above) and the reader (via this method), so the two cannot drift apart.
+    pub(crate) fn from_code(code: u64) -> Option<Self> {
+        match code {
+            1 => Some(Self::Vertex),
+            2 => Some(Self::Edge),
+            4 => Some(Self::Triangle),
+            5 => Some(Self::Quadrilateral),
+            6 => Some(Self::Tetrahedron),
+            7 => Some(Self::Pyramid),
+            8 => Some(Self::Wedge),
+            9 => Some(Self::Hexahedron),
+            34 => Some(Self::Edge3),
+            35 => Some(Self::Quadrilateral9),
+            36 => Some(Self::Triangle6),
+            37 => Some(Self::Quadrilateral8),
+            38 => Some(Self::Tetrahedron10),
+            39 => Some(Self::Pyramid13),
+            40 => Some(Self::Wedge15),
+            41 => Some(Self::Wedge18),
+            48 => Some(Self::Hexahedron20),
+            49 => Some(Self::Hexahedron24),
+            50 => Some(Self::Hexahedron27),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

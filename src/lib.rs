@@ -15,12 +15,14 @@ mod error;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
 
+mod reader;
 mod time_series_writer;
 mod values;
 pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use error::{Error, Result};
+pub use reader::{DataInfo, TimeSeriesDataReader, TimeSeriesReader, ValueKind};
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
 pub use values::Values;
 pub use xdmf_elements::CellType;

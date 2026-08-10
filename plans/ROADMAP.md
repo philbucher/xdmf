@@ -57,10 +57,29 @@ them. Revisit deliberately, not by drift.
   and the sealed `ValueType` trait (`f64`/`f32`/`u64`) plus `Values::as_slice`/`as_mut_slice` are in,
   cherry-picked from `origin/multiple-features` per `03_values_and_f32.md`'s note that it deliberately
   didn't. `cargo nextest run` (128/115 tests with/without `hdf5`), clippy (both feature sets), and
-  `cargo test --doc` are green. **Both M5 prerequisites are now done — the reader module itself
-  (`src/reader/`, `TimeSeriesReader`/`TimeSeriesDataReader`) is next.** The opt-in f64→f32 downcast
-  and its compressed-size measurement gate (the rest of `03_values_and_f32.md`) remain unstarted and
-  are not on the M5 critical path.
+  `cargo test --doc` are green. The opt-in f64→f32 downcast and its compressed-size measurement gate
+  (the rest of `03_values_and_f32.md`) remain unstarted and are not on the M5 critical path.
+- **2026-08-10, M5 reader module landed.** `TimeSeriesReader`/`TimeSeriesDataReader` (`src/reader/`)
+  per the API in `05_reader.md`, driven off each `DataItem`'s own `Format`/`Precision`/`NumberType`/
+  `Endian`/`Dimensions` rather than `DataStorage`, as designed. Round-trips this crate's own output
+  for all 5 storage modes, mixed cell types (all 19 `CellType`s individually, plus combined), the
+  `Polyvertex` point-cloud special case, `f32` attributes with widen/narrow rules, and multi-step
+  point+cell data (`tests/time_series_reader.rs`). The two new `Error` variants (`Unsupported`,
+  `InvalidFile`) landed as planned; `CellType::from_code` inverts the writer's `Mixed`-topology
+  encoding table; `TopologyType` gained all 19 homogeneous variants (for foreign-file support — this
+  crate's own writer only ever emits `Mixed`/`Polyvertex`) with a `cell_type()` mapping, low-order
+  names verified by round-trip test, higher-order names (`Hexahedron_27` etc.) best-effort per the
+  XDMF2 spec's naming convention, not cross-checked against a real writer. `Reference="XML"`
+  resolution covers exactly the `/Xdmf/Domain/DataItem[@Name="..."]` pattern this crate's writer
+  produces. `cargo nextest run` (163/148 with/without `hdf5`), clippy (both feature sets, `-D
+  warnings`), `cargo test --doc`, and `cargo doc` with `-D missing_docs` are all green.
+  **Deliberate scope cuts, not yet done:** `ItemType` detection (`DataItem` has no field for it —
+  a non-`Uniform` foreign file fails XML parsing with `InvalidFile`, not a clean `Unsupported`
+  message), structured topologies and non-`Uniform`/non-`Collection` grid shapes are `Unsupported`
+  but untested per-category, no `tests/reader_fixtures/` of hand-written foreign XDMF2 files, `Set`/
+  multi-`Domain`/`Tree` grids untested, `Reference` on an attribute-level `DataItem` (never produced
+  by this crate's writer) is `Unsupported` rather than resolved, and `ValueType`/`read_step`/M6
+  Python bindings are still to do. See `05_reader.md` for the per-decision detail.
 
 ## Sub-plans
 

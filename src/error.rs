@@ -86,6 +86,25 @@ pub enum Error {
     /// `write_data_initialize`/`write_data_finalize` calls, or in this crate's own path handling.
     #[error("internal invariant violated: {0}")]
     Internal(&'static str),
+    /// The file is valid XDMF but uses a feature this crate's reader does not implement (an
+    /// `ItemType` other than `Uniform`, a structured topology, `Format="HDF"` with the `hdf5`
+    /// feature off, ...). A caller genuinely reacts to this: fall back to another tool.
+    #[error("unsupported: {reason}")]
+    Unsupported {
+        /// What was found and why this crate does not read it.
+        reason: String,
+    },
+    /// The file itself is malformed or self-inconsistent: XML that does not parse, a `DataItem`
+    /// missing required attributes, a `Dimensions`/heavy-data length mismatch, an unresolvable
+    /// `Reference`, a truncated heavy-data file. Distinct from `InvalidMesh`/`InvalidData`, which
+    /// mean the *caller* passed something bad; this means the file the caller merely opened is bad.
+    #[error("invalid file '{path}': {reason}", path = path.display())]
+    InvalidFile {
+        /// The file that failed to read.
+        path: PathBuf,
+        /// What is wrong with it.
+        reason: String,
+    },
 }
 
 /// Attach filesystem-operation context to a [`std::io::Error`], for use with `map_err`.
@@ -227,6 +246,29 @@ mod error_messages {
         assert_eq!(
             Error::Internal("writing data was not initialized").to_string(),
             "internal invariant violated: writing data was not initialized"
+        );
+    }
+
+    #[test]
+    fn unsupported() {
+        assert_eq!(
+            Error::Unsupported {
+                reason: "DataItem ItemType=\"HyperSlab\" is not supported".to_string(),
+            }
+            .to_string(),
+            "unsupported: DataItem ItemType=\"HyperSlab\" is not supported"
+        );
+    }
+
+    #[test]
+    fn invalid_file() {
+        assert_eq!(
+            Error::InvalidFile {
+                path: PathBuf::from("mesh.xdmf2"),
+                reason: "XML does not parse: ...".to_string(),
+            }
+            .to_string(),
+            "invalid file 'mesh.xdmf2': XML does not parse: ..."
         );
     }
 

@@ -200,8 +200,8 @@ fn validate_points_and_cells(
     Ok(())
 }
 
-// Poly-cells need to additionally specify the number of points
-fn poly_cell_points(cell_type: CellType) -> Option<u64> {
+// Poly-cells need to additionally specify the number of points.
+pub(crate) fn poly_cell_points(cell_type: CellType) -> Option<u64> {
     // For polyvertex and polyline, need to add the number of points
     match cell_type {
         CellType::Vertex => {
@@ -219,7 +219,7 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 /// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
 /// and for poly-cells, the number of points is also added.
 /// TODO if all cells are the same, then the type information can be stored as `TopologyType`
-fn prepare_cells(
+pub(crate) fn prepare_cells(
     connectivity: &[u64],
     cell_types: &[CellType],
     num_points: usize,

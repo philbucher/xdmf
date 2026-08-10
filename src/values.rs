@@ -24,6 +24,13 @@ pub enum Values<'a> {
     U64(Cow<'a, [u64]>),
 }
 
+/// The mutable mirror of [`Values`], used at the reader's format-backend boundary
+pub enum ValuesMut<'a> {
+    F64(&'a mut Vec<f64>),
+    F32(&'a mut Vec<f32>),
+    U64(&'a mut Vec<u64>),
+}
+
 mod private {
     pub trait Sealed {}
     impl Sealed for f64 {}
@@ -45,6 +52,8 @@ pub trait ValueType: private::Sealed + Sized {
     fn as_slice<'v>(values: &'v Values<'_>) -> Option<&'v [Self]>;
     #[doc(hidden)]
     fn as_mut_slice<'v>(values: &'v mut Values<'_>) -> Option<&'v mut [Self]>;
+    #[doc(hidden)]
+    fn as_values_mut(vec: &mut Vec<Self>) -> ValuesMut<'_>;
 }
 
 impl ValueType for f64 {
@@ -60,6 +69,10 @@ impl ValueType for f64 {
             Values::F64(v) => Some(v.to_mut()),
             Values::F32(_) | Values::U64(_) => None,
         }
+    }
+
+    fn as_values_mut(vec: &mut Vec<Self>) -> ValuesMut<'_> {
+        ValuesMut::F64(vec)
     }
 }
 
@@ -77,6 +90,10 @@ impl ValueType for f32 {
             Values::F64(_) | Values::U64(_) => None,
         }
     }
+
+    fn as_values_mut(vec: &mut Vec<Self>) -> ValuesMut<'_> {
+        ValuesMut::F32(vec)
+    }
 }
 
 impl ValueType for u64 {
@@ -92,6 +109,10 @@ impl ValueType for u64 {
             Values::U64(v) => Some(v.to_mut()),
             Values::F64(_) | Values::F32(_) => None,
         }
+    }
+
+    fn as_values_mut(vec: &mut Vec<Self>) -> ValuesMut<'_> {
+        ValuesMut::U64(vec)
     }
 }
 
