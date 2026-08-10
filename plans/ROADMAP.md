@@ -37,6 +37,23 @@ them. Revisit deliberately, not by drift.
   rewrite (`02_performance.md` part B, decision 6), which is a separate, larger piece of M0/M2 and
   was never part of `API_IMPROVEMENTS_PLAN.md`.
 
+- **2026-08-10, M5 design review + deserialization spike.** `05_reader.md` was
+  reviewed against the merged API and revised: the `DataItem` deserialization risk was measured and
+  confirmed broken (with a known, cheap fix — see the risk table below), reads are now addressed by
+  index rather than by name (the name-based shape does not borrow-check for the caller), the
+  `ValueType` generic is confined to the public layer because `Box<dyn DataReader>` cannot carry it,
+  `DataInfo` exposes a public `ValueKind` instead of the `#[doc(hidden)]` `NumberType` + precision
+  pair, the speculative `data_storage()` accessor was dropped, and the two error variants the plan
+  had assumed were already merged (`Unsupported`, plus a new `InvalidFile`) are now written up as
+  work to do. `05_reader.md` also gained a "Prerequisites" section: the `DataItem` fix and the
+  `Values::F32`/`ValueType` slice of M3 both land before any reader module.
+- **2026-08-10, `DataItem` deserialization fix landed.** The first M5 prerequisite from the entry
+  above: `DataItem` now has `text`/`include` fields instead of a flattened `DataContent`, and
+  deserializes in both directions (new tests in `data_item.rs`). `cargo nextest run` (with and
+  without `hdf5`), clippy (both feature sets, `-D warnings`), and `cargo test --doc` are all green.
+  Details in `05_reader.md` risk 1. Remaining M5 prerequisite: the `Values::F32`/`ValueType` slice
+  of M3.
+
 ## Sub-plans
 
 | Plan | Milestone | Covers |
@@ -163,7 +180,7 @@ Rules for the milestones below:
 | Risk | Milestone | Mitigation |
 |------|-----------|------------|
 | `quick-xml` cannot serialize a `Grid` fragment at a chosen indent depth | M2 | Spike this before committing to the design; fallback is manual indentation. See `02_performance.md`. |
-| `quick-xml` + serde `#[serde(flatten)]` on `DataContent` does not round-trip on deserialize | M5 | Test deserialization of one `DataItem` on day one; fallback is a hand-rolled event-loop parser for `DataItem` only. |
+| ~~`quick-xml` + serde `#[serde(flatten)]` on `DataContent` does not round-trip on deserialize~~ | M5 | **Fixed and merged, 2026-08-10.** `DataItem` now has `$text` + `xi:include` fields directly instead of the flattened `DataContent`; both directions work with byte-identical output. Details in `05_reader.md` risk 1. |
 | Static HDF5 build in manylinux/macOS/Windows wheels | M6 | Spike Linux-only first, before building out the platform matrix. |
 | `hdf5::File` may not be `Send`, blocking GIL release | M6 | Check early; if it is not, the Python HDF5 path keeps the GIL and only the other backends release it. |
 | ParaView misreading a new XML construct (hyperslab block references) | M4 | Two-stage plan with an explicit go/no-go: ship duplication first, add the hyperslab fast path only after CI proves it. |

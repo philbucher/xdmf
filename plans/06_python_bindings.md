@@ -58,8 +58,10 @@ These come from reading the branch code; each is a concrete change, not a genera
    `finish()` method that `02_performance.md` part B introduces on the Rust side. This is the single
    most user-visible ergonomic fix in the list.
 8. **Error mapping needs rewriting** for the `Error` enum from `01_error_type.md`: validation variants
-   → `ValueError`, `Error::Io` → `OSError`, `Error::Unsupported` → `NotImplementedError`,
-   `Error::StorageRequiresFeature` → `RuntimeError`. Per-variant, not per-`ErrorKind`.
+   → `ValueError`, `Error::Io` → `OSError`, `Error::Unsupported` → `NotImplementedError`. Per-variant,
+   not per-`ErrorKind`. Note the variant names here predate the merged enum — check `src/error.rs`
+   rather than this list (`StorageRequiresFeature` never landed; that case is `InvalidConfiguration`,
+   and `Unsupported` arrives with M5, see `05_reader.md`).
 9. **No `.pyi` stubs.** Add them — an extension module with no stubs is invisible to every editor and
    type checker. `pyo3-stub-gen` or hand-written; hand-written is fine at this API size.
 10. **Version skew.** `python/pyproject.toml` and `python/Cargo.toml` carry their own `version`,

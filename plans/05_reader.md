@@ -9,6 +9,22 @@ on a common subset of foreign XDMF2; reject everything else with an explicit `Un
 
 The sketch that was in `reader.rs` at the repo root is folded into this document — delete that file.
 
+## Prerequisites (do these before writing any reader code)
+
+Two of them, both small, both cheaper now than retrofitted:
+
+1. **The `DataItem` deserialization fix** — done. Risk 1 below has landed: `DataItem` now has
+   `text`/`include` fields instead of the flattened `DataContent`, and it deserializes.
+2. **The `Values::F32` + sealed `ValueType` slice of M3.** `ROADMAP.md` orders M3 before M5 precisely
+   because `f32` is a variant every `DataReader` backend has to handle; `ValueType` and the
+   `ValuesMut` enum below are shared plumbing for both milestones. Skipping ahead means touching all
+   three backends twice. The rest of M3 (the opt-in f64→f32 downcast on write, ParaView
+   verification) is not needed by the reader and can stay in its own milestone.
+
+M2 and M4 do *not* block this milestone. Decision 6 keeps the `.xdmf2` a complete, openable file
+after every step, so the append+patch-tail rewrite does not change what the reader parses; blocks are
+additive and are called out where they matter below.
+
 ## The key correction to the draft
 
 The draft has:
@@ -40,7 +56,6 @@ impl TimeSeriesReader {
     pub fn num_cells(&self) -> usize;
     pub fn times(&self) -> &[String];
     pub fn block_names(&self) -> &[String];     // empty when the file has no blocks
-    pub fn data_storage(&self) -> Option<DataStorage>;   // informational only, see below
 
     /// Fills the caller's buffers (cleared first, capacity reused).
     pub fn read_mesh(
@@ -58,29 +73,56 @@ impl TimeSeriesDataReader {
     pub fn times(&self) -> &[String];
 
     /// What is present at a step, so the caller can size buffers and branch on type.
-    pub fn point_data_info(&self, step: usize) -> Result<&[DataInfo]>;
-    pub fn cell_data_info(&self, step: usize) -> Result<&[DataInfo]>;
+    /// Addressed by index, not by name — see "the borrow problem" below.
+    pub fn num_point_data(&self, step: usize) -> Result<usize>;
+    pub fn num_cell_data(&self, step: usize) -> Result<usize>;
+    pub fn point_data_info(&self, step: usize, index: usize) -> Result<&DataInfo>;
+    pub fn cell_data_info(&self, step: usize, index: usize) -> Result<&DataInfo>;
 
-    /// Reads one named attribute of one step into the caller's buffer.
-    pub fn read_point_data<T: ValueType>(&mut self, step: usize, name: &str, into: &mut Vec<T>) -> Result<()>;
-    pub fn read_cell_data<T: ValueType>(&mut self, step: usize, name: &str, into: &mut Vec<T>) -> Result<()>;
+    /// Name → index lookup, for callers that know what they are after.
+    pub fn point_data_index(&self, step: usize, name: &str) -> Result<usize>;
+    pub fn cell_data_index(&self, step: usize, name: &str) -> Result<usize>;
+
+    /// Reads one attribute of one step into the caller's buffer.
+    pub fn read_point_data<T: ValueType>(&mut self, step: usize, index: usize, into: &mut Vec<T>) -> Result<()>;
+    pub fn read_cell_data<T: ValueType>(&mut self, step: usize, index: usize, into: &mut Vec<T>) -> Result<()>;
 }
 
 pub struct DataInfo {
     pub name: String,
     pub attribute: DataAttribute,
-    pub number_type: NumberType,
-    pub precision: u8,
+    pub kind: ValueKind,
     pub len: usize,                 // total elements, i.e. num_entities * attribute.size()
 }
+
+/// The element type a caller can ask for, mirroring `Values`' variants.
+pub enum ValueKind { F32, F64, U64 }
 ```
 
 Notes on the shape:
 
 - **`ValueType`.** This is where the sealed `ValueType` trait from the `multiple-features` branch
   earns its place (`03_values_and_f32.md` deliberately did not cherry-pick it). `read_point_data::<f64>`
-  into a `Vec<f64>` errors with `NumberTypeMismatch` if the file holds u64, and `DataInfo` is how a
-  caller finds out beforehand. Add `impl ValueType for f32` at the same time.
+  into a `Vec<f64>` errors if the file holds u64, and `DataInfo` is how a caller finds out
+  beforehand. Add `impl ValueType for f32` at the same time.
+- **The generic cannot reach the backend trait.** `read_point_data<T: ValueType>` is a generic
+  method; `DataReader` is used as `Box<dyn DataReader>`, so a generic method on it is not
+  object-safe and will not compile. The generic therefore lives **only** in the public
+  `TimeSeriesDataReader` methods, which convert `&mut Vec<T>` into a `ValuesMut<'_>` enum — the
+  mutable mirror of `Values`, i.e. `F64(&mut Vec<f64>)` / `F32(&mut Vec<f32>)` / `U64(&mut Vec<u64>)` —
+  and that enum is what `DataReader::read` takes. Decide this before writing the trait; it is the
+  signature everything else hangs off.
+- **The borrow problem, and why reads are addressed by index.** The obvious API,
+  `point_data_info(&self, step) -> Result<&[DataInfo]>` plus `read_point_data(&mut self, …, name: &str, …)`,
+  does not compile for the caller: iterating the info slice holds a shared borrow of the reader
+  across a call that needs `&mut`, and a `name: &str` taken from a `DataInfo` extends that borrow
+  further. Addressing both the info query and the read by `usize` ends each borrow before the next
+  call, keeps the loop allocation-free, and costs only a `point_data_index(step, name)` lookup for
+  callers who think in names.
+- **No `data_storage()` accessor.** The plan previously carried a `data_storage() -> Option<DataStorage>`
+  as "informational only". Nothing calls it, so it is speculative API per `CLAUDE.md`. The
+  `Information Name="data_storage"` tag stays in the file and stays ignored by the reader; add the
+  accessor if M6 turns out to want it.
 - **Widening is allowed and is not a mismatch.** A `Precision="4"` float dataset read into a
   `Vec<f64>` should succeed (widening f32→f64 loses nothing), as should `u32`-precision integers into
   `Vec<u64>` — the latter is *required*, because that is exactly what the `Binary` backend writes.
@@ -91,10 +133,43 @@ Notes on the shape:
   only once there is a caller (the Python bindings are that caller, in M6) — otherwise it is
   speculative per `CLAUDE.md`.
 - **`TimeSeriesReader::read_mesh` consumes `self`**, matching `TimeSeriesWriter::write_mesh`. This is
-  what makes the API "similar to the writer" as `README.md` asks.
+  what makes the API "similar to the writer" as `README.md` asks. Note the asymmetry it introduces,
+  though: the writer *must* write a mesh, the reader does not have to read one. Re-reading step data
+  for a mesh the caller already holds is a plausible hot-path case, and this shape forces decoding
+  points and connectivity to get at any data. An `into_data_reader(self)` that skips the mesh is the
+  answer if that case shows up — do not add it before it does, but do not design it out either.
 - **Random access by step index**, not an iterator-only interface — HDF5 and Binary backends can seek
   directly, and the stated use case includes reading one specific step. An `Iterator` adapter over
   steps can be layered on later if wanted; it is not the primitive.
+
+## Errors: two variants have to be added first
+
+This plan was written assuming `Error::Unsupported` and `Error::StorageRequiresFeature` had landed
+with M1. **Neither exists.** The merged enum (`src/error.rs`, PR #20) is `Io`, `Hdf5`,
+`InvalidFileName`, `InvalidConfiguration`, `InvalidMesh`, `InvalidTimeStep`, `InvalidData`,
+`IntegerTooLargeForBinary`, `Internal`. Every "returns `Error::Unsupported`" in this document is
+therefore a *to-do*, not a reference.
+
+What the reader actually needs:
+
+- **`Unsupported { reason: String }`** — new variant. It earns its place by the `CLAUDE.md` rule for
+  `IntegerTooLargeForBinary`: it is a failure a caller genuinely reacts to (the file is valid XDMF,
+  this crate just will not read it, so fall back to another tool) rather than one they only report.
+- **`InvalidFile { path: PathBuf, reason: String }`** — new variant, for a malformed or
+  self-inconsistent file: XML that does not parse, a `DataItem` with no `Dimensions`, a
+  `Dimensions`/heavy-data length mismatch, an unresolvable `Reference`, a truncated `.bin`.
+  `InvalidMesh` and `InvalidData` both mean *the caller passed something bad*, which is the wrong
+  story to tell about a file the caller merely opened. Keeping them separate is what makes the
+  variant match in a test meaningful.
+- **`Format="HDF"` with the `hdf5` feature off** goes to `InvalidConfiguration`, not to a variant of
+  its own — that is where `create_writer` already puts the mirror-image case, and the symmetry is
+  worth more than the precision. The `reason` must say plainly that this is a compile-time feature
+  choice showing up at runtime.
+
+That takes the enum to 11 variants, past the "under 10" guideline in `CLAUDE.md`'s Errors section.
+Update that sentence as part of this milestone rather than letting the guideline erode silently —
+the grouping principle (by category, `reason: String` over per-failure fields) is the part that
+matters and it is unchanged.
 
 ## Architecture: drive everything off `DataItem`
 
@@ -110,7 +185,7 @@ Consequences:
   `AsciiInline` differ only in whether the content is inline or an include.
 - **Foreign-file support comes almost for free**, because a file written by another tool carries the
   same `DataItem` information. The `Information Name="data_storage"` tag this crate writes becomes
-  purely informational — hence `data_storage() -> Option<DataStorage>`.
+  purely informational, and the reader ignores it entirely.
 - A file that mixes formats across DataItems (legal XDMF, and something meshio does) just works.
 
 ```
@@ -126,18 +201,60 @@ src/reader/
 
 ## Implementation risks and how to defuse them
 
-### 1. quick-xml + serde deserialization of `DataItem` — test this on day one
+### 1. `DataItem` does not deserialize — DONE (2026-08-10)
 
-`DataItem` uses `#[serde(flatten)]` on a `DataContent` enum whose `Raw` variant is `#[serde(rename =
-"$value")]` (`src/xdmf_elements/data_item.rs:34`, `:104`). The structs all derive `Deserialize`
-already, but they have only ever been *serialized*. `flatten` combined with `$value` is historically
-the fragile corner of quick-xml's serde support.
+This was risk 1 as a hypothetical, then it was measured and confirmed real, and it is now fixed and
+merged: `DataItem` carries `text: Option<String>` / `include: Option<XInclude>` instead of a
+flattened `DataContent`, both directions are covered by tests in `data_item.rs`, and the full suite
+(`cargo nextest run`, with and without `hdf5`) plus clippy (both feature sets) and doctests are green.
+`DataContent` still exists, but only as a `pub(crate)` writer-internal helper (`Raw`/`Include`) with
+an `into_parts()` that splits into the two `DataItem` fields at the three call sites in
+`time_series_writer.rs`; the writer backends (`ascii_writer.rs`/`binary_writer.rs`/`hdf5_writer.rs`)
+are unchanged, since their trait-level return type (`DataContent`) didn't need to move.
 
-**First task of the milestone**: deserialize a single hand-written `<DataItem>` of each shape (inline
-text, `xi:include` child, reference form) and confirm it round-trips. If it does not, the fallback is
-a hand-rolled `quick_xml::Reader` event loop for `DataItem` only — the rest of the document
-(`Xdmf`/`Domain`/`Grid`/`Geometry`/`Topology`/`Attribute`) is plain attributes and children and will
-deserialize fine. Budget for the fallback; do not let it surprise the schedule.
+What follows is kept as the record of *why*: it was measured and real, before the fix. `DataItem`
+used `#[serde(flatten)]` on a `DataContent` enum whose `Raw` variant was
+`#[serde(rename = "$value")]`, and that combination was write-only. Every shape failed with the same
+error:
+
+```
+no variant of enum DataContent found in flattened data
+```
+
+— inline text, `xi:include`, `Reference="XML"`, the `file.h5:/path` form, and whole `.xdmf2`
+documents produced by all four storage backends.
+
+**The hand-rolled event-loop fallback is not needed.** Replacing `DataContent` with two plain
+optional fields on `DataItem` makes both directions work, with byte-identical serialization
+(verified by re-serializing each parsed form and comparing to the original string):
+
+```rust
+#[serde(rename = "$text", skip_serializing_if = "Option::is_none", default)]
+pub text: Option<String>,
+
+#[serde(rename(serialize = "xi:include", deserialize = "include"),
+        skip_serializing_if = "Option::is_none", default)]
+pub include: Option<XInclude>,
+```
+
+The split `rename` is the non-obvious part and the thing to not "clean up" later: quick-xml's
+**serializer** needs the literal `xi:include` to emit the namespace prefix, while its
+**deserializer** strips the prefix and reports the field as `include`. With a single name, one
+direction silently no-ops — the child parses into nothing and no error is raised. Confirmed by
+probing with `#[serde(deny_unknown_fields)]`, which reports ``unknown field `include` ``. Multi-line
+inline ASCII content survives the round trip as-is (`"\n0 1 2\n3 4 5\n"`), so the ASCII reader must
+`split_whitespace()` rather than assume a single line.
+
+What actually landed, slightly leaner than the original sketch: `DataContent` did not disappear —
+it stayed as the writer trait's crate-private return type (`Raw`/`Include`, no longer `Serialize`/
+`Deserialize`, no longer `pub`), since `ascii_writer.rs`/`binary_writer.rs`/`hdf5_writer.rs` already
+had a natural need for a "raw text or file reference" return value and rewriting all three backends'
+signatures bought nothing. Only `DataItem`'s own fields changed; a new `DataContent::into_parts()`
+converts to `(Option<String>, Option<XInclude>)` at the three call sites in `time_series_writer.rs`
+that build a `DataItem` from a writer's return value. Mutually-exclusive-in-practice is not enforced
+by the type system any more — a `DataItem` with both `text` and `include` set is constructible. That
+is acceptable: the writers never build one, and the reader must treat `include` as taking precedence
+when both are present.
 
 ### 2. `Reference="XML"` resolution
 
@@ -187,9 +304,14 @@ Each returns `Error::Unsupported { feature, .. }` with a message naming what was
 - Structured topologies: `2DCoRectMesh`, `3DCoRectMesh`, `2DRectMesh`, `3DRectMesh`, `2DSMesh`, `3DSMesh`.
 - `Geometry` types other than `XYZ`: `XY`, `X_Y_Z`, `Origin_DxDyDz`, `Origin_DxDy`.
 - `Set` elements, `Tree` grids, multiple `Domain`s.
-- `Format="HDF"` when the `hdf5` feature is off — this is `Error::StorageRequiresFeature`, which
-  already exists from `01_error_type.md`, and the message must say so clearly since it is a
-  compile-time choice manifesting at runtime.
+- `NumberType` other than `Float` and `UInt`. `Int`, `Char` and `UChar` are all legal XDMF and all
+  appear in foreign files, and `Values` cannot represent any of them. `Int` in particular must be
+  rejected rather than widened into `U64` — the widening is wrong for exactly the values (negative
+  ones) that motivate using a signed type in the first place.
+- `Format="HDF"` when the `hdf5` feature is off — `Error::InvalidConfiguration`, per the Errors
+  section above (there is no `StorageRequiresFeature` variant, and `create_writer` already routes the
+  mirror-image case here). The message must say plainly that this is a compile-time feature choice
+  manifesting at runtime.
 - Big-endian binary data (`Endian="Big"`): actually cheap to support, since `Endian` is right there in
   the DataItem. Do support it — it is a byte-swap in the binary reader and it makes the reader
   meaningfully more robust for files written elsewhere.

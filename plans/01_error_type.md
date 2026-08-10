@@ -2,6 +2,14 @@
 
 Resolves item 5 of `API_IMPROVEMENTS_PLAN.md`: **yes, do it**, and do it before the reader.
 
+> **DONE** — landed in PR #20 (`dc35601`). **The merged enum is not the one sketched below.** The
+> per-failure variants here were collapsed into category variants carrying a `reason: String`; the
+> result is `Io`, `Hdf5`, `InvalidFileName`, `InvalidConfiguration`, `InvalidMesh`,
+> `InvalidTimeStep`, `InvalidData`, `IntegerTooLargeForBinary`, `Internal`. In particular
+> `StorageRequiresFeature` does **not** exist (that case is `InvalidConfiguration`) and neither does
+> `Unsupported`, which M5 still has to add. Read `src/error.rs` and `CLAUDE.md`'s Errors section for
+> the actual contract; what follows is the design rationale, kept for the *why*, not the *what*.
+
 ## Why now
 
 Every fallible operation in the crate returns `std::io::Error`, almost always
