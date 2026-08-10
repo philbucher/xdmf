@@ -31,9 +31,22 @@ pub struct DataItem {
     #[doc(hidden)]
     pub endian: Option<Endian>,
 
-    #[serde(flatten)]
+    // Deliberately two plain fields rather than `#[serde(flatten)]` over a `DataContent` enum:
+    // that combination does not deserialize with quick-xml (only serializes), see `05_reader.md`
+    // risk 1. The split `rename` on `include` is required: quick-xml's serializer needs the
+    // literal `xi:include` to emit the namespace prefix, but its deserializer strips the prefix
+    // and reports the field as `include` — a single shared name silently fails to deserialize.
+    #[serde(rename = "$text", skip_serializing_if = "Option::is_none", default)]
     #[doc(hidden)]
-    pub data: DataContent,
+    pub text: Option<String>,
+
+    #[serde(
+        rename(serialize = "xi:include", deserialize = "include"),
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    #[doc(hidden)]
+    pub include: Option<XInclude>,
 
     #[serde(rename = "@Reference", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]
@@ -49,7 +62,8 @@ impl Default for DataItem {
             format: Some(Format::default()),
             precision: Some(4),
             endian: None,
-            data: String::new().into(),
+            text: Some(String::new()),
+            include: None,
             reference: None,
         }
     }
@@ -65,12 +79,12 @@ impl DataItem {
             format: None,
             precision: None,
             endian: None,
-            data: format!(
+            text: Some(format!(
                 "{}[@Name=\"{}\"]",
                 source_path,
                 source.name.clone().unwrap_or("MISSING".to_string())
-            )
-            .into(),
+            )),
+            include: None,
             reference: Some("XML".to_string()),
         }
     }
@@ -100,15 +114,27 @@ impl XInclude {
 }
 
 /// Specifies where (ascii) data is stored, either inline or in an external file.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum DataContent {
-    #[serde(rename = "$value")]
+///
+/// This is an internal writer-side value, not the wire representation: [`DataItem`] itself
+/// carries `text`/`include` as two plain fields (see `05_reader.md` risk 1 for why), so backends
+/// return a `DataContent` and [`DataContent::into_parts`] splits it into those two fields.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum DataContent {
     /// Store the data as raw text
     Raw(String),
 
-    #[serde(rename = "xi:include")]
     /// Store the data in an external file and include it using [XInclude](https://www.w3.org/TR/xinclude/)
     Include(XInclude),
+}
+
+impl DataContent {
+    /// Split into the `(text, include)` fields of a [`DataItem`].
+    pub(crate) fn into_parts(self) -> (Option<String>, Option<XInclude>) {
+        match self {
+            Self::Raw(text) => (Some(text), None),
+            Self::Include(include) => (None, Some(include)),
+        }
+    }
 }
 
 impl From<String> for DataContent {
@@ -183,11 +209,11 @@ pub enum Endian {
 
 #[cfg(test)]
 mod tests {
-    use quick_xml::se::to_string;
+    use quick_xml::{de::from_str, se::to_string};
 
     use super::*;
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Deserialize)]
     struct XmlRoot {
         #[serde(rename = "DataItem")]
         data_item: DataItem,
@@ -202,7 +228,8 @@ mod tests {
         assert_eq!(default_item.format, Some(Format::XML));
         assert_eq!(default_item.precision, Some(4));
         assert!(default_item.endian.is_none());
-        assert_eq!(default_item.data, String::new().into());
+        assert_eq!(default_item.text, Some(String::new()));
+        assert!(default_item.include.is_none());
         assert!(default_item.reference.is_none());
     }
 
@@ -239,7 +266,8 @@ mod tests {
             format: Some(Format::HDF),
             precision: Some(8),
             endian: None,
-            data: "custom_data".to_string().into(),
+            text: Some("custom_data".to_string()),
+            include: None,
             reference: None,
         };
         assert_eq!(custom_item.name, Some("custom_data_item".to_string()));
@@ -247,7 +275,7 @@ mod tests {
         assert_eq!(custom_item.number_type, Some(NumberType::Int));
         assert_eq!(custom_item.format, Some(Format::HDF));
         assert_eq!(custom_item.precision, Some(8));
-        assert_eq!(custom_item.data, "custom_data".into());
+        assert_eq!(custom_item.text, Some("custom_data".to_string()));
         assert!(custom_item.reference.is_none());
     }
 
@@ -267,9 +295,10 @@ mod tests {
         assert!(ref_item.precision.is_none());
         assert!(ref_item.endian.is_none());
         assert_eq!(
-            ref_item.data,
-            "/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]".into()
+            ref_item.text,
+            Some("/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]".to_string())
         );
+        assert!(ref_item.include.is_none());
         assert_eq!(ref_item.reference, Some("XML".to_string()));
     }
 
@@ -282,16 +311,36 @@ mod tests {
             format: Some(Format::HDF),
             precision: Some(8),
             endian: None,
-            data: "custom_data".to_string().into(),
+            text: Some("custom_data".to_string()),
+            include: None,
             reference: None,
         };
 
+        let xml = to_string(&XmlRoot { data_item }).unwrap();
         pretty_assertions::assert_eq!(
-            to_string(&XmlRoot { data_item }).unwrap(),
+            xml,
             "<XmlRoot>\
             <DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">custom_data</DataItem>\
             </XmlRoot>"
         );
+
+        let round_tripped: XmlRoot = from_str(&xml).unwrap();
+        assert_eq!(
+            round_tripped.data_item.text,
+            Some("custom_data".to_string())
+        );
+        assert!(round_tripped.data_item.include.is_none());
+        assert_eq!(
+            round_tripped.data_item.name,
+            Some("custom_data_item".to_string())
+        );
+        assert_eq!(
+            round_tripped.data_item.dimensions,
+            Some(Dimensions(vec![2, 3]))
+        );
+        assert_eq!(round_tripped.data_item.number_type, Some(NumberType::Int));
+        assert_eq!(round_tripped.data_item.format, Some(Format::HDF));
+        assert_eq!(round_tripped.data_item.precision, Some(8));
     }
 
     #[test]
@@ -303,15 +352,24 @@ mod tests {
 
         let ref_item = DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
 
+        let xml = to_string(&XmlRoot {
+            data_item: ref_item,
+        })
+        .unwrap();
         pretty_assertions::assert_eq!(
-            to_string(&XmlRoot {
-                data_item: ref_item
-            })
-            .unwrap(),
+            xml,
             "<XmlRoot>\
             <DataItem Reference=\"XML\">/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]</DataItem>\
             </XmlRoot>"
         );
+
+        let round_tripped: XmlRoot = from_str(&xml).unwrap();
+        assert_eq!(
+            round_tripped.data_item.text,
+            Some("/Xdmf/Domain/DataItem[@Name=\"source_data_item\"]".to_string())
+        );
+        assert!(round_tripped.data_item.include.is_none());
+        assert_eq!(round_tripped.data_item.reference, Some("XML".to_string()));
     }
 
     #[test]
@@ -323,7 +381,8 @@ mod tests {
             format: Some(Format::HDF),
             precision: Some(8),
             endian: None,
-            data: XInclude::new("coords.txt".to_string(), true).into(),
+            text: None,
+            include: Some(XInclude::new("coords.txt".to_string(), true)),
             reference: None,
         };
         assert_eq!(custom_item.name, Some("custom_data_item".to_string()));
@@ -331,22 +390,47 @@ mod tests {
         assert_eq!(custom_item.number_type, Some(NumberType::Int));
         assert_eq!(custom_item.format, Some(Format::HDF));
         assert_eq!(custom_item.precision, Some(8));
+        assert!(custom_item.text.is_none());
         assert_eq!(
-            custom_item.data,
-            XInclude::new("coords.txt".to_string(), true).into()
+            custom_item.include,
+            Some(XInclude::new("coords.txt".to_string(), true))
         );
         assert!(custom_item.reference.is_none());
 
+        let xml = to_string(&XmlRoot {
+            data_item: custom_item,
+        })
+        .unwrap();
         pretty_assertions::assert_eq!(
-            to_string(&XmlRoot {
-                data_item: custom_item
-            })
-            .unwrap(),
+            xml,
             "<XmlRoot>\
                 <DataItem Name=\"custom_data_item\" Dimensions=\"2 3\" NumberType=\"Int\" Format=\"HDF\" Precision=\"8\">\
                     <xi:include href=\"coords.txt\" parse=\"text\"/>\
                 </DataItem>\
             </XmlRoot>"
+        );
+
+        let round_tripped: XmlRoot = from_str(&xml).unwrap();
+        assert!(round_tripped.data_item.text.is_none());
+        assert_eq!(
+            round_tripped.data_item.include,
+            Some(XInclude::new("coords.txt".to_string(), true))
+        );
+    }
+
+    #[test]
+    fn data_item_multiline_text_round_trips() {
+        let data_item = DataItem {
+            text: Some("\n0 1 2\n3 4 5\n".to_string()),
+            include: None,
+            ..Default::default()
+        };
+
+        let xml = to_string(&XmlRoot { data_item }).unwrap();
+        let round_tripped: XmlRoot = from_str(&xml).unwrap();
+        assert_eq!(
+            round_tripped.data_item.text,
+            Some("\n0 1 2\n3 4 5\n".to_string())
         );
     }
 

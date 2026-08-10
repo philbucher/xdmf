@@ -242,7 +242,7 @@ mod tests {
                 geometry_type: geometry::GeometryType::XYZ,
                 data_item: data_item::DataItem {
                     dimensions: Some(dimensions::Dimensions(vec![3])),
-                    data: "1.0 2.0 3.0".into(),
+                    text: Some("1.0 2.0 3.0".to_string()),
                     number_type: Some(data_item::NumberType::Float),
                     ..Default::default()
                 },
@@ -253,7 +253,7 @@ mod tests {
                 data_item: data_item::DataItem {
                     dimensions: Some(dimensions::Dimensions(vec![3])),
                     number_type: Some(data_item::NumberType::Int),
-                    data: "0 1 2".into(),
+                    text: Some("0 1 2".to_string()),
                     ..Default::default()
                 },
             },

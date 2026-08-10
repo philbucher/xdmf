@@ -17,7 +17,7 @@ fn basic_grid() {
             geometry_type: GeometryType::XYZ,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![4, 3])),
-                data: "0 0 0 0 1 0 1 1 0 1 0 0.5".into(),
+                text: Some("0 0 0 0 1 0 1 1 0 1 0 0.5".to_string()),
                 number_type: Some(NumberType::Float),
                 ..Default::default()
             },
@@ -28,7 +28,7 @@ fn basic_grid() {
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
                 number_type: Some(NumberType::Int),
-                data: "0 1 2 0 2 3".into(),
+                text: Some("0 1 2 0 2 3".to_string()),
                 ..Default::default()
             },
         },
@@ -77,7 +77,7 @@ fn hierarchical_tree_grid() {
                             geometry_type: GeometryType::XYZ,
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![5, 3])),
-                                data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
+                                text: Some("0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             },
@@ -88,7 +88,7 @@ fn hierarchical_tree_grid() {
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![6])),
                                 number_type: Some(NumberType::Int),
-                                data: "0 1 2 2 3 4".into(),
+                                text: Some("0 1 2 2 3 4".to_string()),
                                 ..Default::default()
                             },
                         },
@@ -99,7 +99,9 @@ fn hierarchical_tree_grid() {
                             geometry_type: GeometryType::XYZ,
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![6, 3])),
-                                data: "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".into(),
+                                text: Some(
+                                    "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".to_string(),
+                                ),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             },
@@ -110,7 +112,7 @@ fn hierarchical_tree_grid() {
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![8])),
                                 number_type: Some(NumberType::Int),
-                                data: "0 1 4 3 1 2 5 4".into(),
+                                text: Some("0 1 4 3 1 2 5 4".to_string()),
                                 ..Default::default()
                             },
                         },
@@ -123,7 +125,7 @@ fn hierarchical_tree_grid() {
                     geometry_type: GeometryType::XYZ,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![5, 3])),
-                        data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
+                        text: Some("0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".to_string()),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
                     },
@@ -134,7 +136,7 @@ fn hierarchical_tree_grid() {
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![9])),
                         number_type: Some(NumberType::Int),
-                        data: "5 0 1 2 3 4 1 2 4".into(),
+                        text: Some("5 0 1 2 3 4 1 2 4".to_string()),
                         ..Default::default()
                     },
                 },
@@ -202,7 +204,7 @@ fn mixed_grid() {
             geometry_type: GeometryType::XYZ,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![5, 3])),
-                data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
+                text: Some("0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".to_string()),
                 number_type: Some(NumberType::Float),
                 ..Default::default()
             },
@@ -213,7 +215,7 @@ fn mixed_grid() {
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![9])),
                 number_type: Some(NumberType::Int),
-                data: "5 0 1 2 3 4 1 2 4".into(),
+                text: Some("5 0 1 2 3 4 1 2 4".to_string()),
                 ..Default::default()
             },
         },
@@ -260,7 +262,7 @@ fn spatial_collection_grid() {
                     geometry_type: GeometryType::XYZ,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![5, 3])),
-                        data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
+                        text: Some("0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".to_string()),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
                     },
@@ -271,7 +273,7 @@ fn spatial_collection_grid() {
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![6])),
                         number_type: Some(NumberType::Int),
-                        data: "0 1 2 2 3 4".into(),
+                        text: Some("0 1 2 2 3 4".to_string()),
                         ..Default::default()
                     },
                 },
@@ -282,7 +284,7 @@ fn spatial_collection_grid() {
                     geometry_type: GeometryType::XYZ,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![6, 3])),
-                        data: "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".into(),
+                        text: Some("1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".to_string()),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
                     },
@@ -293,7 +295,7 @@ fn spatial_collection_grid() {
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![8])),
                         number_type: Some(NumberType::Int),
-                        data: "0 1 4 3 1 2 5 4".into(),
+                        text: Some("0 1 4 3 1 2 5 4".to_string()),
                         ..Default::default()
                     },
                 },
@@ -304,7 +306,7 @@ fn spatial_collection_grid() {
                     geometry_type: GeometryType::XYZ,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![5, 3])),
-                        data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
+                        text: Some("0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".to_string()),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
                     },
@@ -315,7 +317,7 @@ fn spatial_collection_grid() {
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![9])),
                         number_type: Some(NumberType::Int),
-                        data: "5 0 1 2 3 4 1 2 4".into(),
+                        text: Some("5 0 1 2 3 4 1 2 4".to_string()),
                         ..Default::default()
                     },
                 },
@@ -379,7 +381,7 @@ fn temporal_collection_grid() {
         DataItem {
             name: Some("coords".into()),
             dimensions: Some(Dimensions(vec![5, 3])),
-            data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
+            text: Some("0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".to_string()),
             number_type: Some(NumberType::Float),
             ..Default::default()
         },
@@ -387,7 +389,7 @@ fn temporal_collection_grid() {
             name: Some("connectivity".into()),
             dimensions: Some(Dimensions(vec![9])),
             number_type: Some(NumberType::Int),
-            data: "5 0 1 2 3 4 1 2 4".into(),
+            text: Some("5 0 1 2 3 4 1 2 4".to_string()),
             ..Default::default()
         },
     ];
@@ -419,7 +421,7 @@ fn temporal_collection_grid() {
                             center: Center::Node,
                             data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![5])),
-                                data: "1 2 2 3 9".into(),
+                                text: Some("1 2 2 3 9".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             }],
@@ -430,7 +432,7 @@ fn temporal_collection_grid() {
                             center: Center::Cell,
                             data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![2])),
-                                data: "1 2".into(),
+                                text: Some("1 2".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             }],
@@ -461,7 +463,7 @@ fn temporal_collection_grid() {
                             center: Center::Node,
                             data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![5])),
-                                data: "1 2 3 4 7".into(),
+                                text: Some("1 2 3 4 7".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             }],
@@ -472,7 +474,7 @@ fn temporal_collection_grid() {
                             center: Center::Cell,
                             data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![2])),
-                                data: "2 3".into(),
+                                text: Some("2 3".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             }],
@@ -503,7 +505,7 @@ fn temporal_collection_grid() {
                             center: Center::Node,
                             data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![5])),
-                                data: "3 2 2 3 8".into(),
+                                text: Some("3 2 2 3 8".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             }],
@@ -514,7 +516,7 @@ fn temporal_collection_grid() {
                             center: Center::Cell,
                             data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![2])),
-                                data: "3 4".into(),
+                                text: Some("3 4".to_string()),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
                             }],

@@ -88,13 +88,16 @@ impl TimeSeriesWriter {
         let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
 
         let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
+        let (points_text, points_include) = points_data.into_parts();
+        let (cells_text, cells_include) = cells_data.into_parts();
 
         let format = self.writer.format();
 
         let data_item_coords = DataItem {
             name: Some("coords".to_string()),
             dimensions: Some(Dimensions(vec![num_points, 3])),
-            data: points_data,
+            text: points_text,
+            include: points_include,
             number_type: Some(NumberType::Float),
             precision: Some(8),
             format: Some(format),
@@ -106,7 +109,8 @@ impl TimeSeriesWriter {
             name: Some("connectivity".to_string()),
             dimensions: Some(Dimensions(vec![prepared_cells.len()])),
             number_type: Some(NumberType::UInt),
-            data: cells_data,
+            text: cells_text,
+            include: cells_include,
             format: Some(format),
             precision: Some(format.uint_precision()),
             endian: format.endian(),
@@ -349,6 +353,10 @@ impl TimeSeriesDataWriter {
             (cell_data, attribute::Center::Cell),
         ] {
             for (data_name, data_attribute, vals) in data {
+                let (text, include) = self
+                    .writer
+                    .write_data(data_name, center, vals)?
+                    .into_parts();
                 let data_item = DataItem {
                     name: None,
                     dimensions: Some(vals.dimensions(*data_attribute)),
@@ -356,7 +364,8 @@ impl TimeSeriesDataWriter {
                     format: Some(format),
                     precision: Some(vals.precision(format)),
                     endian: format.endian(),
-                    data: self.writer.write_data(data_name, center, vals)?,
+                    text,
+                    include,
                     reference: None,
                 };
 
@@ -1294,7 +1303,7 @@ mod tests {
             geometry_type: GeometryType::XYZ,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![5, 3])),
-                data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
+                text: Some("0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".to_string()),
                 number_type: Some(NumberType::Float),
                 ..Default::default()
             },
@@ -1308,7 +1317,7 @@ mod tests {
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
                 number_type: Some(NumberType::Int),
-                data: "0 1 2 2 3 4".into(),
+                text: Some("0 1 2 2 3 4".to_string()),
                 ..Default::default()
             },
         }
