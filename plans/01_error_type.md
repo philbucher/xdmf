@@ -171,8 +171,9 @@ for the wrong reason whenever a message is reworded.
 5. `cargo clippy --all-targets` and `--no-default-features` both clean; `cargo test --doc` (doctests
    using `.expect(..)` are unaffected).
 6. Update `CLAUDE.md`'s "Testing conventions" section.
-7. `CHANGELOG.md`: first entry, with the migration note for arotau (`io::Result` → `xdmf::Result`,
-   or keep using `io::Error` via the `From` impl).
+
+**Decided (2026-08-10): no `CHANGELOG.md`.** Dropped from the work breakdown at the user's
+request; see the note in `ROADMAP.md`'s release strategy section.
 
 ## Open questions
 

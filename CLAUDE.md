@@ -33,6 +33,11 @@ cargo +nightly fmt --all --check
 
 # docs (CI treats missing docs and warnings as errors)
 RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
+
+# performance benchmarks (plans/02_performance.md part A; not run in CI)
+cargo bench                                    # write_mesh / write_data / steps_scaling / allocations_per_step, 1e3 + 1e5 sizes
+cargo bench -- write_mesh                      # filter to one criterion group by name substring
+cargo run --release --example bench_cfd        # manual 1e7 case, kept out of criterion — report a table, don't just eyeball it
 ```
 
 CI (`.github/workflows/rust.yml`) runs this same matrix across Linux/macOS/Windows, each with and without the `hdf5` feature, in both debug and release. It also checks formatting on nightly and runs `typos` for spell-checking — run `typos` locally before pushing if you've added prose/comments.
@@ -70,6 +75,7 @@ Node ordering follows the [VTK convention](https://www.vtk.org/wp-content/upload
 - `tests/vtk_comparison.rs` cross-checks xdmf output against `vtkio`-written VTK files (fixtures under `tests/xdmf_vtk_comparison/`) for correctness and storage-size/write-time comparison.
 - `tests/paraview_smoke/` holds smoke-test fixtures for validating output actually opens correctly in ParaView (relevant when changing HDF5 filter pipelines, e.g. compression/shuffle settings — ParaView's bundled HDF5 doesn't support every filter, notably no dynamically-loaded plugins like Blosc/zfp, only core ones like deflate/shuffle/szip).
 - `mpi_safe_create_dir_all` (`src/lib.rs`) exists specifically for correctness under concurrent directory creation on slow/clustered filesystems (see its test using 100 threads) — don't simplify it back to a plain `create_dir_all`.
+- `benches/write_time_series.rs` (criterion) and `examples/bench_cfd.rs` (manual 1e7 run) are the M2 performance benchmarks (`plans/02_performance.md` part A); both include the shared CFD-duct mesh generator via `#[path]` (`benches/common/mesh.rs`, plus `benches/common/counting_alloc.rs` for the allocation-counting global allocator used only by the criterion binary). Not run in CI — run manually when touching the writer hot path.
 
 ## Code style
 

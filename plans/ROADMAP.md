@@ -36,6 +36,15 @@ them. Revisit deliberately, not by drift.
   `API_IMPROVEMENTS_PLAN.md`. **This closes out M0's items**, except for the O(steps²) light-data
   rewrite (`02_performance.md` part B, decision 6), which is a separate, larger piece of M0/M2 and
   was never part of `API_IMPROVEMENTS_PLAN.md`.
+- **2026-08-10, not yet merged (local, uncommitted).** Started M2 part A (benchmark harness):
+  `benches/common/mesh.rs` (Rust port of the CFD duct mesh generator), `benches/write_time_series.rs`
+  (criterion: `write_mesh`/`write_data`/`steps_scaling`/`allocations_per_step` at 1e3/1e5),
+  `benches/common/counting_alloc.rs` (allocation-counting global allocator), and
+  `examples/bench_cfd.rs` (manual 1e7 driver). First allocation-count data point: `Ascii`/`AsciiInline`
+  do ~21k allocations per `write_data` call (1e3 mesh) vs. ~300 for `Binary`/HDF5 — a baseline for
+  part C. Not done yet: the compressed-size codec sweep and RSS tracking part A also asks for (see
+  the code comments in `write_time_series.rs`/`bench_cfd.rs` for what's deferred and why). Parts
+  B–F of M2 are still unstarted.
 
 ## Sub-plans
 
@@ -134,8 +143,8 @@ backward compatibility (`CLAUDE.md`), so:
 
 - Release a `0.2`, `0.3`, … per milestone rather than accumulating one enormous 1.0 diff. Each is
   small enough to review and to bisect against, and arotau can adopt them one at a time.
-- Keep a `CHANGELOG.md` from M1 onward, with a "how to migrate" section per breaking release. There
-  is one known external consumer (arotau) plus the Python package; both need the migration notes.
+- **No `CHANGELOG.md`** (decided 2026-08-10, user preference) — migration notes for arotau and the
+  Python package, if needed, travel via PR descriptions instead.
 - 1.0 is cut when M6 lands and the API has been stable through at least one arotau upgrade cycle.
 - `CLAUDE.md` needs updating at M1 (the error-assertion testing convention changes) and at M2 (the
   benchmark commands become part of the standard command list).
