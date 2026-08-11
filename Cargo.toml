@@ -1,13 +1,20 @@
+[workspace]
+members = ["python"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.3"
+
 [package]
 authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]
 description = "Small library to write XDMF files for Paraview"
-edition = "2024"
+edition.workspace = true
 keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
 license = "MIT"
 name = "xdmf"
 repository = "https://github.com/philbucher/xdmf"
-version = "0.1.3"
+version.workspace = true
 
 [features]
 default = ["hdf5"]

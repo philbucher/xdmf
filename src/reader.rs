@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    CellType, DataAttribute, Error, Result,
+    CellType, DataAttribute, Error, Result, Values,
     values::ValueType,
     xdmf_elements::attribute::{self, Attribute, AttributeType},
 };
@@ -295,6 +295,46 @@ impl TimeSeriesDataReader {
 
         let source = data_reader::read_data_item(item, &self.base_dir, &self.xdmf_path)?;
         data_reader::assign(source, T::as_values_mut(into))
+    }
+
+    /// Reads every point-data field at `step`, in the same order as
+    /// [`point_data_info`](Self::point_data_info) reports them.
+    pub fn read_point_step(
+        &mut self,
+        step: usize,
+    ) -> Result<Vec<(String, DataAttribute, Values<'static>)>> {
+        self.read_step(step, attribute::Center::Node, self.num_points)
+    }
+
+    /// Reads every cell-data field at `step`. See [`read_point_step`](Self::read_point_step) for
+    /// the shape.
+    pub fn read_cell_step(
+        &mut self,
+        step: usize,
+    ) -> Result<Vec<(String, DataAttribute, Values<'static>)>> {
+        self.read_step(step, attribute::Center::Cell, self.num_cells)
+    }
+
+    fn read_step(
+        &self,
+        step: usize,
+        center: attribute::Center,
+        num_entities: usize,
+    ) -> Result<Vec<(String, DataAttribute, Values<'static>)>> {
+        self.filtered(step, center)?
+            .into_iter()
+            .map(|attr| {
+                let info = build_data_info(attr, num_entities, &self.xdmf_path)?;
+                let item = single_data_item(attr)?;
+                if item.reference.is_some() {
+                    return Err(Error::Unsupported {
+                        reason: "Reference on an Attribute DataItem is not supported".to_string(),
+                    });
+                }
+                let values = data_reader::read_data_item(item, &self.base_dir, &self.xdmf_path)?;
+                Ok((info.name, info.attribute, values))
+            })
+            .collect()
     }
 }
 

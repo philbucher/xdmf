@@ -78,7 +78,7 @@ impl FromStr for DataStorage {
 }
 
 /// this trait defines the interface used to write the heavy data
-pub(crate) trait DataWriter {
+pub(crate) trait DataWriter: Send + Sync {
     fn format(&self) -> Format;
 
     fn data_storage(&self) -> DataStorage;

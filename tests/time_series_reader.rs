@@ -128,6 +128,22 @@ fn mesh_plus_data_multiple_steps_round_trips_for_every_storage_mode(#[case] stor
             .read_cell_data(step, cell_index, &mut read_cell_id)
             .unwrap();
         assert_eq!(read_cell_id, expected_cells);
+
+        let point_step = data_reader.read_point_step(step).unwrap();
+        assert_eq!(point_step.len(), 1);
+        assert_eq!(point_step[0].0, "temperature");
+        assert_eq!(point_step[0].1, DataAttribute::Scalar);
+        assert_approx_eq!(
+            &[f64],
+            &expected_points,
+            point_step[0].2.as_slice::<f64>().unwrap()
+        );
+
+        let cell_step = data_reader.read_cell_step(step).unwrap();
+        assert_eq!(cell_step.len(), 1);
+        assert_eq!(cell_step[0].0, "cell_id");
+        assert_eq!(cell_step[0].1, DataAttribute::Scalar);
+        assert_eq!(cell_step[0].2.as_slice::<u64>().unwrap(), &expected_cells);
     }
 }
 

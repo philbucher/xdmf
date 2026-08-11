@@ -10,6 +10,59 @@ implementation to review**, not commits to merge.
 
 This is last because every earlier milestone breaks the Rust API this layer wraps.
 
+> **Part 1 DONE (2026-08-11)** — `python/` (pyo3/maturin, `src/{lib,arrays,enums,error,writer,
+> reader}.rs`) landed on `main`, re-implemented against the current API rather than merged from
+> `multiple-features`. All 11 review findings applied: `bytemuck` instead of `unsafe` for the
+> `i64`→`u64` reinterpret; `FloatArray`/`ValueGuard` report shape vs. dtype separately and name the
+> actual dtype found; `float32` is a first-class input (mirroring `Values::F32`); the GIL is
+> released for every write/read (`Python::detach`) — this needed `DataWriter: Send + Sync`, not
+> just `Send` as the plan assumed, since a non-`unsendable` `#[pyclass]` requires both (verified:
+> `hdf5::File` satisfies both under the default feature); `cell_types` accepts a numpy code array
+> (`uint8`/`uint64`/`int64`) as an alternative to a `list[CellType]`, sharing `CellType::from_code`
+> (now `pub`, promoted from `pub(crate)` for this real caller) with the reader; `TimeSeriesDataWriter`
+> has `close()`/`__enter__`/`__exit__`; errors are mapped per `xdmf::Error` variant, not the old
+> `io::Error` `ErrorKind` scheme; hand-written `xdmf.pyi` + `py.typed` ship since the API is small.
+> Points and attribute values accept any C-contiguous dimensionality (`(N, 3)` included), not just
+> flat 1D, per the "2-D array shapes" item — connectivity stays 1D (index lists, no natural 2D shape).
+>
+> **Version skew (item 10) resolved twice over**: the root `Cargo.toml` now declares a Cargo
+> workspace (`members = ["python"]`, `[workspace.package]` holding `version`/`edition`); both
+> crates' `Cargo.toml`s use `version.workspace = true`, so there is exactly one place (root
+> `Cargo.toml`) to bump per release. `python/pyproject.toml` in turn uses `dynamic = ["version"]`
+> (maturin's PEP 621 mechanism) instead of a literal `version`, sourcing it from `python/Cargo.toml`
+> at build time — verified by building a wheel and checking its filename/`importlib.metadata`
+> version match. Two Cargo.tomls declaring `.workspace = true` plus one dynamic `pyproject.toml` is
+> the whole story now; nothing hand-synced.
+>
+> Tried pyo3's `experimental-inspect` feature + `maturin generate-stubs` for item 9 (auto-generating
+> `.pyi`), but reverted it: numpy's `PyReadonlyArrayDyn`/`PyArray1` have no `INPUT_TYPE`/`OUTPUT_TYPE`
+> impls yet, so every array-typed parameter/return comes out as `Any`/`Incomplete` — worse than the
+> hand-written `FloatArray`/`IntArray`/`ValueArray` aliases for an API whose surface is mostly
+> array-shaped. Hand-written `xdmf.pyi` stays the only stub.
+>
+> **Blocks are not in the bindings**: `write_mesh_with_blocks` (M4) has not landed in the core crate
+> yet, so there was nothing to bind; add it here when M4 does.
+>
+> **Two small core-crate additions, both real-caller-justified rather than speculative**:
+> `TimeSeriesDataReader::read_point_step`/`read_cell_step` (owned, whole-step reads — exactly the
+> `read_step` convenience `05_reader.md` deferred "until the Python bindings are that caller"), and
+> `CellType::from_code` made `pub`. `ValueType` stays unexported, as `05_reader.md` anticipated: the
+> bindings dispatch on `DataInfo::kind` and call `read_point_data::<f64>`/`::<f32>`/`::<u64>`
+> concretely rather than writing a generic bound themselves.
+>
+> Rust→Python heavy-data transfer is zero-copy in the sense that matters (`numpy::IntoPyArray` moves
+> the Rust `Vec`'s allocation into the numpy array, no element copy) but each read allocates a fresh
+> array — reading into a *caller-supplied* preallocated buffer would need the core reader API to
+> accept `&mut [T]` instead of `&mut Vec<T>`, which is out of scope here.
+>
+> Verified: `cargo test`/`clippy -D warnings`/`cargo doc -D missing_docs` green on the core crate
+> (both feature sets); `python/` builds via `maturin develop --release` and its 22-test `pytest`
+> suite (all 5 storage modes, `f32`, `(N, 3)` shapes, numpy cell-type codes, context manager,
+> reader round-trip, every error-variant mapping) passes.
+>
+> **Not done**: Part 2 (abi3 + static-HDF5 wheels, PyPI trusted publishing, CI) and Part 3 (the
+> pyvista benchmark re-run) — separate, larger pieces of work, not attempted in this pass.
+
 ## Part 1 — Review and re-land the bindings
 
 The branch has `python/src/{lib,arrays,enums,error,writer}.rs` (~470 lines) plus `Cargo.toml`,

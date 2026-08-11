@@ -80,6 +80,22 @@ them. Revisit deliberately, not by drift.
   multi-`Domain`/`Tree` grids untested, `Reference` on an attribute-level `DataItem` (never produced
   by this crate's writer) is `Unsupported` rather than resolved, and `ValueType`/`read_step`/M6
   Python bindings are still to do. See `05_reader.md` for the per-decision detail.
+- **2026-08-11, M6 Part 1 (Python bindings) landed.** `python/` (pyo3/maturin) re-implemented
+  against current `main` rather than merged from `multiple-features`, per decision 7. Writer and
+  reader are both exposed; the GIL is released for every write/read (required promoting
+  `DataWriter`'s bound from `Send` to `Send + Sync`, since a non-`unsendable` `#[pyclass]` needs
+  both — `hdf5::File` satisfies both). Two small core-crate additions fell out of this:
+  `TimeSeriesDataReader::read_point_step`/`read_cell_step` (the `read_step` convenience
+  `05_reader.md` deferred until Python bindings needed it) and `CellType::from_code` promoted to
+  `pub` (shared with the bindings' numpy-array cell-type-code path instead of duplicated). Full
+  review checklist from `06_python_bindings.md` applied (`bytemuck` over `unsafe`, precise
+  shape/dtype errors, `f32` support, `close()`/context manager, per-`Error`-variant mapping,
+  `.pyi` stubs). `cargo nextest run`/clippy/doc all green on the core crate (both feature sets);
+  `python/`'s 22-test `pytest` suite passes via `maturin develop --release`. Follow-up same day:
+  version skew fixed via a Cargo workspace (`version.workspace = true` in both crates) plus
+  `pyproject.toml`'s `dynamic = ["version"]`. **Part 2 (abi3 +
+  static-HDF5 wheels, PyPI publishing, CI) and Part 3 (pyvista benchmark re-run) are not started.**
+  See `06_python_bindings.md`'s status note for the full detail.
 
 ## Sub-plans
 

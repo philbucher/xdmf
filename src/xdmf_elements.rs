@@ -188,10 +188,7 @@ impl CellType {
 
     /// The inverse of the `as u64` cast used when writing `Mixed` topology connectivity
     /// (`time_series_writer::prepare_cells`). `None` for a code this crate does not recognize.
-    ///
-    /// Single source of truth for the code table, shared by the writer (via the discriminants
-    /// above) and the reader (via this method), so the two cannot drift apart.
-    pub(crate) fn from_code(code: u64) -> Option<Self> {
+    pub fn from_code(code: u64) -> Option<Self> {
         match code {
             1 => Some(Self::Vertex),
             2 => Some(Self::Edge),
