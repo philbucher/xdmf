@@ -73,13 +73,46 @@ impl From<PyDataStorage> for xdmf::DataStorage {
     }
 }
 
-/// Cell types as defined in the VTK file format, mirroring `xdmf::CellType`. Values match the
-/// VTK/XDMF discriminants exactly, so a raw numpy array of codes (see `extract_cell_types`) is an
-/// equivalent, cheaper-to-produce alternative to a list of these.
-#[pyclass(name = "CellType", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq)]
-#[repr(u8)]
-pub enum PyCellType {
+// Declares `PyCellType` and both `From` impls off one variant list, so a cell type added to
+// `xdmf::CellType` is a single edit here instead of three. The `const` block additionally pins the
+// discriminants to the core enum's: `eq_int` exposes them to Python as the raw VTK codes, and
+// they are otherwise restated here with nothing tying the two lists together.
+macro_rules! cell_types {
+    ($($variant:ident = $code:tt,)+) => {
+        /// Cell types as defined in the VTK file format, mirroring `xdmf::CellType`. Values match
+        /// the VTK/XDMF discriminants exactly, so a raw numpy array of codes (see
+        /// `extract_cell_types`) is an equivalent, cheaper-to-produce alternative to a list of
+        /// these.
+        #[pyclass(name = "CellType", eq, eq_int, from_py_object)]
+        #[derive(Clone, Copy, PartialEq)]
+        #[repr(u8)]
+        pub enum PyCellType {
+            $($variant = $code,)+
+        }
+
+        const _: () = {
+            $(assert!(PyCellType::$variant as u8 == xdmf::CellType::$variant as u8);)+
+        };
+
+        impl From<xdmf::CellType> for PyCellType {
+            fn from(value: xdmf::CellType) -> Self {
+                match value {
+                    $(xdmf::CellType::$variant => Self::$variant,)+
+                }
+            }
+        }
+
+        impl From<PyCellType> for xdmf::CellType {
+            fn from(value: PyCellType) -> Self {
+                match value {
+                    $(PyCellType::$variant => Self::$variant,)+
+                }
+            }
+        }
+    };
+}
+
+cell_types! {
     Vertex = 1,
     Edge = 2,
     Triangle = 4,
@@ -99,58 +132,6 @@ pub enum PyCellType {
     Hexahedron20 = 48,
     Hexahedron24 = 49,
     Hexahedron27 = 50,
-}
-
-impl From<xdmf::CellType> for PyCellType {
-    fn from(value: xdmf::CellType) -> Self {
-        match value {
-            xdmf::CellType::Vertex => Self::Vertex,
-            xdmf::CellType::Edge => Self::Edge,
-            xdmf::CellType::Triangle => Self::Triangle,
-            xdmf::CellType::Quadrilateral => Self::Quadrilateral,
-            xdmf::CellType::Tetrahedron => Self::Tetrahedron,
-            xdmf::CellType::Pyramid => Self::Pyramid,
-            xdmf::CellType::Wedge => Self::Wedge,
-            xdmf::CellType::Hexahedron => Self::Hexahedron,
-            xdmf::CellType::Edge3 => Self::Edge3,
-            xdmf::CellType::Quadrilateral9 => Self::Quadrilateral9,
-            xdmf::CellType::Triangle6 => Self::Triangle6,
-            xdmf::CellType::Quadrilateral8 => Self::Quadrilateral8,
-            xdmf::CellType::Tetrahedron10 => Self::Tetrahedron10,
-            xdmf::CellType::Pyramid13 => Self::Pyramid13,
-            xdmf::CellType::Wedge15 => Self::Wedge15,
-            xdmf::CellType::Wedge18 => Self::Wedge18,
-            xdmf::CellType::Hexahedron20 => Self::Hexahedron20,
-            xdmf::CellType::Hexahedron24 => Self::Hexahedron24,
-            xdmf::CellType::Hexahedron27 => Self::Hexahedron27,
-        }
-    }
-}
-
-impl From<PyCellType> for xdmf::CellType {
-    fn from(value: PyCellType) -> Self {
-        match value {
-            PyCellType::Vertex => Self::Vertex,
-            PyCellType::Edge => Self::Edge,
-            PyCellType::Triangle => Self::Triangle,
-            PyCellType::Quadrilateral => Self::Quadrilateral,
-            PyCellType::Tetrahedron => Self::Tetrahedron,
-            PyCellType::Pyramid => Self::Pyramid,
-            PyCellType::Wedge => Self::Wedge,
-            PyCellType::Hexahedron => Self::Hexahedron,
-            PyCellType::Edge3 => Self::Edge3,
-            PyCellType::Quadrilateral9 => Self::Quadrilateral9,
-            PyCellType::Triangle6 => Self::Triangle6,
-            PyCellType::Quadrilateral8 => Self::Quadrilateral8,
-            PyCellType::Tetrahedron10 => Self::Tetrahedron10,
-            PyCellType::Pyramid13 => Self::Pyramid13,
-            PyCellType::Wedge15 => Self::Wedge15,
-            PyCellType::Wedge18 => Self::Wedge18,
-            PyCellType::Hexahedron20 => Self::Hexahedron20,
-            PyCellType::Hexahedron24 => Self::Hexahedron24,
-            PyCellType::Hexahedron27 => Self::Hexahedron27,
-        }
-    }
 }
 
 /// Accepts either a Python list of `CellType` values or a 1D numpy integer array of raw VTK cell
