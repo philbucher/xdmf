@@ -8,6 +8,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io::{BufWriter, Write},
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -64,23 +65,38 @@ impl TimeSeriesWriter {
     ///
     /// // define 3 points and 2 cells (a line and a triangle)
     /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    /// let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+    /// let connectivity: [u64; 5] = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
-    /// let mut ts_writer =
-    ///     xdmf_writer.write_mesh(coords.as_slice().into(), &connectivity, &cell_types);
+    /// let mut ts_writer = xdmf_writer.write_mesh(
+    ///     coords.as_slice().into(),
+    ///     connectivity.as_slice().into(),
+    ///     &cell_types,
+    /// );
     /// ```
     ///
     /// `points` accepts `f64` or `f32` data (via `Values`'s `From<&[f64]>`/`From<&[f32]>` etc.),
     /// so an `f32` mesh is stored at that precision on disk instead of always widening to `f64`.
+    ///
+    /// `connectivity` accepts `u64`, `u32`, `i64`, or `i32` data; a signed array is checked for
+    /// negative values once, here. Connectivity is always stored as unsigned data on disk, at 4 or 8 bytes depending
+    /// on which width was passed in
     pub fn write_mesh(
         mut self,
         points: Values<'_>,
-        connectivity: &[u64],
+        connectivity: Values<'_>,
         cell_types: &[CellType],
     ) -> Result<TimeSeriesDataWriter> {
-        validate_points_and_cells(&points, connectivity, cell_types)?;
+        validate_points(&points)?;
+        let int_connectivity = IntConnectivity::try_from(&connectivity)?;
+        let max_connectivity_index = int_connectivity.max_and_validate()?;
+        validate_connectivity_and_cells(
+            &points,
+            max_connectivity_index,
+            int_connectivity.len(),
+            cell_types,
+        )?;
 
         let num_points = points.len() / 3;
         let num_cells = if cell_types.is_empty() {
@@ -89,9 +105,10 @@ impl TimeSeriesWriter {
             cell_types.len()
         };
 
-        let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
+        let (topo_type, prepared_cells_values) =
+            prepare_cells(int_connectivity, cell_types, num_points)?;
 
-        let (points_data, cells_data) = self.writer.write_mesh(&points, &prepared_cells)?;
+        let (points_data, cells_data) = self.writer.write_mesh(&points, &prepared_cells_values)?;
         let (points_text, points_include) = points_data.into_parts();
         let (cells_text, cells_include) = cells_data.into_parts();
 
@@ -111,12 +128,12 @@ impl TimeSeriesWriter {
 
         let data_item_connectivity = DataItem {
             name: Some("connectivity".to_string()),
-            dimensions: Some(Dimensions(vec![prepared_cells.len()])),
-            number_type: Some(NumberType::UInt),
+            dimensions: Some(Dimensions(vec![prepared_cells_values.len()])),
+            number_type: Some(prepared_cells_values.number_type()),
             text: cells_text,
             include: cells_include,
             format: Some(format),
-            precision: Some(format.uint_precision()),
+            precision: Some(prepared_cells_values.precision(format)),
             endian: format.endian(),
             reference: None,
         };
@@ -153,13 +170,8 @@ impl TimeSeriesWriter {
     }
 }
 
-// Validate that the points and cells are valid
-fn validate_points_and_cells(
-    points: &Values<'_>,
-    connectivity: &[u64],
-    cell_types: &[CellType],
-) -> Result<()> {
-    // points are coordinates, not indices/counts -- integer data is a caller mistake
+// points are coordinates, not indices/counts -- integer data is a caller mistake
+fn validate_points(points: &Values<'_>) -> Result<()> {
     if !matches!(points.number_type(), NumberType::Float) {
         return Err(Error::InvalidMesh {
             reason: "points must be float64 or float32 data, not integer data".to_string(),
@@ -183,10 +195,112 @@ fn validate_points_and_cells(
         });
     }
 
-    // check cells connectivity indices
-    let max_connectivity_index = connectivity.iter().max();
+    Ok(())
+}
 
-    if let Some(&max_index) = max_connectivity_index
+const CONNECTIVITY_TYPE_ERROR: &str =
+    "connectivity must be integer data (uint64, uint32, int64, or int32), not float64 or float32";
+
+// The 4 integer widths connectivity can be. `Values` also allows F64/F32 (points reuse the same
+// enum); those are rejected by `TryFrom` before this type exists, so downstream code
+// (`prepare_cells`, `narrow_connectivity_to_width`) never needs a dead arm for them. All variants
+// are borrowed slices, so this is `Copy` -- cheap to pass around by value.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IntConnectivity<'a> {
+    U64(&'a [u64]),
+    U32(&'a [u32]),
+    I64(&'a [i64]),
+    I32(&'a [i32]),
+}
+
+impl<'a> TryFrom<&'a Values<'_>> for IntConnectivity<'a> {
+    type Error = Error;
+
+    fn try_from(connectivity: &'a Values<'_>) -> Result<Self> {
+        match connectivity {
+            Values::U64(v) => Ok(Self::U64(v.as_ref())),
+            Values::U32(v) => Ok(Self::U32(v.as_ref())),
+            Values::I64(v) => Ok(Self::I64(v.as_ref())),
+            Values::I32(v) => Ok(Self::I32(v.as_ref())),
+            Values::F64(_) | Values::F32(_) => Err(Error::InvalidMesh {
+                reason: CONNECTIVITY_TYPE_ERROR.to_string(),
+            }),
+        }
+    }
+}
+
+impl IntConnectivity<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::U64(v) => v.len(),
+            Self::U32(v) => v.len(),
+            Self::I64(v) => v.len(),
+            Self::I32(v) => v.len(),
+        }
+    }
+
+    // The one place a signed connectivity array is checked for negative values -- every caller
+    // (including every language binding) goes through this instead of re-implementing the check.
+    // Fused with computing the max (for `validate_connectivity_and_cells`' bounds check) so the
+    // array is only ever scanned once, with no allocation -- unlike the old `widen_connectivity`,
+    // this never needs to materialize a `Vec` just to check/compare values.
+    fn max_and_validate(&self) -> Result<Option<u64>> {
+        fn fold_non_negative(mut iter: impl Iterator<Item = i64>) -> Result<Option<u64>> {
+            iter.try_fold(None, |max: Option<u64>, v| {
+                let v = u64::try_from(v).map_err(|_err| Error::InvalidMesh {
+                    reason: format!(
+                        "value {v} is negative, but indices/counts must be non-negative"
+                    ),
+                })?;
+                Ok(Some(max.map_or(v, |m| m.max(v))))
+            })
+        }
+
+        match self {
+            Self::U64(v) => Ok(v.iter().copied().max()),
+            Self::U32(v) => Ok(v.iter().copied().map(u64::from).max()),
+            Self::I64(v) => fold_non_negative(v.iter().copied()),
+            Self::I32(v) => fold_non_negative(v.iter().copied().map(i64::from)),
+        }
+    }
+}
+
+// Narrows the (u64-arithmetic) prepared cells array back down to the width the caller's
+// connectivity was originally given in -- a 32-bit input stays 32-bit on disk instead of being
+// silently widened. Connectivity is always stored unsigned (indices have no sign), regardless of
+// whether the caller passed a signed or unsigned array.
+fn narrow_connectivity_to_width(
+    connectivity: &IntConnectivity<'_>,
+    widened: Vec<u64>,
+) -> Result<Values<'static>> {
+    match connectivity {
+        IntConnectivity::U64(_) | IntConnectivity::I64(_) => Ok(Values::from(widened)),
+        IntConnectivity::U32(_) | IntConnectivity::I32(_) => widened
+            .into_iter()
+            .map(|v| {
+                u32::try_from(v).map_err(|_err| Error::InvalidMesh {
+                    reason: format!(
+                        "connectivity value {v} does not fit in 32 bits; use a 64-bit \
+                         connectivity array instead"
+                    ),
+                })
+            })
+            .collect::<Result<Vec<u32>>>()
+            .map(Values::from),
+    }
+}
+
+// Validate that connectivity and cells are consistent with the points. `max_connectivity_index`
+// and `connectivity_len` come from `IntConnectivity::max_and_validate`/`len` rather than a `&[u64]`
+// slice, so this never needs its own copy of the (possibly-widened) connectivity data.
+fn validate_connectivity_and_cells(
+    points: &Values<'_>,
+    max_connectivity_index: Option<u64>,
+    connectivity_len: usize,
+    cell_types: &[CellType],
+) -> Result<()> {
+    // check cells connectivity indices
+    if let Some(max_index) = max_connectivity_index
         && max_index as usize >= points.len() / 3
     {
         return Err(Error::InvalidMesh {
@@ -199,11 +313,10 @@ fn validate_points_and_cells(
 
     // check that the number of connectivities matches the expected number based on the cell types
     let exp_num_points: usize = cell_types.iter().map(|ct| ct.num_points()).sum();
-    if exp_num_points != connectivity.len() {
+    if exp_num_points != connectivity_len {
         return Err(Error::InvalidMesh {
             reason: format!(
-                "size of connectivity ({}) does not match the number expected from the cell types ({exp_num_points})",
-                connectivity.len()
+                "size of connectivity ({connectivity_len}) does not match the number expected from the cell types ({exp_num_points})"
             ),
         });
     }
@@ -231,34 +344,60 @@ pub(crate) fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 /// and for poly-cells, the number of points is also added.
 /// TODO if all cells are the same, then the type information can be stored as `TopologyType`
 pub(crate) fn prepare_cells(
-    connectivity: &[u64],
+    connectivity: IntConnectivity<'_>,
     cell_types: &[CellType],
     num_points: usize,
-) -> (TopologyType, Vec<u64>) {
-    if cell_types.is_empty() {
+) -> Result<(TopologyType, Values<'static>)> {
+    let (topo_type, cells_with_types) = if cell_types.is_empty() {
         // if there are no cells, use polyvertex on nodes
         // this is required by paraview to visualize only points
-        return (TopologyType::Polyvertex, (0..num_points as u64).collect());
-    }
+        (
+            TopologyType::Polyvertex,
+            (0..num_points as u64).collect::<Vec<u64>>(),
+        )
+    } else {
+        let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
+        let mut index = 0_usize;
 
-    let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
-    let mut index = 0_usize;
+        for cell_type in cell_types {
+            let num_points = cell_type.num_points();
+            cells_with_types.push(*cell_type as u64);
 
-    for cell_type in cell_types {
-        let num_points = cell_type.num_points();
-        cells_with_types.push(*cell_type as u64);
+            if let Some(n_points_poly) = poly_cell_points(*cell_type) {
+                // poly-cells need to specify the number of points
+                cells_with_types.push(n_points_poly);
+            }
 
-        if let Some(n_points_poly) = poly_cell_points(*cell_type) {
-            // poly-cells need to specify the number of points
-            cells_with_types.push(n_points_poly);
+            extend_widened(
+                &mut cells_with_types,
+                &connectivity,
+                index..index + num_points,
+            );
+
+            index += num_points; // move index to the next cell
         }
 
-        cells_with_types.extend_from_slice(&connectivity[index..index + num_points]);
+        (TopologyType::Mixed, cells_with_types)
+    };
 
-        index += num_points; // move index to the next cell
+    let values = narrow_connectivity_to_width(&connectivity, cells_with_types)?;
+    Ok((topo_type, values))
+}
+
+// This is where the caller's original width actually gets widened to u64: doing it here, as part
+// of the copy `prepare_cells` already has to do to interleave cell-type tags, avoids a second,
+// separate full-array copy purely for widening.
+fn extend_widened(dest: &mut Vec<u64>, connectivity: &IntConnectivity<'_>, range: Range<usize>) {
+    match connectivity {
+        IntConnectivity::U64(v) => dest.extend_from_slice(&v[range]),
+        IntConnectivity::U32(v) => dest.extend(v[range].iter().copied().map(u64::from)),
+        // safe: `IntConnectivity` is only constructed after `max_and_validate` confirmed every
+        // value is non-negative, so this is a lossless reinterpretation, not a truncation.
+        IntConnectivity::I64(v) => dest.extend(v[range].iter().copied().map(|x| x as u64)),
+        IntConnectivity::I32(v) => {
+            dest.extend(v[range].iter().copied().map(|x| i64::from(x) as u64));
+        }
     }
-
-    (TopologyType::Mixed, cells_with_types)
 }
 
 /// Writer for time series data in XDMF format. Can be used after writing the mesh with `TimeSeriesWriter::write_mesh`.
@@ -291,12 +430,16 @@ impl TimeSeriesDataWriter {
     ///
     /// // define 3 points and 2 cells (a line and a triangle)
     /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    /// let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+    /// let connectivity: [u64; 5] = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
     /// let mut time_series_writer = xdmf_writer
-    ///     .write_mesh(coords.as_slice().into(), &connectivity, &cell_types)
+    ///     .write_mesh(
+    ///         coords.as_slice().into(),
+    ///         connectivity.as_slice().into(),
+    ///         &cell_types,
+    ///     )
     ///     .expect("failed to write mesh");
     ///
     /// // buffers are reused across time steps, `Values` only borrows them
@@ -650,10 +793,23 @@ mod tests {
         assert_eq!(poly_cell_points(CellType::Hexahedron27), None);
     }
 
+    // `prepare_cells` now returns a `Values` at the caller's original width, but these tests only
+    // care about the interleaving logic (cell-type tags/poly-counts + connectivity), which is
+    // width-independent -- this keeps their assertions exactly as before instead of every one of
+    // them unwrapping a `Result` and matching on `Values::U64`.
+    fn prepare_cells_u64(
+        connectivity: IntConnectivity<'_>,
+        cell_types: &[CellType],
+        num_points: usize,
+    ) -> (TopologyType, Vec<u64>) {
+        let (topo_type, values) = prepare_cells(connectivity, cell_types, num_points).unwrap();
+        (topo_type, values.as_slice::<u64>().unwrap().to_vec())
+    }
+
     #[test]
     fn test_prepare_cells() {
-        let (topo_type, cells_prep) = prepare_cells(
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        let (topo_type, cells_prep) = prepare_cells_u64(
+            IntConnectivity::U64(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
             &[
                 CellType::Vertex,
                 CellType::Edge,
@@ -672,51 +828,79 @@ mod tests {
 
     #[test]
     fn prepare_cells_by_celltype() {
-        assert_eq!(prepare_cells(&[5], &[CellType::Vertex], 0).1, vec![1, 1, 5]);
+        assert_eq!(
+            prepare_cells_u64(IntConnectivity::U64(&[5]), &[CellType::Vertex], 0).1,
+            vec![1, 1, 5]
+        );
 
         assert_eq!(
-            prepare_cells(&[5, 6], &[CellType::Edge], 0).1,
+            prepare_cells_u64(IntConnectivity::U64(&[5, 6]), &[CellType::Edge], 0).1,
             vec![2, 2, 5, 6]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7], &[CellType::Triangle], 0).1,
+            prepare_cells_u64(IntConnectivity::U64(&[5, 6, 7]), &[CellType::Triangle], 0).1,
             vec![4, 5, 6, 7]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8], &[CellType::Quadrilateral], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8]),
+                &[CellType::Quadrilateral],
+                0
+            )
+            .1,
             vec![5, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8], &[CellType::Tetrahedron], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8]),
+                &[CellType::Tetrahedron],
+                0
+            )
+            .1,
             vec![6, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9], &[CellType::Pyramid], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9]),
+                &[CellType::Pyramid],
+                0
+            )
+            .1,
             vec![7, 5, 6, 7, 8, 9]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10]),
+                &[CellType::Wedge],
+                0
+            )
+            .1,
             vec![8, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10, 11, 12]),
+                &[CellType::Hexahedron],
+                0
+            )
+            .1,
             vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7], &[CellType::Edge3], 0).1,
+            prepare_cells_u64(IntConnectivity::U64(&[5, 6, 7]), &[CellType::Edge3], 0).1,
             vec![34, 5, 6, 7]
         );
 
         assert_eq!(
-            prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13],
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10, 11, 12, 13]),
                 &[CellType::Quadrilateral9],
                 0
             )
@@ -725,18 +909,28 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10]),
+                &[CellType::Triangle6],
+                0
+            )
+            .1,
             vec![36, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8], 0).1,
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10, 11, 12]),
+                &[CellType::Quadrilateral8],
+                0
+            )
+            .1,
             vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
-            prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10, 11, 12, 13, 14]),
                 &[CellType::Tetrahedron10],
                 0
             )
@@ -745,8 +939,8 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]),
                 &[CellType::Pyramid13],
                 0
             )
@@ -755,8 +949,8 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+            prepare_cells_u64(
+                IntConnectivity::U64(&[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
                 &[CellType::Wedge15],
                 0
             )
@@ -765,10 +959,10 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
-                &[
+            prepare_cells_u64(
+                IntConnectivity::U64(&[
                     5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
-                ],
+                ]),
                 &[CellType::Wedge18],
                 0
             )
@@ -779,10 +973,10 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
-                &[
+            prepare_cells_u64(
+                IntConnectivity::U64(&[
                     5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
-                ],
+                ]),
                 &[CellType::Hexahedron20],
                 0
             )
@@ -793,11 +987,11 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
-                &[
+            prepare_cells_u64(
+                IntConnectivity::U64(&[
                     5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
                     26, 27, 28
-                ],
+                ]),
                 &[CellType::Hexahedron24],
                 0
             )
@@ -809,11 +1003,11 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
-                &[
+            prepare_cells_u64(
+                IntConnectivity::U64(&[
                     5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
                     26, 27, 28, 29, 30, 31
-                ],
+                ]),
                 &[CellType::Hexahedron27],
                 0
             )
@@ -827,18 +1021,19 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_no_cells() {
-        let (topo_type, cells_prep) = prepare_cells(&[], &[], 5);
+        let (topo_type, cells_prep) = prepare_cells_u64(IntConnectivity::U64(&[]), &[], 5);
 
         assert_eq!(topo_type, TopologyType::Polyvertex);
         assert_eq!(cells_prep, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
-    fn test_validate_points_and_cells() {
+    fn test_validate_connectivity_and_cells() {
         // valid input, must not return an error
-        validate_points_and_cells(
+        validate_connectivity_and_cells(
             &Values::from([0.0; 33].as_slice()),
-            &[0, 1, 2, 3, 4, 5, 6, 7],
+            Some(7),
+            8,
             &[
                 CellType::Vertex,
                 CellType::Triangle,
@@ -849,22 +1044,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_points_and_cells_only_points() {
+    fn validate_connectivity_and_cells_only_points() {
         // valid input, must not return an error
-        validate_points_and_cells(&Values::from([0.0; 33].as_slice()), &[], &[]).unwrap();
+        validate_connectivity_and_cells(&Values::from([0.0; 33].as_slice()), None, 0, &[]).unwrap();
     }
 
     #[test]
-    fn validate_points_and_cells_points_empty() {
-        let res = validate_points_and_cells(
-            &Values::from([0.0_f64; 0].as_slice()),
-            &[0, 1, 2, 3, 4, 5, 6, 7],
-            &[
-                CellType::Vertex,
-                CellType::Triangle,
-                CellType::Quadrilateral,
-            ],
-        );
+    fn validate_points_rejects_empty() {
+        let res = validate_points(&Values::from([0.0_f64; 0].as_slice()));
 
         std::assert_matches!(
             res.unwrap_err(),
@@ -873,16 +1060,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_points_and_cells_points_not_3d() {
-        let res = validate_points_and_cells(
-            &Values::from([0.0_f64; 22].as_slice()),
-            &[0, 1, 2, 3, 4, 5, 6, 7],
-            &[
-                CellType::Vertex,
-                CellType::Triangle,
-                CellType::Quadrilateral,
-            ],
-        );
+    fn validate_points_rejects_non_multiple_of_3() {
+        let res = validate_points(&Values::from([0.0_f64; 22].as_slice()));
 
         std::assert_matches!(
             res.unwrap_err(),
@@ -891,10 +1070,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_points_and_cells_conn_index_out_of_bounds() {
-        let res = validate_points_and_cells(
+    fn validate_connectivity_and_cells_conn_index_out_of_bounds() {
+        let res = validate_connectivity_and_cells(
             &Values::from([0.0_f64; 33].as_slice()),
-            &[0, 1, 2, 3, 4, 5, 6, 70],
+            Some(70),
+            8,
             &[
                 CellType::Vertex,
                 CellType::Triangle,
@@ -911,10 +1091,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_points_and_cells_conn_mismatch() {
-        let res = validate_points_and_cells(
+    fn validate_connectivity_and_cells_conn_mismatch() {
+        let res = validate_connectivity_and_cells(
             &Values::from([0.0_f64; 33].as_slice()),
-            &[0, 1, 2, 3, 4, 5, 6, 7],
+            Some(7),
+            8,
             &[
                 CellType::Vertex,
                 CellType::Edge,
@@ -931,13 +1112,118 @@ mod tests {
     }
 
     #[test]
-    fn validate_points_and_cells_rejects_integer_points() {
-        let res = validate_points_and_cells(&Values::from([0_u64; 33].as_slice()), &[], &[]);
+    fn validate_points_rejects_integer_points() {
+        let res = validate_points(&Values::from([0_u64; 33].as_slice()));
 
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidMesh { reason }
                 if reason == "points must be float64 or float32 data, not integer data"
+        );
+    }
+
+    #[test]
+    fn int_connectivity_try_from_accepts_every_integer_width() {
+        let values = Values::from([1_u64, 2].as_slice());
+        std::assert_matches!(IntConnectivity::try_from(&values).unwrap(), IntConnectivity::U64(v) if v == [1, 2]);
+
+        let values = Values::from([1_u32, 2].as_slice());
+        std::assert_matches!(IntConnectivity::try_from(&values).unwrap(), IntConnectivity::U32(v) if v == [1, 2]);
+
+        let values = Values::from([1_i64, 2].as_slice());
+        std::assert_matches!(IntConnectivity::try_from(&values).unwrap(), IntConnectivity::I64(v) if v == [1, 2]);
+
+        let values = Values::from([1_i32, 2].as_slice());
+        std::assert_matches!(IntConnectivity::try_from(&values).unwrap(), IntConnectivity::I32(v) if v == [1, 2]);
+    }
+
+    #[test]
+    fn int_connectivity_try_from_rejects_float() {
+        let values = Values::from([0.0_f64].as_slice());
+        let res = IntConnectivity::try_from(&values);
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason } if reason == CONNECTIVITY_TYPE_ERROR
+        );
+
+        let values = Values::from([0.0_f32].as_slice());
+        let res = IntConnectivity::try_from(&values);
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason } if reason == CONNECTIVITY_TYPE_ERROR
+        );
+    }
+
+    #[test]
+    fn max_and_validate_computes_the_max() {
+        assert_eq!(
+            IntConnectivity::U64(&[1, 5, 2]).max_and_validate().unwrap(),
+            Some(5)
+        );
+        assert_eq!(
+            IntConnectivity::U32(&[1, 5, 2]).max_and_validate().unwrap(),
+            Some(5)
+        );
+        assert_eq!(
+            IntConnectivity::I64(&[1, 5, 2]).max_and_validate().unwrap(),
+            Some(5)
+        );
+        assert_eq!(
+            IntConnectivity::I32(&[1, 5, 2]).max_and_validate().unwrap(),
+            Some(5)
+        );
+        assert_eq!(IntConnectivity::U64(&[]).max_and_validate().unwrap(), None);
+    }
+
+    #[test]
+    fn max_and_validate_rejects_negative_i64() {
+        let res = IntConnectivity::I64(&[1, -2]).max_and_validate();
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason }
+                if reason == "value -2 is negative, but indices/counts must be non-negative"
+        );
+    }
+
+    #[test]
+    fn max_and_validate_rejects_negative_i32() {
+        let res = IntConnectivity::I32(&[1, -2]).max_and_validate();
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason }
+                if reason == "value -2 is negative, but indices/counts must be non-negative"
+        );
+    }
+
+    #[test]
+    fn narrow_connectivity_to_width_keeps_64_bit_as_u64() {
+        let values = narrow_connectivity_to_width(&IntConnectivity::U64(&[1]), vec![1, 2]).unwrap();
+        std::assert_matches!(values, Values::U64(_));
+
+        let values = narrow_connectivity_to_width(&IntConnectivity::I64(&[1]), vec![1, 2]).unwrap();
+        std::assert_matches!(values, Values::U64(_));
+    }
+
+    #[test]
+    fn narrow_connectivity_to_width_narrows_32_bit_to_u32() {
+        let values = narrow_connectivity_to_width(&IntConnectivity::U32(&[1]), vec![1, 2]).unwrap();
+        std::assert_matches!(values, Values::U32(v) if v.as_ref() == [1, 2]);
+
+        let values = narrow_connectivity_to_width(&IntConnectivity::I32(&[1]), vec![1, 2]).unwrap();
+        std::assert_matches!(values, Values::U32(v) if v.as_ref() == [1, 2]);
+    }
+
+    #[test]
+    fn narrow_connectivity_to_width_rejects_values_too_large_for_32_bit() {
+        let res = narrow_connectivity_to_width(
+            &IntConnectivity::U32(&[1]),
+            vec![u64::from(u32::MAX) + 1],
+        );
+
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason }
+                if reason.contains("does not fit in 32 bits")
         );
     }
 
@@ -996,7 +1282,7 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 [0.0_f64; NUM_POINTS * 3].as_slice().into(),
-                &[0, 2, 3, 4],
+                [0_u64, 2, 3, 4].as_slice().into(),
                 &[CellType::Vertex; 4],
             )
             .unwrap();
@@ -1057,7 +1343,7 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 [0.0_f64; NUM_POINTS * 3].as_slice().into(),
-                &[0, 2, 3, 4],
+                [0_u64, 2, 3, 4].as_slice().into(),
                 &[CellType::Vertex; 4],
             )
             .unwrap();
@@ -1097,7 +1383,7 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 [0.0_f64; NUM_POINTS * 3].as_slice().into(),
-                &[0, 2, 3, 4],
+                [0_u64, 2, 3, 4].as_slice().into(),
                 &[CellType::Vertex; 4],
             )
             .unwrap();
@@ -1142,7 +1428,7 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 [0.0_f64; NUM_POINTS * 3].as_slice().into(),
-                &[0, 2, 3, 4],
+                [0_u64, 2, 3, 4].as_slice().into(),
                 &[CellType::Vertex; 4],
             )
             .unwrap();
@@ -1197,7 +1483,7 @@ mod tests {
         let mut writer = writer
             .write_mesh(
                 [0.0_f64; 10 * 3].as_slice().into(),
-                &[0, 2, 3, 4],
+                [0_u64, 2, 3, 4].as_slice().into(),
                 &[CellType::Vertex; NUM_CELLS],
             )
             .unwrap();
@@ -1361,7 +1647,7 @@ mod tests {
             fn write_mesh(
                 &mut self,
                 _points: &Values<'_>,
-                _cells: &[u64],
+                _cells: &Values<'_>,
             ) -> Result<(DataContent, DataContent)> {
                 Ok((
                     DataContent::Raw("points".to_string()),
@@ -1492,7 +1778,7 @@ mod tests {
             fn write_mesh(
                 &mut self,
                 _points: &Values<'_>,
-                _cells: &[u64],
+                _cells: &Values<'_>,
             ) -> Result<(DataContent, DataContent)> {
                 Ok((
                     DataContent::Raw("points".to_string()),

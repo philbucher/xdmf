@@ -35,7 +35,11 @@ fn write_and_verify_binary() {
     let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(coords.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            coords.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
 
     xdmf_writer
@@ -98,7 +102,11 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
 
     let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(coords.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            coords.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
 
     let res = xdmf_writer.write_data(
@@ -113,7 +121,7 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
     std::assert_matches!(
         res.unwrap_err(),
         xdmf::Error::IntegerTooLargeForBinary { value }
-            if value == u64::from(u32::MAX) + 1
+            if value == i64::from(u32::MAX) + 1
     );
 
     // the rejected value is caught before any file for this step is opened, so nothing is left

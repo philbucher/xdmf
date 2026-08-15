@@ -61,7 +61,7 @@ impl DataWriter for BinaryWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         let points_file_name = "points.bin";
         let cells_file_name = "cells.bin";
@@ -76,7 +76,7 @@ impl DataWriter for BinaryWriter {
         );
 
         values_to_writer(points, &mut file_points, &points_path)?;
-        write_u64_as_u32_le(cells, &mut file_cells, &cells_path)?;
+        values_to_writer(cells, &mut file_cells, &cells_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
         file_points
@@ -142,12 +142,15 @@ impl DataWriter for BinaryWriter {
     }
 
     fn validate_values(&self, data: &Values<'_>) -> Result<()> {
-        if let Values::U64(v) = data {
-            for &value in v.iter() {
-                checked_u32(value)?;
-            }
+        match data {
+            Values::U64(v) => v
+                .iter()
+                .try_for_each(|&value| checked_u32(value).map(|_| ())),
+            Values::I64(v) => v
+                .iter()
+                .try_for_each(|&value| checked_i32(value).map(|_| ())),
+            Values::F64(_) | Values::F32(_) | Values::U32(_) | Values::I32(_) => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -169,12 +172,35 @@ fn write_f32_le(vec: &[f32], writer: &mut impl Write, path: &Path) -> Result<()>
     Ok(())
 }
 
-// Paraview's legacy Xdmf reader silently misreads 64-bit integers in `Format="Binary"` `DataItem`s:
-// connectivity comes back empty and attribute data comes back with corrupted values.
-// Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
-// Values that don't fit in 32 bits are rejected rather than silently truncated.
+fn write_u32_le(vec: &[u32], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for &v in vec {
+        writer
+            .write_all(&v.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
+    }
+    Ok(())
+}
+
+fn write_i32_le(vec: &[i32], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for &v in vec {
+        writer
+            .write_all(&v.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
+    }
+    Ok(())
+}
+
+// Paraview's legacy Xdmf reader silently misreads 64-bit integers (signed or unsigned) in
+// `Format="Binary"` `DataItem`s: connectivity comes back empty and attribute data comes back with
+// corrupted values. Narrowing to 4 bytes (and matching `Format::int64_precision()` in the
+// `DataItem`) is what actually loads correctly in Paraview. Values that don't fit in 32 bits are
+// rejected rather than silently truncated.
 fn checked_u32(v: u64) -> Result<u32> {
-    u32::try_from(v).map_err(|_err| Error::IntegerTooLargeForBinary { value: v })
+    u32::try_from(v).map_err(|_err| Error::IntegerTooLargeForBinary { value: v as i64 })
+}
+
+fn checked_i32(v: i64) -> Result<i32> {
+    i32::try_from(v).map_err(|_err| Error::IntegerTooLargeForBinary { value: v })
 }
 
 fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Result<()> {
@@ -187,11 +213,24 @@ fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Res
     Ok(())
 }
 
+fn write_i64_as_i32_le(vec: &[i64], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for &v in vec {
+        let v32 = checked_i32(v)?;
+        writer
+            .write_all(&v32.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
+    }
+    Ok(())
+}
+
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
         Values::F64(v) => write_f64_le(v, writer, path),
         Values::F32(v) => write_f32_le(v, writer, path),
         Values::U64(v) => write_u64_as_u32_le(v, writer, path),
+        Values::U32(v) => write_u32_le(v, writer, path),
+        Values::I64(v) => write_i64_as_i32_le(v, writer, path),
+        Values::I32(v) => write_i32_le(v, writer, path),
     }
 }
 
@@ -235,6 +274,52 @@ mod tests {
     }
 
     #[test]
+    fn write_i64_as_i32_le_multiple_values() {
+        let vec_i64 = vec![1_i64, -2];
+        let mut buffer = Vec::new();
+        write_i64_as_i32_le(&vec_i64, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_i32.to_le_bytes());
+        expected.extend_from_slice(&(-2_i32).to_le_bytes());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn write_i64_as_i32_le_rejects_values_out_of_i32_range() {
+        let vec_i64 = vec![1_i64, i64::from(i32::MIN) - 1];
+        let mut buffer = Vec::new();
+        let res = write_i64_as_i32_le(&vec_i64, &mut buffer, Path::new("test.bin"));
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::IntegerTooLargeForBinary {
+                value: -2_147_483_649
+            }
+        );
+    }
+
+    #[test]
+    fn write_u32_le_multiple_values() {
+        let vec_u32 = vec![1_u32, 2];
+        let mut buffer = Vec::new();
+        write_u32_le(&vec_u32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn write_i32_le_multiple_values() {
+        let vec_i32 = vec![1_i32, -2];
+        let mut buffer = Vec::new();
+        write_i32_le(&vec_i32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_i32.to_le_bytes());
+        expected.extend_from_slice(&(-2_i32).to_le_bytes());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
     fn values_to_writer_multiple_types() {
         let data_f64: Values = vec![1.0, 2.0].into();
         let mut buffer = Vec::new();
@@ -251,6 +336,48 @@ mod tests {
         expected.extend_from_slice(&1_u32.to_le_bytes());
         expected.extend_from_slice(&2_u32.to_le_bytes());
         assert_eq!(buffer, expected);
+
+        let data_u32: Values = vec![1_u32, 2].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_u32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(buffer, expected);
+
+        let data_i64: Values = vec![1_i64, -2].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_i64, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_i32.to_le_bytes());
+        expected.extend_from_slice(&(-2_i32).to_le_bytes());
+        assert_eq!(buffer, expected);
+
+        let data_i32: Values = vec![1_i32, -2].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_i32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_i32.to_le_bytes());
+        expected.extend_from_slice(&(-2_i32).to_le_bytes());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn validate_values_checks_i64_range_too() {
+        let writer =
+            BinaryWriter::new(temp_dir::TempDir::new().unwrap().path().join("test")).unwrap();
+
+        writer
+            .validate_values(&vec![1_i64, -2].into())
+            .expect("fits in i32");
+
+        let res = writer.validate_values(&vec![i64::from(i32::MAX) + 1].into());
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::IntegerTooLargeForBinary {
+                value: 2_147_483_648
+            }
+        );
     }
 
     #[test]
@@ -279,7 +406,9 @@ mod tests {
         let points: Vec<f64> = vec![0.0, 1.0, 2.0];
         let points_values: Values = points.as_slice().into();
         let cells = vec![0_u64, 1, 2];
-        let (points_content, cells_content) = writer.write_mesh(&points_values, &cells).unwrap();
+        let cells_values: Values = cells.as_slice().into();
+        let (points_content, cells_content) =
+            writer.write_mesh(&points_values, &cells_values).unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
 

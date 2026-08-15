@@ -179,24 +179,46 @@ def test_connectivity_accepts_int64(tmp_path):
     _write_small_mesh(tmp_path, xdmf.DataStorage.Binary, connectivity_dtype=np.int64)
 
 
+def test_connectivity_accepts_uint32(tmp_path):
+    # a 32-bit connectivity array is stored at that width instead of being widened to 64-bit.
+    _write_small_mesh(tmp_path, xdmf.DataStorage.Ascii, connectivity_dtype=np.uint32)
+
+
+def test_connectivity_accepts_int32(tmp_path):
+    _write_small_mesh(tmp_path, xdmf.DataStorage.Ascii, connectivity_dtype=np.int32)
+
+
 def test_connectivity_rejects_negative_int64(tmp_path):
     coords = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], dtype=np.float64)
     connectivity = np.array([0, 1, -1], dtype=np.int64)
     writer = xdmf.TimeSeriesWriter(str(tmp_path / "neg"), xdmf.DataStorage.Ascii)
     with pytest.raises(ValueError) as exc_info:
         writer.write_mesh(coords, connectivity, [xdmf.CellType.Triangle])
-    assert str(exc_info.value) == "value -1 is negative, but indices/counts must be non-negative"
+    assert str(exc_info.value) == (
+        "invalid mesh: value -1 is negative, but indices/counts must be non-negative"
+    )
+
+
+def test_connectivity_rejects_negative_int32(tmp_path):
+    coords = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], dtype=np.float64)
+    connectivity = np.array([0, 1, -1], dtype=np.int32)
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "neg32"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh(coords, connectivity, [xdmf.CellType.Triangle])
+    assert str(exc_info.value) == (
+        "invalid mesh: value -1 is negative, but indices/counts must be non-negative"
+    )
 
 
 def test_rejects_wrong_dtype(tmp_path):
-    coords = np.array([0.0, 0.0, 0.0], dtype=np.int32)  # wrong dtype entirely
+    coords = np.array([0.0, 0.0, 0.0], dtype=np.int16)  # not one of the six recognized dtypes
     connectivity = np.array([0], dtype=np.uint64)
     writer = xdmf.TimeSeriesWriter(str(tmp_path / "wrong_dtype"), xdmf.DataStorage.Ascii)
     with pytest.raises(ValueError) as exc_info:
         writer.write_mesh(coords, connectivity, [xdmf.CellType.Vertex])
     assert str(exc_info.value) == (
-        "expected a numpy array with dtype float64, float32, uint64, or int64, "
-        "got a numpy array with dtype int32"
+        "expected a numpy array with dtype float64, float32, uint64, uint32, int64, or int32, "
+        "got a numpy array with dtype int16"
     )
 
 
@@ -224,6 +246,24 @@ def test_write_mesh_accepts_float32_points(tmp_path):
     xdmf_file = (tmp_path / "f32_points").with_suffix(".xdmf2")
     xml = xdmf_file.read_text()
     assert 'NumberType="Float" Format="XML" Precision="4"' in xml
+
+
+def test_write_mesh_accepts_uint32_connectivity(tmp_path):
+    # a uint32 connectivity array is stored at that precision on disk instead of being widened to
+    # uint64 -- and signed int32 connectivity is normalized to unsigned on disk (indices have no
+    # sign), so it round-trips through the same Precision="4" NumberType="UInt" representation.
+    coords = np.array(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+        dtype=np.float64,
+    )
+    for connectivity_dtype in (np.uint32, np.int32):
+        connectivity = np.array([0, 1, 2], dtype=connectivity_dtype)
+        file_path = tmp_path / f"u32_conn_{connectivity_dtype.__name__}"
+        writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.AsciiInline)
+        writer.write_mesh(coords, connectivity, [xdmf.CellType.Triangle])
+
+        xml = file_path.with_suffix(".xdmf2").read_text()
+        assert 'NumberType="UInt" Format="XML" Precision="4"' in xml
 
 
 def test_rejects_non_contiguous_array(tmp_path):

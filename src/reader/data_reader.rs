@@ -61,9 +61,11 @@ impl SourceKind {
 /// not resolve references itself.
 ///
 /// Returns a plain [`Values`] (owned, i.e. `Cow::Owned` under the hood) rather than a
-/// reader-specific type: a backend widens 4-byte integers to `U64` (and never produces a
-/// 4-byte-integer variant of its own), so the parsed data already has exactly `Values`' shape —
-/// three cases, same element types — and reusing it avoids a duplicate enum.
+/// reader-specific type: reusing it avoids a duplicate enum. A backend only ever constructs
+/// `Values::F64`/`F32`/`U64` -- it widens 4-byte integers to `U64` and `NumberType="Int"` is
+/// rejected by `SourceKind::from_data_item` before a backend runs, so `Values::U32`/`I64`/`I32`
+/// (write-only additions for `TimeSeriesWriter`) never actually come out of this function; the
+/// `assign`/`into_f64`/`into_u64` match arms below still have to name them to stay exhaustive.
 pub(crate) fn read_data_item(
     item: &DataItem,
     base_dir: &Path,
@@ -146,7 +148,10 @@ pub(crate) fn assign(source: Values<'_>, into: ValuesMut<'_>) -> Result<()> {
                 reason: "cannot read a Precision=\"8\" float DataItem into a f32 buffer without losing precision".to_string(),
             });
         }
-        (Values::F64(_) | Values::F32(_), ValuesMut::U64(_)) => {
+        (
+            Values::F64(_) | Values::F32(_),
+            ValuesMut::U64(_) | ValuesMut::U32(_) | ValuesMut::I64(_) | ValuesMut::I32(_),
+        ) => {
             return Err(Error::InvalidData {
                 reason: "requested integer data, but the DataItem holds floating-point data"
                     .to_string(),
@@ -157,6 +162,19 @@ pub(crate) fn assign(source: Values<'_>, into: ValuesMut<'_>) -> Result<()> {
                 reason: "requested floating-point data, but the DataItem holds integer data"
                     .to_string(),
             });
+        }
+        (Values::U64(_), ValuesMut::U32(_) | ValuesMut::I64(_) | ValuesMut::I32(_)) => {
+            return Err(Error::InvalidData {
+                reason: "cannot read a UInt DataItem into a buffer of a different integer width \
+                         or signedness (only an exact u64 match is supported)"
+                    .to_string(),
+            });
+        }
+        (Values::U32(_) | Values::I64(_) | Values::I32(_), _) => {
+            return Err(Error::Internal(
+                "read_data_item produced a Values::U32/I64/I32, which no reader backend \
+                 currently constructs (SourceKind widens 4-byte integers to U64 and NumberType=\"Int\" is Unsupported)",
+            ));
         }
     }
     Ok(())
@@ -172,6 +190,10 @@ pub(crate) fn into_f64(source: Values<'_>, xdmf_path: &Path) -> Result<Vec<f64>>
             path: xdmf_path.to_path_buf(),
             reason: "Geometry DataItem must hold floating-point data".to_string(),
         }),
+        Values::U32(_) | Values::I64(_) | Values::I32(_) => Err(Error::Internal(
+            "read_data_item produced a Values::U32/I64/I32, which no reader backend currently \
+             constructs (SourceKind widens 4-byte integers to U64 and NumberType=\"Int\" is Unsupported)",
+        )),
     }
 }
 
@@ -184,5 +206,9 @@ pub(crate) fn into_u64(source: Values<'_>, xdmf_path: &Path) -> Result<Vec<u64>>
             path: xdmf_path.to_path_buf(),
             reason: "Topology DataItem must hold integer data".to_string(),
         }),
+        Values::U32(_) | Values::I64(_) | Values::I32(_) => Err(Error::Internal(
+            "read_data_item produced a Values::U32/I64/I32, which no reader backend currently \
+             constructs (SourceKind widens 4-byte integers to U64 and NumberType=\"Int\" is Unsupported)",
+        )),
     }
 }

@@ -38,7 +38,11 @@ fn mesh_plus_data_multiple_steps_round_trips_for_every_storage_mode(#[case] stor
 
     let writer = TimeSeriesWriter::new(&path, storage).unwrap();
     let mut data_writer = writer
-        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
 
     let point_scalar_t0 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -167,7 +171,11 @@ fn mesh_only_round_trips_for_every_storage_mode(#[case] storage: DataStorage) {
 
     TimeSeriesWriter::new(&path, storage)
         .unwrap()
-        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
 
     let reader = TimeSeriesReader::new(path.with_extension("xdmf2")).unwrap();
@@ -210,7 +218,7 @@ fn point_cloud_round_trips_with_empty_cell_types(#[case] storage: DataStorage) {
 
     TimeSeriesWriter::new(&path, storage)
         .unwrap()
-        .write_mesh(points.as_slice().into(), &[], &[])
+        .write_mesh(points.as_slice().into(), (&[] as &[u64]).into(), &[])
         .unwrap();
 
     let reader = TimeSeriesReader::new(path.with_extension("xdmf2")).unwrap();
@@ -252,7 +260,11 @@ fn f32_attribute_round_trips_and_widens_into_f64(#[case] storage: DataStorage) {
 
     let mut data_writer = TimeSeriesWriter::new(&path, storage)
         .unwrap()
-        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
 
     let pressure: Vec<f32> = vec![1.5, 2.5, 3.5];
@@ -311,7 +323,11 @@ fn narrowing_f64_into_f32_buffer_is_rejected() {
 
     let mut data_writer = TimeSeriesWriter::new(&path, DataStorage::AsciiInline)
         .unwrap()
-        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
 
     let pressure = vec![1.5_f64, 2.5, 3.5];
@@ -348,6 +364,134 @@ fn narrowing_f64_into_f32_buffer_is_rejected() {
 }
 
 #[test]
+fn float_data_into_integer_buffer_is_rejected() {
+    let tmp_dir = TempDir::new().unwrap();
+    let path = tmp_dir.path().join("out");
+
+    let points = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 2];
+    let cell_types = [CellType::Triangle];
+
+    let mut data_writer = TimeSeriesWriter::new(&path, DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
+        .unwrap();
+
+    let pressure = vec![1.5_f64, 2.5, 3.5];
+    data_writer
+        .write_data(
+            "0.0",
+            [(
+                "pressure",
+                DataAttribute::Scalar,
+                pressure.as_slice().into(),
+            )],
+            [],
+        )
+        .unwrap();
+
+    let reader = TimeSeriesReader::new(path.with_extension("xdmf2")).unwrap();
+    let mut read_points = Vec::new();
+    let mut read_connectivity = Vec::new();
+    let mut read_cell_types = Vec::new();
+    let mut data_reader = reader
+        .read_mesh(
+            &mut read_points,
+            &mut read_connectivity,
+            &mut read_cell_types,
+        )
+        .unwrap();
+
+    let index = data_reader.point_data_index(0, "pressure").unwrap();
+
+    let mut into_u32: Vec<u32> = Vec::new();
+    let err = data_reader
+        .read_point_data(0, index, &mut into_u32)
+        .unwrap_err();
+    std::assert_matches!(err, xdmf::Error::InvalidData { .. });
+
+    let mut into_i64: Vec<i64> = Vec::new();
+    let err = data_reader
+        .read_point_data(0, index, &mut into_i64)
+        .unwrap_err();
+    std::assert_matches!(err, xdmf::Error::InvalidData { .. });
+
+    let mut into_i32: Vec<i32> = Vec::new();
+    let err = data_reader
+        .read_point_data(0, index, &mut into_i32)
+        .unwrap_err();
+    std::assert_matches!(err, xdmf::Error::InvalidData { .. });
+}
+
+#[test]
+fn mismatched_integer_width_or_signedness_buffer_is_rejected() {
+    let tmp_dir = TempDir::new().unwrap();
+    let path = tmp_dir.path().join("out");
+
+    let points = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 2];
+    let cell_types = [CellType::Triangle];
+
+    let mut data_writer = TimeSeriesWriter::new(&path, DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
+        .unwrap();
+
+    let cell_ids = vec![10_u64];
+    data_writer
+        .write_data(
+            "0.0",
+            [],
+            [(
+                "cell_ids",
+                DataAttribute::Scalar,
+                cell_ids.as_slice().into(),
+            )],
+        )
+        .unwrap();
+
+    let reader = TimeSeriesReader::new(path.with_extension("xdmf2")).unwrap();
+    let mut read_points = Vec::new();
+    let mut read_connectivity = Vec::new();
+    let mut read_cell_types = Vec::new();
+    let mut data_reader = reader
+        .read_mesh(
+            &mut read_points,
+            &mut read_connectivity,
+            &mut read_cell_types,
+        )
+        .unwrap();
+
+    let index = data_reader.cell_data_index(0, "cell_ids").unwrap();
+
+    let mut into_u32: Vec<u32> = Vec::new();
+    let err = data_reader
+        .read_cell_data(0, index, &mut into_u32)
+        .unwrap_err();
+    std::assert_matches!(err, xdmf::Error::InvalidData { .. });
+
+    let mut into_i64: Vec<i64> = Vec::new();
+    let err = data_reader
+        .read_cell_data(0, index, &mut into_i64)
+        .unwrap_err();
+    std::assert_matches!(err, xdmf::Error::InvalidData { .. });
+
+    let mut into_i32: Vec<i32> = Vec::new();
+    let err = data_reader
+        .read_cell_data(0, index, &mut into_i32)
+        .unwrap_err();
+    std::assert_matches!(err, xdmf::Error::InvalidData { .. });
+}
+
+#[test]
 fn out_of_bounds_step_is_invalid_data() {
     let tmp_dir = TempDir::new().unwrap();
     let path = tmp_dir.path().join("out");
@@ -358,7 +502,11 @@ fn out_of_bounds_step_is_invalid_data() {
 
     let reader = TimeSeriesWriter::new(&path, DataStorage::AsciiInline)
         .unwrap()
-        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
+        .write_mesh(
+            points.as_slice().into(),
+            connectivity.as_slice().into(),
+            &cell_types,
+        )
         .unwrap();
     drop(reader);
 

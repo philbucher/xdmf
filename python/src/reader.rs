@@ -198,7 +198,7 @@ impl PyTimeSeriesDataReader {
         let data = py
             .detach(|| self.inner.read_point_step(step))
             .map_err(to_py_err)?;
-        Ok(to_py_step(py, data))
+        to_py_step(py, data)
     }
 
     /// Reads every cell-data field at `step`. See `read_point_step` for the shape.
@@ -210,7 +210,7 @@ impl PyTimeSeriesDataReader {
         let data = py
             .detach(|| self.inner.read_cell_step(step))
             .map_err(to_py_err)?;
-        Ok(to_py_step(py, data))
+        to_py_step(py, data)
     }
 
     /// Reads the point-data field at `index` within `step`, returning a numpy array of the dtype
@@ -236,18 +236,30 @@ impl PyTimeSeriesDataReader {
 fn to_py_step(
     py: Python<'_>,
     data: Vec<(String, xdmf::DataAttribute, xdmf::Values<'static>)>,
-) -> Vec<(String, PyDataAttribute, Py<PyAny>)> {
+) -> PyResult<Vec<(String, PyDataAttribute, Py<PyAny>)>> {
     data.into_iter()
-        .map(|(name, attr, values)| (name, PyDataAttribute(attr), values_to_pyobject(py, values)))
+        .map(|(name, attr, values)| {
+            Ok((name, PyDataAttribute(attr), values_to_pyobject(py, values)?))
+        })
         .collect()
 }
 
-fn values_to_pyobject(py: Python<'_>, values: xdmf::Values<'static>) -> Py<PyAny> {
-    match values {
+// The reader only ever constructs `Values::F64`/`F32`/`U64` (it widens 4-byte integers to `U64`
+// and `NumberType="Int"` is `Unsupported`, see `src/reader/data_reader.rs`), so `Values::U32`/
+// `I64`/`I32` -- write-only additions for `TimeSeriesWriter` -- never actually reach this
+// function; the match still has to name them to stay exhaustive.
+fn values_to_pyobject(py: Python<'_>, values: xdmf::Values<'static>) -> PyResult<Py<PyAny>> {
+    Ok(match values {
         xdmf::Values::F64(cow) => cow.into_owned().into_pyarray(py).into_any().unbind(),
         xdmf::Values::F32(cow) => cow.into_owned().into_pyarray(py).into_any().unbind(),
         xdmf::Values::U64(cow) => cow.into_owned().into_pyarray(py).into_any().unbind(),
-    }
+        xdmf::Values::U32(_) | xdmf::Values::I64(_) | xdmf::Values::I32(_) => {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "internal invariant violated: the reader produced a Values::U32/I64/I32, which \
+                 no reader backend currently constructs",
+            ));
+        }
+    })
 }
 
 fn read_one(

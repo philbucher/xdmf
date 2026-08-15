@@ -122,7 +122,7 @@ fn invert_mixed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::time_series_writer::prepare_cells;
+    use crate::time_series_writer::{IntConnectivity, prepare_cells};
 
     const ALL_CELL_TYPES: [CellType; 19] = [
         CellType::Vertex,
@@ -151,11 +151,13 @@ mod tests {
         for cell_type in ALL_CELL_TYPES {
             let n = cell_type.num_points();
             let connectivity: Vec<u64> = (0..n as u64).collect();
-            let (topo_type, raw) = prepare_cells(&connectivity, &[cell_type], n);
+            let (topo_type, raw) =
+                prepare_cells(IntConnectivity::U64(&connectivity), &[cell_type], n).unwrap();
+            let raw = raw.as_slice::<u64>().unwrap();
             assert_eq!(topo_type, TopologyType::Mixed);
 
             let (decoded_connectivity, decoded_cell_types) =
-                invert(topo_type, &raw, n, 1, Path::new("x.xdmf2")).unwrap();
+                invert(topo_type, raw, n, 1, Path::new("x.xdmf2")).unwrap();
             assert_eq!(decoded_connectivity, connectivity, "{cell_type:?}");
             assert_eq!(decoded_cell_types, vec![cell_type], "{cell_type:?}");
         }
@@ -166,11 +168,13 @@ mod tests {
         let connectivity: Vec<u64> = vec![0, 1, 0, 2, 1, 0, 1, 2, 3];
         let cell_types = vec![CellType::Edge, CellType::Triangle, CellType::Tetrahedron];
         let num_points = 4;
-        let (topo_type, raw) = prepare_cells(&connectivity, &cell_types, num_points);
+        let (topo_type, raw) =
+            prepare_cells(IntConnectivity::U64(&connectivity), &cell_types, num_points).unwrap();
+        let raw = raw.as_slice::<u64>().unwrap();
 
         let (decoded_connectivity, decoded_cell_types) = invert(
             topo_type,
-            &raw,
+            raw,
             num_points,
             cell_types.len(),
             Path::new("x.xdmf2"),
@@ -183,17 +187,12 @@ mod tests {
     #[test]
     fn polyvertex_point_cloud_returns_empty_cell_types() {
         let num_points = 5;
-        let (topo_type, raw) = prepare_cells(&[], &[], num_points);
+        let (topo_type, raw) = prepare_cells(IntConnectivity::U64(&[]), &[], num_points).unwrap();
+        let raw = raw.as_slice::<u64>().unwrap();
         assert_eq!(topo_type, TopologyType::Polyvertex);
 
-        let (decoded_connectivity, decoded_cell_types) = invert(
-            topo_type,
-            &raw,
-            num_points,
-            num_points,
-            Path::new("x.xdmf2"),
-        )
-        .unwrap();
+        let (decoded_connectivity, decoded_cell_types) =
+            invert(topo_type, raw, num_points, num_points, Path::new("x.xdmf2")).unwrap();
         assert!(decoded_connectivity.is_empty());
         assert!(decoded_cell_types.is_empty());
     }
@@ -240,8 +239,14 @@ mod tests {
     #[test]
     fn mixed_element_count_mismatch_is_invalid_file() {
         let connectivity: Vec<u64> = vec![0, 1, 2];
-        let (topo_type, raw) = prepare_cells(&connectivity, &[CellType::Triangle], 3);
-        let err = invert(topo_type, &raw, 3, 2, Path::new("x.xdmf2")).unwrap_err();
+        let (topo_type, raw) = prepare_cells(
+            IntConnectivity::U64(&connectivity),
+            &[CellType::Triangle],
+            3,
+        )
+        .unwrap();
+        let raw = raw.as_slice::<u64>().unwrap();
+        let err = invert(topo_type, raw, 3, 2, Path::new("x.xdmf2")).unwrap_err();
         std::assert_matches!(err, Error::InvalidFile { reason, .. } if reason.contains("NumberOfElements=2"));
     }
 }

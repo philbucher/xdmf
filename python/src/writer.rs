@@ -32,10 +32,12 @@ impl PyTimeSeriesWriter {
     }
 
     /// Write the mesh. `points` is a numpy `float64` or `float32` array (flat or `(N, 3)`).
-    /// `connectivity` is a numpy `uint64`/`int64` array of point indices, `cell_types` either a
-    /// list of `xdmf.CellType` or a numpy array of raw cell type codes. Consumes this writer
-    /// (matching the Rust API, where `write_mesh` takes `self` by value); calling it a second
-    /// time raises.
+    /// `connectivity` is a numpy `uint64`/`uint32`/`int64`/`int32` array of point indices -- a
+    /// signed array is checked for negative values once, centrally, in the core crate, and is
+    /// stored on disk as unsigned data at whichever width (32/64-bit) was passed in. `cell_types`
+    /// is either a list of `xdmf.CellType` or a numpy array of raw cell type codes. Consumes this
+    /// writer (matching the Rust API, where `write_mesh` takes `self` by value); calling it a
+    /// second time raises.
     fn write_mesh(
         &mut self,
         py: Python<'_>,
@@ -51,11 +53,11 @@ impl PyTimeSeriesWriter {
         let points_arr = NumpyArray::extract(points)?;
         let points_values = points_arr.to_values()?;
         let conn_arr = NumpyArray::extract(connectivity)?;
-        let conn_slice = conn_arr.as_u64_slice()?;
+        let conn_values = conn_arr.to_values()?;
         let cell_types = extract_cell_types(cell_types)?;
 
         let inner = py
-            .detach(|| writer.write_mesh(points_values, conn_slice, &cell_types))
+            .detach(|| writer.write_mesh(points_values, conn_values, &cell_types))
             .map_err(to_py_err)?;
 
         Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
@@ -71,7 +73,8 @@ pub struct PyTimeSeriesDataWriter {
 impl PyTimeSeriesDataWriter {
     /// Write point/cell attribute data for one time step. `point_data`/`cell_data` are lists of
     /// `(name, DataAttribute, array)`, `array` being a contiguous numpy array of dtype
-    /// `float64`, `float32`, `uint64`, or `int64` -- borrowed with no copy (see `arrays.rs`).
+    /// `float64`, `float32`, `uint64`, `uint32`, `int64`, or `int32` -- borrowed with no copy (see
+    /// `arrays.rs`).
     fn write_data<'py>(
         &mut self,
         py: Python<'py>,

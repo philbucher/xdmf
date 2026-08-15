@@ -75,11 +75,11 @@ pub enum Error {
     },
     /// A value does not fit the numeric range the `Binary` backend can represent.
     #[error(
-        "value {value} does not fit in 32 bits: uncompressed Binary output only supports integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
+        "value {value} does not fit in 32 bits: uncompressed Binary output only supports 32-bit integer data (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
     )]
     IntegerTooLargeForBinary {
         /// The out-of-range value.
-        value: u64,
+        value: i64,
     },
     /// An internal invariant was violated. Not reachable through the public API; guards against
     /// a future regression in the state-machine pairing between a backend's
@@ -237,7 +237,12 @@ mod error_messages {
             }
             .to_string(),
             "value 4294967296 does not fit in 32 bits: uncompressed Binary output only supports \
-             integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
+             32-bit integer data (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
+        );
+        assert_eq!(
+            Error::IntegerTooLargeForBinary { value: -5_000_000 }.to_string(),
+            "value -5000000 does not fit in 32 bits: uncompressed Binary output only supports \
+             32-bit integer data (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
         );
     }
 

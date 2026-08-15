@@ -148,7 +148,11 @@ mod tests {
             let conn: Vec<u64> = connectivity.iter().map(|&x| x as u64).collect();
 
             let writer = writer
-                .write_mesh(coordinates.as_slice().into(), &conn, &cell_types)
+                .write_mesh(
+                    coordinates.as_slice().into(),
+                    conn.as_slice().into(),
+                    &cell_types,
+                )
                 .unwrap();
 
             self.writer = Some(writer);

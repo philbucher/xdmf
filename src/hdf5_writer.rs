@@ -76,7 +76,7 @@ impl DataWriter for SingleFileHdf5Writer {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
             return Err(Error::InvalidMesh {
@@ -198,7 +198,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
@@ -280,24 +280,13 @@ impl DataWriter for MultipleFilesHdf5Writer {
 fn write_mesh(
     group: &H5Group,
     points: &Values<'_>,
-    cells: &[u64],
+    cells: &Values<'_>,
     deflate_level: u8,
 ) -> Result<(String, String)> {
     let data_name_points = write_values(group, POINTS, points, deflate_level)?;
+    let data_name_cells = write_values(group, CELLS, cells, deflate_level)?;
 
-    let dataset_cells = group
-        .new_dataset::<u64>()
-        .shape(cells.len())
-        .shuffle()
-        .deflate(deflate_level)
-        .create(CELLS)
-        .map_err(hdf5_ctx("creating cells dataset"))?;
-
-    dataset_cells
-        .write(cells)
-        .map_err(hdf5_ctx("writing cells dataset"))?;
-
-    Ok((data_name_points, dataset_cells.name()))
+    Ok((data_name_points, data_name_cells))
 }
 
 fn write_values(
@@ -310,6 +299,9 @@ fn write_values(
         Values::F64(_) => group.new_dataset::<f64>(),
         Values::F32(_) => group.new_dataset::<f32>(),
         Values::U64(_) => group.new_dataset::<u64>(),
+        Values::U32(_) => group.new_dataset::<u32>(),
+        Values::I64(_) => group.new_dataset::<i64>(),
+        Values::I32(_) => group.new_dataset::<i32>(),
     };
 
     let data_set = data_set
@@ -323,6 +315,9 @@ fn write_values(
         Values::F64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
         Values::F32(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
         Values::U64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
+        Values::U32(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
+        Values::I64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
+        Values::I32(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
     };
 
     Ok(data_set.name())
@@ -389,10 +384,11 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let points_values: Values = points.as_slice().into();
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
+        let cells_values: Values = cells.as_slice().into();
 
         let (data_name_points, data_name_cells) =
-            write_mesh(&group, &points_values, &cells, 6).unwrap();
+            write_mesh(&group, &points_values, &cells_values, 6).unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -459,6 +455,49 @@ mod tests {
 
         assert_approx_eq!(&[f64], &vec_f64, &data_f64);
         assert_eq!(&vec_u64, &data_u64);
+    }
+
+    #[test]
+    fn write_values_works_for_narrow_and_signed_integers() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+
+        let h5_file = H5File::create(&file_name).unwrap();
+        let group = h5_file.create_group("test_group").unwrap();
+
+        let vec_u32 = vec![10_u32, 20, 30];
+        let vec_i64 = vec![-10_i64, 20, -30];
+        let vec_i32 = vec![-1_i32, 2, -3];
+
+        write_values(&group, "test_u32", &vec_u32.clone().into(), 6).unwrap();
+        write_values(&group, "test_i64", &vec_i64.clone().into(), 6).unwrap();
+        write_values(&group, "test_i32", &vec_i32.clone().into(), 6).unwrap();
+
+        let h5_file_read = H5File::open(&file_name).unwrap();
+        let group_read = h5_file_read.group("test_group").unwrap();
+
+        let data_u32: Vec<u32> = group_read
+            .dataset("test_u32")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+        let data_i64: Vec<i64> = group_read
+            .dataset("test_i64")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+        let data_i32: Vec<i32> = group_read
+            .dataset("test_i32")
+            .unwrap()
+            .read()
+            .unwrap()
+            .to_vec();
+
+        assert_eq!(&vec_u32, &data_u32);
+        assert_eq!(&vec_i64, &data_i64);
+        assert_eq!(&vec_i32, &data_i32);
     }
 
     #[test]
@@ -573,8 +612,9 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let points_values: Values = points.as_slice().into();
-        let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells).unwrap();
+        let cells = vec![0_u64, 1, 2];
+        let cells_values: Values = cells.as_slice().into();
+        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells_values).unwrap();
 
         assert_eq!(points_path, ("test.h5:mesh/points").into());
         assert_eq!(cells_path, ("test.h5:mesh/cells").into());
@@ -612,8 +652,9 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let points_values: Values = points.as_slice().into();
-        let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells).unwrap();
+        let cells = vec![0_u64, 1, 2];
+        let cells_values: Values = cells.as_slice().into();
+        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells_values).unwrap();
         assert!(mesh_file.exists());
 
         assert_eq!(points_path, ("test.h5/mesh.h5:points").into());

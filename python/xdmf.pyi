@@ -9,7 +9,9 @@ import numpy.typing as npt
 
 CellTypeCodes = Sequence["CellType"] | npt.NDArray[np.uint8] | npt.NDArray[np.uint64] | npt.NDArray[np.int64]
 FloatArray = npt.NDArray[np.float64] | npt.NDArray[np.float32]
-IntArray = npt.NDArray[np.uint64] | npt.NDArray[np.int64]
+IntArray = (
+    npt.NDArray[np.uint64] | npt.NDArray[np.uint32] | npt.NDArray[np.int64] | npt.NDArray[np.int32]
+)
 ValueArray = FloatArray | IntArray
 
 class DataStorage:

@@ -36,11 +36,11 @@ impl DataWriter for AsciiInlineWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         Ok((
             values_to_string(points).into(),
-            array_to_string_fmt(cells).into(),
+            values_to_string(cells).into(),
         ))
     }
 
@@ -99,7 +99,7 @@ impl DataWriter for AsciiWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         // create files for points and cells
         let points_file_name = "points.txt";
@@ -116,7 +116,7 @@ impl DataWriter for AsciiWriter {
 
         values_to_writer(points, &mut file_points)
             .map_err(io_ctx("writing points data", &points_path))?;
-        array_to_writer_fmt(cells, &mut file_cells)
+        values_to_writer(cells, &mut file_cells)
             .map_err(io_ctx("writing cells data", &cells_path))?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
@@ -247,6 +247,9 @@ fn values_to_string(data: &Values<'_>) -> String {
         Values::F64(v) => array_to_string_fmt(v),
         Values::F32(v) => array_to_string_fmt(v),
         Values::U64(v) => array_to_string_fmt(v),
+        Values::U32(v) => array_to_string_fmt(v),
+        Values::I64(v) => array_to_string_fmt(v),
+        Values::I32(v) => array_to_string_fmt(v),
     }
 }
 
@@ -255,6 +258,9 @@ fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> std::io::Resu
         Values::F64(v) => array_to_writer_fmt(v, writer),
         Values::F32(v) => array_to_writer_fmt(v, writer),
         Values::U64(v) => array_to_writer_fmt(v, writer),
+        Values::U32(v) => array_to_writer_fmt(v, writer),
+        Values::I64(v) => array_to_writer_fmt(v, writer),
+        Values::I32(v) => array_to_writer_fmt(v, writer),
     }
 }
 
@@ -362,8 +368,9 @@ mod tests {
         let points = vec![1., 2., 3., 4., 5., 6.];
         let points_values: Values = points.as_slice().into();
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
+        let cells_values: Values = cells.as_slice().into();
 
-        let result = writer.write_mesh(&points_values, &cells).unwrap();
+        let result = writer.write_mesh(&points_values, &cells_values).unwrap();
         pretty_assertions::assert_eq!(
             result,
             (
@@ -459,8 +466,9 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let points_values: Values = points.as_slice().into();
-        let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells).unwrap();
+        let cells = vec![0_u64, 1, 2];
+        let cells_values: Values = cells.as_slice().into();
+        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells_values).unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
 

@@ -38,11 +38,15 @@ impl TimeSeriesReader {
     /// use xdmf::{TimeSeriesReader, TimeSeriesWriter};
     ///
     /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    /// let connectivity = [0, 1, 2];
+    /// let connectivity: [u64; 3] = [0, 1, 2];
     /// let cell_types = [xdmf::CellType::Triangle];
     /// TimeSeriesWriter::new("xdmf_reader_new", xdmf::DataStorage::AsciiInline)
     ///     .unwrap()
-    ///     .write_mesh(coords.as_slice().into(), &connectivity, &cell_types)
+    ///     .write_mesh(
+    ///         coords.as_slice().into(),
+    ///         connectivity.as_slice().into(),
+    ///         &cell_types,
+    ///     )
     ///     .unwrap();
     ///
     /// let reader = TimeSeriesReader::new("xdmf_reader_new.xdmf2").unwrap();
