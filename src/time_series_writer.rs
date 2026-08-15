@@ -68,15 +68,19 @@ impl TimeSeriesWriter {
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
-    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types);
+    /// let mut ts_writer =
+    ///     xdmf_writer.write_mesh(coords.as_slice().into(), &connectivity, &cell_types);
     /// ```
+    ///
+    /// `points` accepts `f64` or `f32` data (via `Values`'s `From<&[f64]>`/`From<&[f32]>` etc.),
+    /// so an `f32` mesh is stored at that precision on disk instead of always widening to `f64`.
     pub fn write_mesh(
         mut self,
-        points: &[f64],
+        points: Values<'_>,
         connectivity: &[u64],
         cell_types: &[CellType],
     ) -> Result<TimeSeriesDataWriter> {
-        validate_points_and_cells(points, connectivity, cell_types)?;
+        validate_points_and_cells(&points, connectivity, cell_types)?;
 
         let num_points = points.len() / 3;
         let num_cells = if cell_types.is_empty() {
@@ -87,7 +91,7 @@ impl TimeSeriesWriter {
 
         let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
 
-        let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
+        let (points_data, cells_data) = self.writer.write_mesh(&points, &prepared_cells)?;
         let (points_text, points_include) = points_data.into_parts();
         let (cells_text, cells_include) = cells_data.into_parts();
 
@@ -98,8 +102,8 @@ impl TimeSeriesWriter {
             dimensions: Some(Dimensions(vec![num_points, 3])),
             text: points_text,
             include: points_include,
-            number_type: Some(NumberType::Float),
-            precision: Some(8),
+            number_type: Some(points.number_type()),
+            precision: Some(points.precision(format)),
             format: Some(format),
             endian: format.endian(),
             reference: None,
@@ -151,12 +155,19 @@ impl TimeSeriesWriter {
 
 // Validate that the points and cells are valid
 fn validate_points_and_cells(
-    points: &[f64],
+    points: &Values<'_>,
     connectivity: &[u64],
     cell_types: &[CellType],
 ) -> Result<()> {
+    // points are coordinates, not indices/counts -- integer data is a caller mistake
+    if !matches!(points.number_type(), NumberType::Float) {
+        return Err(Error::InvalidMesh {
+            reason: "points must be float64 or float32 data, not integer data".to_string(),
+        });
+    }
+
     // at least one point is required
-    if points.is_empty() {
+    if points.len() == 0 {
         return Err(Error::InvalidMesh {
             reason: "at least one point is required".to_string(),
         });
@@ -285,7 +296,7 @@ impl TimeSeriesDataWriter {
     ///
     /// // write the mesh
     /// let mut time_series_writer = xdmf_writer
-    ///     .write_mesh(&coords, &connectivity, &cell_types)
+    ///     .write_mesh(coords.as_slice().into(), &connectivity, &cell_types)
     ///     .expect("failed to write mesh");
     ///
     /// // buffers are reused across time steps, `Values` only borrows them
@@ -826,7 +837,7 @@ mod tests {
     fn test_validate_points_and_cells() {
         // valid input, must not return an error
         validate_points_and_cells(
-            &[0.0; 33],
+            &Values::from([0.0; 33].as_slice()),
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -840,13 +851,13 @@ mod tests {
     #[test]
     fn validate_points_and_cells_only_points() {
         // valid input, must not return an error
-        validate_points_and_cells(&[0.0; 33], &[], &[]).unwrap();
+        validate_points_and_cells(&Values::from([0.0; 33].as_slice()), &[], &[]).unwrap();
     }
 
     #[test]
     fn validate_points_and_cells_points_empty() {
         let res = validate_points_and_cells(
-            &[],
+            &Values::from([0.0_f64; 0].as_slice()),
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -864,7 +875,7 @@ mod tests {
     #[test]
     fn validate_points_and_cells_points_not_3d() {
         let res = validate_points_and_cells(
-            &[0.0; 22],
+            &Values::from([0.0_f64; 22].as_slice()),
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -882,7 +893,7 @@ mod tests {
     #[test]
     fn validate_points_and_cells_conn_index_out_of_bounds() {
         let res = validate_points_and_cells(
-            &[0.0; 33],
+            &Values::from([0.0_f64; 33].as_slice()),
             &[0, 1, 2, 3, 4, 5, 6, 70],
             &[
                 CellType::Vertex,
@@ -902,7 +913,7 @@ mod tests {
     #[test]
     fn validate_points_and_cells_conn_mismatch() {
         let res = validate_points_and_cells(
-            &[0.0; 33],
+            &Values::from([0.0_f64; 33].as_slice()),
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -916,6 +927,17 @@ mod tests {
             res.unwrap_err(),
             Error::InvalidMesh { reason }
                 if reason.contains("connectivity (8)") && reason.contains("cell types (10)")
+        );
+    }
+
+    #[test]
+    fn validate_points_and_cells_rejects_integer_points() {
+        let res = validate_points_and_cells(&Values::from([0_u64; 33].as_slice()), &[], &[]);
+
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason }
+                if reason == "points must be float64 or float32 data, not integer data"
         );
     }
 
@@ -973,7 +995,7 @@ mod tests {
         // write mesh
         let mut writer = writer
             .write_mesh(
-                &[0.0; NUM_POINTS * 3],
+                [0.0_f64; NUM_POINTS * 3].as_slice().into(),
                 &[0, 2, 3, 4],
                 &[CellType::Vertex; 4],
             )
@@ -1034,7 +1056,7 @@ mod tests {
 
         let mut writer = writer
             .write_mesh(
-                &[0.0; NUM_POINTS * 3],
+                [0.0_f64; NUM_POINTS * 3].as_slice().into(),
                 &[0, 2, 3, 4],
                 &[CellType::Vertex; 4],
             )
@@ -1074,7 +1096,7 @@ mod tests {
 
         let mut writer = writer
             .write_mesh(
-                &[0.0; NUM_POINTS * 3],
+                [0.0_f64; NUM_POINTS * 3].as_slice().into(),
                 &[0, 2, 3, 4],
                 &[CellType::Vertex; 4],
             )
@@ -1119,7 +1141,7 @@ mod tests {
         // write mesh
         let mut writer = writer
             .write_mesh(
-                &[0.0; NUM_POINTS * 3],
+                [0.0_f64; NUM_POINTS * 3].as_slice().into(),
                 &[0, 2, 3, 4],
                 &[CellType::Vertex; 4],
             )
@@ -1174,7 +1196,7 @@ mod tests {
         // write mesh
         let mut writer = writer
             .write_mesh(
-                &[0.0; 10 * 3],
+                [0.0_f64; 10 * 3].as_slice().into(),
                 &[0, 2, 3, 4],
                 &[CellType::Vertex; NUM_CELLS],
             )
@@ -1338,7 +1360,7 @@ mod tests {
 
             fn write_mesh(
                 &mut self,
-                _points: &[f64],
+                _points: &Values<'_>,
                 _cells: &[u64],
             ) -> Result<(DataContent, DataContent)> {
                 Ok((
@@ -1469,7 +1491,7 @@ mod tests {
 
             fn write_mesh(
                 &mut self,
-                _points: &[f64],
+                _points: &Values<'_>,
                 _cells: &[u64],
             ) -> Result<(DataContent, DataContent)> {
                 Ok((

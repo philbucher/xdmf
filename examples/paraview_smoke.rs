@@ -63,7 +63,8 @@ fn main() -> IoResult<()> {
     let base_path = output_dir.join(format!("fixture_{}", storage_arg.to_lowercase()));
 
     let xdmf_writer = TimeSeriesWriter::new(&base_path, storage)?;
-    let mut xdmf_writer = xdmf_writer.write_mesh(&COORDS, &CONNECTIVITY, &CELL_TYPES)?;
+    let mut xdmf_writer =
+        xdmf_writer.write_mesh(COORDS.as_slice().into(), &CONNECTIVITY, &CELL_TYPES)?;
 
     let mut timesteps = Vec::new();
     for (step, scale) in [1.0, 2.0].into_iter().enumerate() {

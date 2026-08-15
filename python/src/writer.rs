@@ -9,7 +9,7 @@
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 use crate::{
-    arrays::{PointsArray, UintArray, ValueGuard},
+    arrays::NumpyArray,
     enums::{PyDataAttribute, PyDataStorage, extract_cell_types},
     error::to_py_err,
 };
@@ -31,10 +31,11 @@ impl PyTimeSeriesWriter {
         Ok(Self { inner: Some(inner) })
     }
 
-    /// Write the mesh. `points` is a numpy `float64` array (flat or `(N, 3)`), `connectivity` a
-    /// numpy `uint64`/`int64` array of point indices, `cell_types` either a list of
-    /// `xdmf.CellType` or a numpy array of raw cell type codes. Consumes this writer (matching the
-    /// Rust API, where `write_mesh` takes `self` by value); calling it a second time raises.
+    /// Write the mesh. `points` is a numpy `float64` or `float32` array (flat or `(N, 3)`).
+    /// `connectivity` is a numpy `uint64`/`int64` array of point indices, `cell_types` either a
+    /// list of `xdmf.CellType` or a numpy array of raw cell type codes. Consumes this writer
+    /// (matching the Rust API, where `write_mesh` takes `self` by value); calling it a second
+    /// time raises.
     fn write_mesh(
         &mut self,
         py: Python<'_>,
@@ -47,14 +48,14 @@ impl PyTimeSeriesWriter {
             .take()
             .ok_or_else(|| PyRuntimeError::new_err(ALREADY_CONSUMED))?;
 
-        let points_arr = PointsArray::extract(points)?;
-        let points_slice = points_arr.as_slice()?;
-        let conn_arr = UintArray::extract(connectivity)?;
+        let points_arr = NumpyArray::extract(points)?;
+        let points_values = points_arr.to_values()?;
+        let conn_arr = NumpyArray::extract(connectivity)?;
         let conn_slice = conn_arr.as_u64_slice()?;
         let cell_types = extract_cell_types(cell_types)?;
 
         let inner = py
-            .detach(|| writer.write_mesh(points_slice, conn_slice, &cell_types))
+            .detach(|| writer.write_mesh(points_values, conn_slice, &cell_types))
             .map_err(to_py_err)?;
 
         Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
@@ -118,17 +119,17 @@ impl PyTimeSeriesDataWriter {
 
 fn extract_guards<'py>(
     data: Vec<(String, PyDataAttribute, Bound<'py, PyAny>)>,
-) -> PyResult<Vec<(String, PyDataAttribute, ValueGuard<'py>)>> {
+) -> PyResult<Vec<(String, PyDataAttribute, NumpyArray<'py>)>> {
     data.into_iter()
         .map(|(name, attr, obj)| {
-            let guard = ValueGuard::extract(&obj)?;
+            let guard = NumpyArray::extract(&obj)?;
             Ok((name, attr, guard))
         })
         .collect()
 }
 
 fn build_values<'g>(
-    named: &'g [(String, PyDataAttribute, ValueGuard<'_>)],
+    named: &'g [(String, PyDataAttribute, NumpyArray<'_>)],
 ) -> PyResult<Vec<(&'g str, xdmf::DataAttribute, xdmf::Values<'g>)>> {
     named
         .iter()

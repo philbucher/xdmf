@@ -42,7 +42,7 @@ impl TimeSeriesReader {
     /// let cell_types = [xdmf::CellType::Triangle];
     /// TimeSeriesWriter::new("xdmf_reader_new", xdmf::DataStorage::AsciiInline)
     ///     .unwrap()
-    ///     .write_mesh(&coords, &connectivity, &cell_types)
+    ///     .write_mesh(coords.as_slice().into(), &connectivity, &cell_types)
     ///     .unwrap();
     ///
     /// let reader = TimeSeriesReader::new("xdmf_reader_new.xdmf2").unwrap();

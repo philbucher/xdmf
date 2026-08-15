@@ -73,7 +73,11 @@ impl DataWriter for SingleFileHdf5Writer {
         }
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
             return Err(Error::InvalidMesh {
                 reason: "mesh was already written".to_string(),
@@ -191,7 +195,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
         }
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
 
@@ -271,21 +279,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
 fn write_mesh(
     group: &H5Group,
-    points: &[f64],
+    points: &Values<'_>,
     cells: &[u64],
     deflate_level: u8,
 ) -> Result<(String, String)> {
-    let dataset_points = group
-        .new_dataset::<f64>()
-        .shape(points.len())
-        .shuffle()
-        .deflate(deflate_level)
-        .create(POINTS)
-        .map_err(hdf5_ctx("creating points dataset"))?;
-
-    dataset_points
-        .write(points)
-        .map_err(hdf5_ctx("writing points dataset"))?;
+    let data_name_points = write_values(group, POINTS, points, deflate_level)?;
 
     let dataset_cells = group
         .new_dataset::<u64>()
@@ -299,7 +297,7 @@ fn write_mesh(
         .write(cells)
         .map_err(hdf5_ctx("writing cells dataset"))?;
 
-    Ok((dataset_points.name(), dataset_cells.name()))
+    Ok((data_name_points, dataset_cells.name()))
 }
 
 fn write_values(
@@ -390,9 +388,11 @@ mod tests {
         let group = h5_file.create_group("test_group").unwrap();
 
         let points = vec![0.0, 1.0, 2.0];
+        let points_values: Values = points.as_slice().into();
         let cells = vec![0, 1, 2];
 
-        let (data_name_points, data_name_cells) = write_mesh(&group, &points, &cells, 6).unwrap();
+        let (data_name_points, data_name_cells) =
+            write_mesh(&group, &points_values, &cells, 6).unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -572,8 +572,9 @@ mod tests {
         let h5_file = file_name.with_extension("h5");
 
         let points = vec![0.0, 1.0, 2.0];
+        let points_values: Values = points.as_slice().into();
         let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells).unwrap();
 
         assert_eq!(points_path, ("test.h5:mesh/points").into());
         assert_eq!(cells_path, ("test.h5:mesh/cells").into());
@@ -610,8 +611,9 @@ mod tests {
         assert!(!mesh_file.exists());
 
         let points = vec![0.0, 1.0, 2.0];
+        let points_values: Values = points.as_slice().into();
         let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells).unwrap();
         assert!(mesh_file.exists());
 
         assert_eq!(points_path, ("test.h5/mesh.h5:points").into());

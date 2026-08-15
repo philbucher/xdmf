@@ -58,7 +58,11 @@ impl DataWriter for BinaryWriter {
         DataStorage::Binary
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         let points_file_name = "points.bin";
         let cells_file_name = "cells.bin";
         let points_path = self.bin_files_dir.join(points_file_name);
@@ -71,7 +75,7 @@ impl DataWriter for BinaryWriter {
             File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
         );
 
-        write_f64_le(points, &mut file_points, &points_path)?;
+        values_to_writer(points, &mut file_points, &points_path)?;
         write_u64_as_u32_le(cells, &mut file_cells, &cells_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
@@ -272,9 +276,10 @@ mod tests {
         assert!(!points_file.exists());
         assert!(!cells_file.exists());
 
-        let points = vec![0.0, 1.0, 2.0];
+        let points: Vec<f64> = vec![0.0, 1.0, 2.0];
+        let points_values: Values = points.as_slice().into();
         let cells = vec![0_u64, 1, 2];
-        let (points_content, cells_content) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_content, cells_content) = writer.write_mesh(&points_values, &cells).unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
 

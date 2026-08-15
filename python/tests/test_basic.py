@@ -195,8 +195,35 @@ def test_rejects_wrong_dtype(tmp_path):
     with pytest.raises(ValueError) as exc_info:
         writer.write_mesh(coords, connectivity, [xdmf.CellType.Vertex])
     assert str(exc_info.value) == (
-        "points must be a numpy array with dtype float64, got a numpy array with dtype int32"
+        "expected a numpy array with dtype float64, float32, uint64, or int64, "
+        "got a numpy array with dtype int32"
     )
+
+
+def test_rejects_integer_points(tmp_path):
+    # uint64 is a recognized dtype (valid for connectivity/attribute data), just not for points;
+    # that rejection happens in the core crate (xdmf::Error::InvalidMesh), not the binding, so only
+    # the type mapping is checked here -- see test_invalid_mesh_raises_value_error.
+    coords = np.array([0, 0, 0], dtype=np.uint64)
+    connectivity = np.array([0], dtype=np.uint64)
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "int_points"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError):
+        writer.write_mesh(coords, connectivity, [xdmf.CellType.Vertex])
+
+
+def test_write_mesh_accepts_float32_points(tmp_path):
+    # float32 points are stored at that precision on disk instead of being widened to float64.
+    coords = np.array(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+        dtype=np.float32,
+    )
+    connectivity = np.array([0, 1, 2], dtype=np.uint64)
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "f32_points"), xdmf.DataStorage.AsciiInline)
+    writer.write_mesh(coords, connectivity, [xdmf.CellType.Triangle])
+
+    xdmf_file = (tmp_path / "f32_points").with_suffix(".xdmf2")
+    xml = xdmf_file.read_text()
+    assert 'NumberType="Float" Format="XML" Precision="4"' in xml
 
 
 def test_rejects_non_contiguous_array(tmp_path):

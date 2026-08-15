@@ -38,7 +38,7 @@ fn mesh_plus_data_multiple_steps_round_trips_for_every_storage_mode(#[case] stor
 
     let writer = TimeSeriesWriter::new(&path, storage).unwrap();
     let mut data_writer = writer
-        .write_mesh(&points, &connectivity, &cell_types)
+        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     let point_scalar_t0 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -167,7 +167,7 @@ fn mesh_only_round_trips_for_every_storage_mode(#[case] storage: DataStorage) {
 
     TimeSeriesWriter::new(&path, storage)
         .unwrap()
-        .write_mesh(&points, &connectivity, &cell_types)
+        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     let reader = TimeSeriesReader::new(path.with_extension("xdmf2")).unwrap();
@@ -210,7 +210,7 @@ fn point_cloud_round_trips_with_empty_cell_types(#[case] storage: DataStorage) {
 
     TimeSeriesWriter::new(&path, storage)
         .unwrap()
-        .write_mesh(&points, &[], &[])
+        .write_mesh(points.as_slice().into(), &[], &[])
         .unwrap();
 
     let reader = TimeSeriesReader::new(path.with_extension("xdmf2")).unwrap();
@@ -252,7 +252,7 @@ fn f32_attribute_round_trips_and_widens_into_f64(#[case] storage: DataStorage) {
 
     let mut data_writer = TimeSeriesWriter::new(&path, storage)
         .unwrap()
-        .write_mesh(&points, &connectivity, &cell_types)
+        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     let pressure: Vec<f32> = vec![1.5, 2.5, 3.5];
@@ -311,7 +311,7 @@ fn narrowing_f64_into_f32_buffer_is_rejected() {
 
     let mut data_writer = TimeSeriesWriter::new(&path, DataStorage::AsciiInline)
         .unwrap()
-        .write_mesh(&points, &connectivity, &cell_types)
+        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     let pressure = vec![1.5_f64, 2.5, 3.5];
@@ -358,7 +358,7 @@ fn out_of_bounds_step_is_invalid_data() {
 
     let reader = TimeSeriesWriter::new(&path, DataStorage::AsciiInline)
         .unwrap()
-        .write_mesh(&points, &connectivity, &cell_types)
+        .write_mesh(points.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
     drop(reader);
 

@@ -1,13 +1,19 @@
 //! Zero-copy conversion from numpy arrays to the slices/`Values` `xdmf`'s API expects.
 //!
-//! Points and attribute float data accept `float64` or `float32` (mirroring `xdmf::Values`'
-//! `F64`/`F32` variants); connectivity and uint attribute data accept `uint64` (borrowed as-is) or
-//! `int64` (also borrowed, after an O(n) sign check and a `bytemuck` bit-reinterpret to `u64` --
-//! numpy's default integer dtype is signed `int64`, so requiring `uint64` would force a copy on
-//! the most common path). Any dimensionality is accepted as long as the array is C-contiguous: a
-//! contiguous `(N, 3)` array has exactly the flat memory layout the core crate's API wants, so a
-//! caller can hand in `(N, 3)` points/vectors without a `reshape(-1)`, and it stays zero-copy.
-//! Arrays that aren't C-contiguous are rejected with a clear error rather than silently copied.
+//! `NumpyArray` is the single borrowed-array type behind every numeric parameter this crate
+//! accepts (points, connectivity, attribute data): `extract` always tries all four dtypes numpy
+//! commonly hands us (`float64`, `float32`, `uint64`, `int64` -- the latter, since numpy's default
+//! integer dtype is signed, is borrowed as-is and bit-reinterpreted to `u64` via `bytemuck` after
+//! an O(n) sign check, so the common `int64` index case still avoids a copy). Which dtypes a given
+//! call site actually accepts differs -- points are never integer, connectivity is never float --
+//! so that restriction is applied where the array is consumed (`to_values`/`as_u64_slice`) rather
+//! than by varying what `extract` accepts per call site: points delegate their integer rejection
+//! to the core crate (`Error::InvalidMesh`), so the rule lives in one place instead of being
+//! duplicated at the binding boundary. Any dimensionality is accepted as long as the array is
+//! C-contiguous: a contiguous `(N, 3)` array has exactly the flat memory layout the core crate's
+//! API wants, so a caller can hand in `(N, 3)` points/vectors without a `reshape(-1)`, and it stays
+//! zero-copy. Arrays that aren't C-contiguous are rejected with a clear error rather than silently
+//! copied.
 
 use numpy::{Element, PyReadonlyArrayDyn};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -33,36 +39,25 @@ fn contiguous_slice<'a, 'py, T: Element>(arr: &'a PyReadonlyArrayDyn<'py, T>) ->
         .map_err(|_| PyValueError::new_err(NOT_CONTIGUOUS))
 }
 
-/// A borrowed `float64` numpy array (any dimensionality), used for points -- the core crate's
-/// `write_mesh` always takes `&[f64]`, so unlike attribute data (see `ValueGuard`), `float32`
-/// points are not accepted.
-pub(crate) struct PointsArray<'py>(PyReadonlyArrayDyn<'py, f64>);
-
-impl<'py> PointsArray<'py> {
-    pub(crate) fn extract(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
-        let arr: PyReadonlyArrayDyn<'py, f64> = obj.extract().map_err(|_| {
-            PyValueError::new_err(format!(
-                "points must be a numpy array with dtype float64, got {}",
-                describe(obj)
-            ))
-        })?;
-        Ok(Self(arr))
-    }
-
-    pub(crate) fn as_slice(&self) -> PyResult<&[f64]> {
-        contiguous_slice(&self.0)
-    }
-}
-
-/// A borrowed integer numpy array (`uint64` or `int64`, any dimensionality), used for
-/// connectivity: checked for contiguity and, for `int64`, for non-negativity.
-pub(crate) enum UintArray<'py> {
+/// A borrowed numpy array of one of the four numeric dtypes this crate understands (any
+/// dimensionality), kept alive for the duration of a call so any `xdmf::Values`/`&[u64]` borrowing
+/// from it stays valid. Used for points, connectivity, and attribute data alike; see the module
+/// docs for how each restricts the dtypes it actually accepts.
+pub(crate) enum NumpyArray<'py> {
+    F64(PyReadonlyArrayDyn<'py, f64>),
+    F32(PyReadonlyArrayDyn<'py, f32>),
     U64(PyReadonlyArrayDyn<'py, u64>),
     I64(PyReadonlyArrayDyn<'py, i64>),
 }
 
-impl<'py> UintArray<'py> {
+impl<'py> NumpyArray<'py> {
     pub(crate) fn extract(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if let Ok(arr) = obj.extract::<PyReadonlyArrayDyn<'py, f64>>() {
+            return Ok(Self::F64(arr));
+        }
+        if let Ok(arr) = obj.extract::<PyReadonlyArrayDyn<'py, f32>>() {
+            return Ok(Self::F32(arr));
+        }
         if let Ok(arr) = obj.extract::<PyReadonlyArrayDyn<'py, u64>>() {
             return Ok(Self::U64(arr));
         }
@@ -70,14 +65,33 @@ impl<'py> UintArray<'py> {
             return Ok(Self::I64(arr));
         }
         Err(PyValueError::new_err(format!(
-            "connectivity must be a numpy array with dtype uint64 or int64, got {}",
+            "expected a numpy array with dtype float64, float32, uint64, or int64, got {}",
             describe(obj)
         )))
     }
 
-    /// Borrows the array as `&[u64]` with no copy. `int64` data is bit-reinterpreted (via
-    /// `bytemuck`, no `unsafe`) after verifying every element is non-negative (indices/counts are
-    /// never negative).
+    fn dtype_name(&self) -> &'static str {
+        match self {
+            Self::F64(_) => "float64",
+            Self::F32(_) => "float32",
+            Self::U64(_) => "uint64",
+            Self::I64(_) => "int64",
+        }
+    }
+
+    /// Converts to `xdmf::Values`, for points and attribute data. Every variant maps to a
+    /// `Values` variant (`int64` via the same sign-checked reinterpret as `as_u64_slice`).
+    pub(crate) fn to_values(&self) -> PyResult<xdmf::Values<'_>> {
+        match self {
+            Self::F64(arr) => Ok(xdmf::Values::from(contiguous_slice(arr)?)),
+            Self::F32(arr) => Ok(xdmf::Values::from(contiguous_slice(arr)?)),
+            Self::U64(_) | Self::I64(_) => Ok(xdmf::Values::from(self.as_u64_slice()?)),
+        }
+    }
+
+    /// Borrows the array as `&[u64]` with no copy, for connectivity. `int64` is bit-reinterpreted
+    /// (via `bytemuck`, no `unsafe`) after verifying every element is non-negative; `float64`/
+    /// `float32` are rejected (connectivity is indices, never coordinates).
     pub(crate) fn as_u64_slice(&self) -> PyResult<&[u64]> {
         match self {
             Self::U64(arr) => contiguous_slice(arr),
@@ -90,40 +104,11 @@ impl<'py> UintArray<'py> {
                 }
                 Ok(bytemuck::cast_slice(signed))
             }
-        }
-    }
-}
-
-/// Either kind of array `xdmf::Values` can hold, kept alive for the duration of a `write_data`
-/// call so the `xdmf::Values` borrowing from it stays valid.
-pub(crate) enum ValueGuard<'py> {
-    F64(PyReadonlyArrayDyn<'py, f64>),
-    F32(PyReadonlyArrayDyn<'py, f32>),
-    Uint(UintArray<'py>),
-}
-
-impl<'py> ValueGuard<'py> {
-    pub(crate) fn extract(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
-        if let Ok(arr) = obj.extract::<PyReadonlyArrayDyn<'py, f64>>() {
-            return Ok(Self::F64(arr));
-        }
-        if let Ok(arr) = obj.extract::<PyReadonlyArrayDyn<'py, f32>>() {
-            return Ok(Self::F32(arr));
-        }
-        if let Ok(arr) = UintArray::extract(obj) {
-            return Ok(Self::Uint(arr));
-        }
-        Err(PyValueError::new_err(format!(
-            "expected a numpy array with dtype float64, float32, uint64, or int64, got {}",
-            describe(obj)
-        )))
-    }
-
-    pub(crate) fn to_values(&self) -> PyResult<xdmf::Values<'_>> {
-        match self {
-            Self::F64(arr) => Ok(xdmf::Values::from(contiguous_slice(arr)?)),
-            Self::F32(arr) => Ok(xdmf::Values::from(contiguous_slice(arr)?)),
-            Self::Uint(arr) => Ok(xdmf::Values::from(arr.as_u64_slice()?)),
+            Self::F64(_) | Self::F32(_) => Err(PyValueError::new_err(format!(
+                "connectivity must be a numpy array with dtype uint64 or int64, got a numpy \
+                 array with dtype {}",
+                self.dtype_name()
+            ))),
         }
     }
 }

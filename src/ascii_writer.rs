@@ -33,9 +33,13 @@ impl DataWriter for AsciiInlineWriter {
         DataStorage::AsciiInline
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         Ok((
-            array_to_string_fmt(points).into(),
+            values_to_string(points).into(),
             array_to_string_fmt(cells).into(),
         ))
     }
@@ -92,7 +96,11 @@ impl DataWriter for AsciiWriter {
         DataStorage::Ascii
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         // create files for points and cells
         let points_file_name = "points.txt";
         let cells_file_name = "cells.txt";
@@ -106,7 +114,7 @@ impl DataWriter for AsciiWriter {
             File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
         );
 
-        array_to_writer_fmt(points, &mut file_points)
+        values_to_writer(points, &mut file_points)
             .map_err(io_ctx("writing points data", &points_path))?;
         array_to_writer_fmt(cells, &mut file_cells)
             .map_err(io_ctx("writing cells data", &cells_path))?;
@@ -352,9 +360,10 @@ mod tests {
     fn ascii_inline_writer_write_mesh() {
         let mut writer = AsciiInlineWriter::new();
         let points = vec![1., 2., 3., 4., 5., 6.];
+        let points_values: Values = points.as_slice().into();
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
-        let result = writer.write_mesh(&points, &cells).unwrap();
+        let result = writer.write_mesh(&points_values, &cells).unwrap();
         pretty_assertions::assert_eq!(
             result,
             (
@@ -449,8 +458,9 @@ mod tests {
         assert!(!cells_file.exists());
 
         let points = vec![0.0, 1.0, 2.0];
+        let points_values: Values = points.as_slice().into();
         let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_path, cells_path) = writer.write_mesh(&points_values, &cells).unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
 

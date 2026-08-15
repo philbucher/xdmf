@@ -39,7 +39,7 @@ fn write_xdmf() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&node_coords, &connectivity, &cell_types)
+        .write_mesh(node_coords.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     for i in 0..3 {
@@ -241,7 +241,7 @@ fn write_xdmf_only_mesh() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     xdmf_writer
-        .write_mesh(&node_coords, &connectivity, &cell_types)
+        .write_mesh(node_coords.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     let expected_xdmf = r#"
@@ -290,7 +290,7 @@ fn write_xdmf_only_point_mesh() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     xdmf_writer
-        .write_mesh(&node_coords, &connectivity, &cell_types)
+        .write_mesh(node_coords.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     let expected_xdmf = r#"
@@ -339,7 +339,7 @@ fn write_xdmf_point_mesh() {
         TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
 
     let mut xdmf_writer = xdmf_writer
-        .write_mesh(&node_coords, &connectivity, &cell_types)
+        .write_mesh(node_coords.as_slice().into(), &connectivity, &cell_types)
         .unwrap();
 
     for i in 0..3 {
@@ -413,4 +413,27 @@ fn write_xdmf_point_mesh() {
     // std::fs::copy(xdmf_file, "write_xdmf_point_mesh.xdmf2").unwrap();
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}
+
+#[test]
+fn write_mesh_f32_points_are_stored_at_that_precision() {
+    let node_coords: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let connectivity = [0, 1, 2];
+    let cell_types = [xdmf::CellType::Triangle];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    xdmf_writer
+        .write_mesh(node_coords.as_slice().into(), &connectivity, &cell_types)
+        .unwrap();
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    // f32 input is written at 4-byte precision, not widened to f64's 8
+    assert!(read_xdmf.contains(r#"NumberType="Float" Format="XML" Precision="4""#));
 }

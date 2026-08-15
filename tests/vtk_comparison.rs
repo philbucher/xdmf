@@ -147,7 +147,9 @@ mod tests {
             let cell_types = vec![xdmf::CellType::Hexahedron; connectivity.len() / 8];
             let conn: Vec<u64> = connectivity.iter().map(|&x| x as u64).collect();
 
-            let writer = writer.write_mesh(&coordinates, &conn, &cell_types).unwrap();
+            let writer = writer
+                .write_mesh(coordinates.as_slice().into(), &conn, &cell_types)
+                .unwrap();
 
             self.writer = Some(writer);
 

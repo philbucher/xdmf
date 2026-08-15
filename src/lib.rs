@@ -83,7 +83,11 @@ pub(crate) trait DataWriter: Send + Sync {
 
     fn data_storage(&self) -> DataStorage;
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)>;
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)>;
 
     fn write_data(
         &mut self,
