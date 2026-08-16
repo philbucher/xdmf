@@ -122,3 +122,59 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
         })
         .unwrap();
 }
+
+#[test]
+fn write_and_verify_binary_f32() {
+    fn read_f32_le(path: &std::path::Path) -> Vec<f32> {
+        let bytes = std::fs::read(path).unwrap();
+        bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    // same mesh as `write_and_verify_binary`, but held as f32 by the caller
+    let coords: [f32; 12] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 2, 0, 2, 3];
+    let cell_types = [xdmf::CellType::Triangle, xdmf::CellType::Triangle];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
+
+    let mut xdmf_writer = xdmf_writer
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    xdmf_writer
+        .write_time_step("0", |step| {
+            step.point_data(
+                "temperature",
+                xdmf::DataAttribute::Scalar,
+                vec![10.5_f32, 11.5, 12.5, 13.5],
+            )
+        })
+        .unwrap();
+
+    let xdmf_xml = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+
+    // 4-byte precision is what tells the reader how wide the raw floats on disk are, so it has to
+    // follow the caller's type rather than the format
+    assert!(xdmf_xml.contains(r#"NumberType="Float" Format="Binary" Precision="4""#));
+    assert!(!xdmf_xml.contains(r#"NumberType="Float" Format="Binary" Precision="8""#));
+
+    let bin_dir = xdmf_file_path.with_extension("bin");
+
+    let points = bin_dir.join("points.bin");
+    // half the bytes of the equivalent f64 mesh, and the values survive the round trip exactly
+    // (all of them are representable in f32)
+    assert_eq!(std::fs::metadata(&points).unwrap().len(), 12 * 4);
+    float_cmp::assert_approx_eq!(&[f32], &read_f32_le(&points), &coords);
+
+    float_cmp::assert_approx_eq!(
+        &[f32],
+        &read_f32_le(&bin_dir.join("data_t_0_point_data_temperature.bin")),
+        &[10.5, 11.5, 12.5, 13.5]
+    );
+}

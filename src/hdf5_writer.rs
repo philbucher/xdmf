@@ -74,7 +74,11 @@ impl DataWriter for SingleFileHdf5Writer {
         }
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
             return Err(Error::InvalidMesh {
                 reason: "mesh was already written".to_string(),
@@ -212,7 +216,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
         }
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
 
@@ -307,37 +315,18 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 }
 
+// Points and cells go through `write_values` like any other data, so the dataset type follows the
+// `Values` variant (f32 or f64 coordinates) and the filter pipeline is defined in one place.
 fn write_mesh(
     group: &H5Group,
-    points: &[f64],
+    points: &Values<'_>,
     cells: &[u64],
     deflate_level: u8,
 ) -> Result<(String, String)> {
-    let dataset_points = group
-        .new_dataset::<f64>()
-        .shape(points.len())
-        .shuffle()
-        .deflate(deflate_level)
-        .create(POINTS)
-        .map_err(hdf5_ctx("creating points dataset"))?;
+    let data_name_points = write_values(group, POINTS, points, deflate_level)?;
+    let data_name_cells = write_values(group, CELLS, &Values::from(cells), deflate_level)?;
 
-    dataset_points
-        .write(points)
-        .map_err(hdf5_ctx("writing points dataset"))?;
-
-    let dataset_cells = group
-        .new_dataset::<u64>()
-        .shape(cells.len())
-        .shuffle()
-        .deflate(deflate_level)
-        .create(CELLS)
-        .map_err(hdf5_ctx("creating cells dataset"))?;
-
-    dataset_cells
-        .write(cells)
-        .map_err(hdf5_ctx("writing cells dataset"))?;
-
-    Ok((dataset_points.name(), dataset_cells.name()))
+    Ok((data_name_points, data_name_cells))
 }
 
 fn write_values(
@@ -348,6 +337,7 @@ fn write_values(
 ) -> Result<String> {
     let data_set = match vals {
         Values::F64(_) => group.new_dataset::<f64>(),
+        Values::F32(_) => group.new_dataset::<f32>(),
         Values::U64(_) => group.new_dataset::<u64>(),
     };
 
@@ -360,6 +350,7 @@ fn write_values(
 
     match vals {
         Values::F64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
+        Values::F32(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
         Values::U64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
     };
 
@@ -434,7 +425,8 @@ mod tests {
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0, 1, 2];
 
-        let (data_name_points, data_name_cells) = write_mesh(&group, &points, &cells, 6).unwrap();
+        let (data_name_points, data_name_cells) =
+            write_mesh(&group, &points.as_slice().into(), &cells, 6).unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -459,6 +451,33 @@ mod tests {
 
         assert_approx_eq!(&[f64], &points, &points_read);
         assert_eq!(&cells, &cells_read);
+    }
+
+    #[test]
+    fn write_mesh_with_f32_points() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+
+        let h5_file = H5File::create(&file_name).unwrap();
+        let group = h5_file.create_group("test_group").unwrap();
+
+        let points = vec![0.0_f32, 1.0, 2.0];
+        let cells = vec![0_u64, 1, 2];
+
+        write_mesh(&group, &points.as_slice().into(), &cells, 6).unwrap();
+
+        let h5_file_read = H5File::open(&file_name).unwrap();
+        let dataset = h5_file_read
+            .group("test_group")
+            .unwrap()
+            .dataset("points")
+            .unwrap();
+
+        // the dataset itself is 4-byte floats, not f64 values that happen to have been narrowed
+        assert_eq!(dataset.dtype().unwrap().size(), 4);
+
+        let points_read: Vec<f32> = dataset.read().unwrap().to_vec();
+        assert_approx_eq!(&[f32], &points, &points_read);
     }
 
     #[test]
@@ -501,6 +520,99 @@ mod tests {
 
         assert_approx_eq!(&[f64], &vec_f64, &data_f64);
         assert_eq!(&vec_u64, &data_u64);
+    }
+
+    #[test]
+    fn write_values_f32() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+
+        let h5_file = H5File::create(&file_name).unwrap();
+        let group = h5_file.create_group("test_group").unwrap();
+
+        let vec_f32 = vec![1., 2., 3., 4., 5., 6.0_f32];
+        let f32_path = write_values(&group, "test_f32", &vec_f32.clone().into(), 6).unwrap();
+        assert_eq!(f32_path, "/test_group/test_f32");
+
+        let h5_file_read = H5File::open(&file_name).unwrap();
+        let dataset = h5_file_read
+            .group("test_group")
+            .unwrap()
+            .dataset("test_f32")
+            .unwrap();
+
+        // stored as 4-byte floats, so a reader gets f32 back rather than widened f64
+        assert_eq!(dataset.dtype().unwrap().size(), 4);
+
+        let data_f32: Vec<f32> = dataset.read().unwrap().to_vec();
+        assert_approx_eq!(&[f32], &vec_f32, &data_f32);
+    }
+
+    #[test]
+    fn single_file_hdf5_writer_write_data_f32() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let mut writer = SingleFileHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
+        let h5_file_name = file_name.with_extension("h5");
+        let write_time = "12.258";
+
+        writer.write_data_initialize(write_time).unwrap();
+
+        let data_points = vec![0.0_f32, 1.0, 2.5];
+        let data_path_points = writer
+            .write_data(
+                "dummy_point_data",
+                attribute::Center::Node,
+                &Values::F32(data_points.as_slice().into()),
+            )
+            .unwrap();
+
+        writer.write_data_finalize().unwrap();
+
+        assert_eq!(
+            data_path_points,
+            ("test.h5:data/t_12.258/point_data/dummy_point_data").into()
+        );
+
+        let h5_file = H5File::open(h5_file_name).unwrap();
+        let dataset = h5_file
+            .dataset("data/t_12.258/point_data/dummy_point_data")
+            .unwrap();
+
+        assert_eq!(dataset.dtype().unwrap().size(), 4);
+
+        let points_data: Vec<f32> = dataset.read().unwrap().to_vec();
+        assert_approx_eq!(&[f32], &data_points, &points_data);
+    }
+
+    #[test]
+    fn multiple_files_hdf5_writer_write_data_f32() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let mut writer = MultipleFilesHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
+        let write_time = "12.258";
+
+        writer.write_data_initialize(write_time).unwrap();
+
+        let data_cells = vec![-9.0_f32, 1.0, 2.0, 55.875];
+        writer
+            .write_data(
+                "some_cell_data",
+                attribute::Center::Cell,
+                &Values::F32(data_cells.as_slice().into()),
+            )
+            .unwrap();
+
+        writer.write_data_finalize().unwrap();
+
+        let h5_file =
+            H5File::open(writer.h5_files_dir.join(format!("data_t_{write_time}.h5"))).unwrap();
+        let dataset = h5_file.dataset("cell_data/some_cell_data").unwrap();
+
+        assert_eq!(dataset.dtype().unwrap().size(), 4);
+
+        let cells_data: Vec<f32> = dataset.read().unwrap().to_vec();
+        assert_approx_eq!(&[f32], &data_cells, &cells_data);
     }
 
     #[test]
@@ -703,7 +815,9 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_path, cells_path) = writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
 
         assert_eq!(points_path, ("test.h5:mesh/points").into());
         assert_eq!(cells_path, ("test.h5:mesh/cells").into());
@@ -741,7 +855,9 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_path, cells_path) = writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
         assert!(mesh_file.exists());
 
         assert_eq!(points_path, ("test.h5/mesh.h5:points").into());

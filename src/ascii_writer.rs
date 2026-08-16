@@ -33,9 +33,13 @@ impl DataWriter for AsciiInlineWriter {
         DataStorage::AsciiInline
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         Ok((
-            array_to_string_fmt(points).into(),
+            values_to_string(points).into(),
             array_to_string_fmt(cells).into(),
         ))
     }
@@ -96,7 +100,11 @@ impl DataWriter for AsciiWriter {
         DataStorage::Ascii
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         // create files for points and cells
         let points_file_name = "points.txt";
         let cells_file_name = "cells.txt";
@@ -110,7 +118,7 @@ impl DataWriter for AsciiWriter {
             File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
         );
 
-        array_to_writer_fmt(points, &mut file_points)
+        values_to_writer(points, &mut file_points)
             .map_err(io_ctx("writing points data", &points_path))?;
         array_to_writer_fmt(cells, &mut file_cells)
             .map_err(io_ctx("writing cells data", &cells_path))?;
@@ -258,6 +266,7 @@ where
 fn values_to_string(data: &Values<'_>) -> String {
     match data {
         Values::F64(v) => array_to_string_fmt(v),
+        Values::F32(v) => array_to_string_fmt(v),
         Values::U64(v) => array_to_string_fmt(v),
     }
 }
@@ -265,6 +274,7 @@ fn values_to_string(data: &Values<'_>) -> String {
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> std::io::Result<()> {
     match data {
         Values::F64(v) => array_to_writer_fmt(v, writer),
+        Values::F32(v) => array_to_writer_fmt(v, writer),
         Values::U64(v) => array_to_writer_fmt(v, writer),
     }
 }
@@ -346,6 +356,10 @@ mod tests {
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
         );
 
+        let data_f32: Values = vec![1.0_f32, 2.0, 3.0].into();
+        let result_f32 = values_to_string(&data_f32);
+        assert_eq!(result_f32, "1.0000000e0 2.0000000e0 3.0000000e0");
+
         let data_u64: Values = vec![1_u64, 2, 3].into();
         let result_u64 = values_to_string(&data_u64);
         assert_eq!(result_u64, "1 2 3");
@@ -361,6 +375,14 @@ mod tests {
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0\n"
         );
 
+        let data_f32: Values = vec![1.0_f32, 2.0, 3.0].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_f32, &mut buffer).unwrap();
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            "1.0000000e0 2.0000000e0 3.0000000e0\n"
+        );
+
         let data_u64: Values = vec![1_u64, 2, 3].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_u64, &mut buffer).unwrap();
@@ -373,7 +395,9 @@ mod tests {
         let points = vec![1., 2., 3., 4., 5., 6.];
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
-        let result = writer.write_mesh(&points, &cells).unwrap();
+        let result = writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
         pretty_assertions::assert_eq!(
             result,
             (
@@ -588,7 +612,9 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0, 1, 2];
-        let (points_path, cells_path) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_path, cells_path) = writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
 
@@ -607,6 +633,83 @@ mod tests {
             "0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0\n"
         );
         assert_eq!(cells_data, "0 1 2\n");
+    }
+
+    #[test]
+    fn ascii_writer_write_mesh_f32_points() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
+        let mut writer = AsciiWriter::new(file_name).unwrap();
+        let points_file = writer.txt_files_dir.join("points.txt");
+
+        let points = vec![0.0_f32, 1.0, 2.5];
+        let cells = vec![0_u64, 1, 2];
+        writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
+
+        // f32 coordinates are written with f32's digit count, not f64's
+        assert_eq!(
+            std::fs::read_to_string(&points_file).unwrap(),
+            "0.0000000e0 1.0000000e0 2.5000000e0\n"
+        );
+    }
+
+    #[test]
+    fn ascii_writer_write_data_f32() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = AsciiWriter::new(file_name).unwrap();
+
+        writer.write_data_initialize("0.1").unwrap();
+        let raw_data = vec![1.0_f32, 2.0, 3.0];
+        let result = writer
+            .write_data("temperature", attribute::Center::Node, &raw_data.into())
+            .unwrap();
+
+        assert_eq!(
+            result,
+            XInclude::new("test.txt/data_t_0.1_point_data_temperature.txt", true).into()
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                writer
+                    .txt_files_dir
+                    .join("data_t_0.1_point_data_temperature.txt")
+            )
+            .unwrap(),
+            "1.0000000e0 2.0000000e0 3.0000000e0\n"
+        );
+    }
+
+    #[test]
+    fn ascii_inline_writer_write_mesh_f32_points() {
+        let mut writer = AsciiInlineWriter::new();
+        let points = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let cells = vec![0_u64, 1, 2, 0, 2, 3];
+
+        let result = writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
+        pretty_assertions::assert_eq!(
+            result,
+            (
+                "1.0000000e0 2.0000000e0 3.0000000e0 4.0000000e0 5.0000000e0 6.0000000e0".into(),
+                "0 1 2 0 2 3".into()
+            )
+        );
+    }
+
+    #[test]
+    fn ascii_inline_writer_write_data_vec_f32() {
+        let mut writer = AsciiInlineWriter::new();
+        let raw_data = vec![1.0_f32, 2.0, 3.0];
+        let data = raw_data.into();
+
+        let result = writer
+            .write_data("dummy", attribute::Center::Node, &data)
+            .unwrap();
+        pretty_assertions::assert_eq!(result, "1.0000000e0 2.0000000e0 3.0000000e0".into());
     }
 
     #[test]

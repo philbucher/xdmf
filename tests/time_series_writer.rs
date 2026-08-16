@@ -410,3 +410,74 @@ fn write_xdmf_point_mesh() {
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
 }
+
+#[test]
+fn write_xdmf_f32_points() {
+    // 3 points forming a triangle, held as f32 by the caller
+    let node_coords: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 2];
+    let cell_types = [xdmf::CellType::Triangle];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    let mut xdmf_writer = xdmf_writer
+        .write_mesh(&node_coords, &connectivity, &cell_types)
+        .unwrap();
+
+    // the coordinate type says nothing about the attribute types: both widths in the same step
+    xdmf_writer
+        .write_time_step("0", |step| {
+            step.point_data(
+                "temperature_f32",
+                xdmf::DataAttribute::Scalar,
+                &[10.5_f32, 11.5, 12.5],
+            )?;
+            step.point_data(
+                "temperature_f64",
+                xdmf::DataAttribute::Scalar,
+                &[10.5_f64, 11.5, 12.5],
+            )
+        })
+        .unwrap();
+
+    // the f32 coordinates and the f32 attribute are declared as 4-byte floats and written with
+    // f32's digit count, while the f64 attribute in the same step keeps 8 bytes
+    let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="time_series" GridType="Collection" CollectionType="Temporal">
+            <Grid Name="time_series-t0" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+                </Geometry>
+                <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
+                </Topology>
+                <Time Value="0"/>
+                <Attribute Name="temperature_f32" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="3" NumberType="Float" Format="XML" Precision="4">1.0500000e1 1.1500000e1 1.2500000e1</DataItem>
+                </Attribute>
+                <Attribute Name="temperature_f64" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="3" NumberType="Float" Format="XML" Precision="8">1.0500000000000000e1 1.1500000000000000e1 1.2500000000000000e1</DataItem>
+                </Attribute>
+            </Grid>
+        </Grid>
+        <DataItem Name="coords" Dimensions="3 3" NumberType="Float" Format="XML" Precision="4">0.0000000e0 0.0000000e0 0.0000000e0 1.0000000e0 0.0000000e0 0.0000000e0 0.0000000e0 1.0000000e0 0.0000000e0</DataItem>
+        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="0.1.3"/>
+</Xdmf>"#;
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
+    // std::fs::copy(xdmf_file, "write_xdmf_f32_points.xdmf2").unwrap();
+
+    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}

@@ -62,7 +62,11 @@ impl DataWriter for BinaryWriter {
         DataStorage::Binary
     }
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)> {
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)> {
         let points_file_name = "points.bin";
         let cells_file_name = "cells.bin";
         let points_path = self.bin_files_dir.join(points_file_name);
@@ -75,7 +79,7 @@ impl DataWriter for BinaryWriter {
             File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
         );
 
-        write_f64_le(points, &mut file_points, &points_path)?;
+        values_to_writer(points, &mut file_points, &points_path)?;
         write_u64_as_u32_le(cells, &mut file_cells, &cells_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
@@ -168,10 +172,34 @@ impl DataWriter for BinaryWriter {
     }
 }
 
-fn write_f64_le(vec: &[f64], writer: &mut impl Write, path: &Path) -> Result<()> {
-    for &v in vec {
+// `to_le_bytes` is an inherent method on each float type, not a trait method, so writing both
+// widths through one generic function takes this small trait
+trait LeBytes {
+    type Bytes: AsRef<[u8]>;
+
+    fn le_bytes(&self) -> Self::Bytes;
+}
+
+impl LeBytes for f64 {
+    type Bytes = [u8; 8];
+
+    fn le_bytes(&self) -> Self::Bytes {
+        self.to_le_bytes()
+    }
+}
+
+impl LeBytes for f32 {
+    type Bytes = [u8; 4];
+
+    fn le_bytes(&self) -> Self::Bytes {
+        self.to_le_bytes()
+    }
+}
+
+fn write_floats_le<T: LeBytes>(vec: &[T], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for v in vec {
         writer
-            .write_all(&v.to_le_bytes())
+            .write_all(v.le_bytes().as_ref())
             .map_err(io_ctx("writing binary data", path))?;
     }
     Ok(())
@@ -197,7 +225,8 @@ fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Res
 
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
-        Values::F64(v) => write_f64_le(v, writer, path),
+        Values::F64(v) => write_floats_le(v, writer, path),
+        Values::F32(v) => write_floats_le(v, writer, path),
         Values::U64(v) => write_u64_as_u32_le(v, writer, path),
     }
 }
@@ -207,13 +236,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_f64_le_multiple_values() {
+    fn write_floats_le_f64() {
         let vec_f64 = vec![1.0_f64, -2.5];
         let mut buffer = Vec::new();
-        write_f64_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
+        write_floats_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f64.to_le_bytes());
         expected.extend_from_slice(&(-2.5_f64).to_le_bytes());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn write_floats_le_f32() {
+        let vec_f32 = vec![1.0_f32, -2.5];
+        let mut buffer = Vec::new();
+        write_floats_le(&vec_f32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1.0_f32.to_le_bytes());
+        expected.extend_from_slice(&(-2.5_f32).to_le_bytes());
         assert_eq!(buffer, expected);
     }
 
@@ -251,6 +291,14 @@ mod tests {
         expected.extend_from_slice(&2.0_f64.to_le_bytes());
         assert_eq!(buffer, expected);
 
+        let data_f32: Values = vec![1.0_f32, 2.0].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_f32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1.0_f32.to_le_bytes());
+        expected.extend_from_slice(&2.0_f32.to_le_bytes());
+        assert_eq!(buffer, expected);
+
         let data_u64: Values = vec![1_u64, 2].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_u64, &mut buffer, Path::new("test.bin")).unwrap();
@@ -283,9 +331,11 @@ mod tests {
         assert!(!points_file.exists());
         assert!(!cells_file.exists());
 
-        let points = vec![0.0, 1.0, 2.0];
+        let points = vec![0.0_f64, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
-        let (points_content, cells_content) = writer.write_mesh(&points, &cells).unwrap();
+        let (points_content, cells_content) = writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
 
@@ -340,6 +390,46 @@ mod tests {
         assert_eq!(bytes, expected);
 
         writer.write_data_finalize().unwrap();
+    }
+
+    #[test]
+    fn binary_writer_write_mesh_and_data_f32() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = BinaryWriter::new(file_name).unwrap();
+
+        let points = vec![0.0_f32, 1.0, 2.5];
+        let cells = vec![0_u64, 1, 2];
+        writer
+            .write_mesh(&points.as_slice().into(), &cells)
+            .unwrap();
+
+        writer.write_data_initialize("0.1").unwrap();
+        writer
+            .write_data(
+                "temperature",
+                attribute::Center::Node,
+                &vec![1.5_f32, 2.5].into(),
+            )
+            .unwrap();
+
+        let read_f32 = |path: &Path| -> Vec<f32> {
+            std::fs::read(path)
+                .unwrap()
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
+
+        // 4 bytes per value on disk for both the mesh and the attribute, unlike the f64 case
+        let points_file = writer.bin_files_dir.join("points.bin");
+        assert_eq!(std::fs::metadata(&points_file).unwrap().len(), 3 * 4);
+        float_cmp::assert_approx_eq!(&[f32], &read_f32(&points_file), &points);
+
+        let data_file = writer
+            .bin_files_dir
+            .join("data_t_0.1_point_data_temperature.bin");
+        float_cmp::assert_approx_eq!(&[f32], &read_f32(&data_file), &[1.5, 2.5]);
     }
 
     #[test]
