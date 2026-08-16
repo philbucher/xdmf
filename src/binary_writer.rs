@@ -151,13 +151,26 @@ impl DataWriter for BinaryWriter {
         }
 
         // Taken before removing, so the files are forgotten even if a removal fails -- a second
-        // discard attempt on the same paths would only report the same failure again.
+        // discard attempt on the same paths would only report the same failure again. Every file
+        // is attempted before reporting, so one failure does not leave the rest behind; the first
+        // error is the one returned.
+        let mut first_error = None;
         for path in std::mem::take(&mut self.step_files) {
-            std::fs::remove_file(&path).map_err(io_ctx("removing discarded data file", &path))?;
+            let result =
+                std::fs::remove_file(&path).map_err(io_ctx("removing discarded data file", &path));
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
         }
 
         self.write_time = None;
-        Ok(())
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn validate_values(&self, data: &Values<'_>) -> Result<()> {

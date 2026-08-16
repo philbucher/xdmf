@@ -188,13 +188,26 @@ impl DataWriter for AsciiWriter {
         }
 
         // Taken before removing, so the files are forgotten even if a removal fails -- a second
-        // discard attempt on the same paths would only report the same failure again.
+        // discard attempt on the same paths would only report the same failure again. Every file
+        // is attempted before reporting, so one failure does not leave the rest behind; the first
+        // error is the one returned.
+        let mut first_error = None;
         for path in std::mem::take(&mut self.step_files) {
-            std::fs::remove_file(&path).map_err(io_ctx("removing discarded data file", &path))?;
+            let result =
+                std::fs::remove_file(&path).map_err(io_ctx("removing discarded data file", &path));
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
         }
 
         self.write_time = None;
-        Ok(())
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -454,6 +467,42 @@ mod tests {
 
         assert!(txt_dir.join("data_t_0.5_point_data_kept.txt").exists());
         assert!(!node_file.exists());
+    }
+
+    #[test]
+    fn ascii_writer_write_data_discard_removes_every_file_despite_a_failure() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = AsciiWriter::new(&file_name).unwrap();
+
+        let txt_dir = file_name.with_extension("txt");
+        let first_file = txt_dir.join("data_t_0.5_point_data_first.txt");
+        let second_file = txt_dir.join("data_t_0.5_point_data_second.txt");
+
+        writer.write_data_initialize("0.5").unwrap();
+        for name in ["first", "second"] {
+            writer
+                .write_data(
+                    name,
+                    attribute::Center::Node,
+                    &Values::F64(vec![1.0].into()),
+                )
+                .unwrap();
+        }
+
+        // removing the first file fails (it is already gone), which must not stop the second one
+        // from being removed
+        std::fs::remove_file(&first_file).unwrap();
+
+        std::assert_matches!(
+            writer.write_data_discard().unwrap_err(),
+            Error::Io { operation, path, .. }
+                if operation == "removing discarded data file" && path == first_file
+        );
+
+        assert!(!second_file.exists());
+        assert!(writer.write_time.is_none());
+        assert!(writer.step_files.is_empty());
     }
 
     #[test]

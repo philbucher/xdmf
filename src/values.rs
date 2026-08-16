@@ -49,6 +49,11 @@ impl<'a> From<&'a [u64]> for Values<'a> {
     }
 }
 
+// The `&Vec<T>` and `&[T; N]` impls below are not redundant with the `&[T]` ones above: the
+// `impl Into<Values<'_>>` arguments of `TimeStep::point_data`/`cell_data` are resolved by trait
+// matching, which does not deref-coerce, so passing a `&vec` or a `&[1.0, 2.0]` needs its own
+// impl.
+
 impl<'a> From<&'a Vec<f64>> for Values<'a> {
     fn from(vec: &'a Vec<f64>) -> Self {
         Self::F64(Cow::Borrowed(vec))

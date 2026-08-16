@@ -57,7 +57,9 @@ for i in 0..10 {
 The step is scoped to the closure: when it returns `Ok`, the step is added to the XDMF file; when it
 returns an error, the step is discarded and the heavy data already written for it is removed again.
 So a step can neither be left half-written by forgetting to complete it, nor leave data behind that
-nothing references.
+nothing references. The error may be one of your own — any type that `xdmf::Error` converts into
+works, so `?` can be used on both inside the closure, and `time_step` hands your error back
+unchanged.
 
 ### Which data storage should be used for the heavy data?
 

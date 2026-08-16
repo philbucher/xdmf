@@ -2,8 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// Result alias using this crate's [`Error`] type.
-pub type Result<T> = std::result::Result<T, Error>;
+/// Result alias defaulting to this crate's [`Error`] type.
+///
+/// The error type is a parameter so that APIs taking a caller-supplied closure can name the
+/// caller's own error type; everything else uses the default.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The error type for all fallible operations in this crate.
 ///

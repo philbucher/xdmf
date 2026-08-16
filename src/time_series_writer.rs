@@ -269,7 +269,13 @@ impl TimeSeriesDataWriter {
     /// again.
     ///
     /// The time is accepted as a str to avoid dealing with formatting, thus leaving it to the
-    /// user. It is validated once to avoid duplicated times
+    /// user. It is validated once, up front, to reject duplicated times. Each attribute is
+    /// validated as it is passed: its name, and its size against the mesh and the
+    /// [`DataAttribute`] it declares.
+    ///
+    /// `write_step` may fail with any error type that this crate's [`Error`] converts into, so a
+    /// caller can abort a step with an error of their own and get it back unchanged.
+    ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_data", xdmf::DataStorage::AsciiInline)
@@ -308,9 +314,10 @@ impl TimeSeriesDataWriter {
     ///         .expect("failed to write time step");
     /// }
     /// ```
-    pub fn time_step<F>(&mut self, time: &str, write_step: F) -> Result<()>
+    pub fn time_step<F, E>(&mut self, time: &str, write_step: F) -> Result<(), E>
     where
-        F: FnOnce(&mut TimeStep<'_>) -> Result<()>,
+        F: FnOnce(&mut TimeStep<'_>) -> Result<(), E>,
+        E: From<Error>,
     {
         let parsed_time = time
             .parse::<f64>()
@@ -332,7 +339,8 @@ impl TimeSeriesDataWriter {
             return Err(Error::InvalidTimeStep {
                 time: time.to_string(),
                 reason,
-            });
+            }
+            .into());
         }
 
         let mut step = TimeStep {
@@ -346,7 +354,7 @@ impl TimeSeriesDataWriter {
         };
 
         match write_step(&mut step) {
-            Ok(()) => step.finish(),
+            Ok(()) => step.finish().map_err(E::from),
             Err(error) => {
                 // The caller's error is the one they can act on, so it is returned even if the
                 // cleanup fails too -- reporting "could not remove file" instead would hide why
@@ -545,24 +553,37 @@ impl TimeStep<'_> {
     }
 
     /// Complete the time step, adding its `<Grid>` to the XDMF file.
-    fn finish(mut self) -> Result<()> {
+    fn finish(self) -> Result<()> {
         if self.attributes.is_empty() {
-            // nothing was written, so `write_data_initialize` never ran and there is nothing to
-            // finalize or discard
+            // An attribute can fail *after* it initialized the backend, and a closure that
+            // ignores that error still arrives here -- so the step is discarded rather than
+            // simply dropped, otherwise the backend would stay initialized and every later
+            // step would fail. The caller's error wins over a cleanup failure, as in `time_step`.
+            let _discard_result = self.discard();
             return Err(Error::InvalidData {
                 reason: "at least one of point_data or cell_data must be provided".to_string(),
             });
         }
 
-        self.writer.writer.write_data_finalize()?;
+        if let Err(error) = self.writer.writer.write_data_finalize() {
+            // The step is not recorded, so the heavy data written for it is removed again --
+            // otherwise it would stay behind with no `<Grid>` referencing it.
+            let _discard_result = self.discard();
+            return Err(error);
+        }
 
-        let attributes = std::mem::take(&mut self.attributes);
-        let time = std::mem::take(&mut self.time);
+        let TimeStep {
+            writer,
+            time,
+            time_bits,
+            attributes,
+            ..
+        } = self;
 
-        self.writer.attributes.push((time.clone(), attributes));
-        self.writer.written_times.insert(self.time_bits, time);
+        writer.attributes.push((time.clone(), attributes));
+        writer.written_times.insert(time_bits, time);
 
-        self.writer.write_xdmf_file()
+        writer.write_xdmf_file()
     }
 
     /// Abandon the time step, removing the heavy data already written for it.
@@ -577,13 +598,14 @@ impl TimeStep<'_> {
     }
 }
 
-// The helpers below take the data category as a plain label instead of an `attribute::Center`:
-// `attribute::center_to_data_tag` names HDF5 groups and on-disk file segments, and error prose
-// should not change when that storage layout is renamed (or vice versa).
+// The labels below name the data category in error messages as a plain string instead of going
+// through an `attribute::Center`: `attribute::center_to_data_tag` names HDF5 groups and on-disk
+// file segments, and error prose should not change when that storage layout is renamed (or vice
+// versa).
 
-/// Label for point data in user-facing error messages, named after `write_data`'s argument.
+/// Label for point data in user-facing error messages, named after [`TimeStep::point_data`].
 const POINT_DATA: &str = "point_data";
-/// Label for cell data in user-facing error messages, named after `write_data`'s argument.
+/// Label for cell data in user-facing error messages, named after [`TimeStep::cell_data`].
 const CELL_DATA: &str = "cell_data";
 
 fn is_valid_data_name(name: &str) -> bool {
@@ -1049,6 +1071,20 @@ mod tests {
 
     #[test]
     fn time_step_erroring_out_discards_the_data_it_already_wrote() {
+        // A caller's own error type, as `time_step`'s closure may use: this crate's errors
+        // convert into it, and it comes back out of `time_step` unchanged.
+        #[derive(Debug)]
+        enum CallerError {
+            ChangedItsMind,
+            Xdmf(Error),
+        }
+
+        impl From<Error> for CallerError {
+            fn from(error: Error) -> Self {
+                Self::Xdmf(error)
+            }
+        }
+
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
 
@@ -1067,17 +1103,13 @@ mod tests {
 
         let values = vec![5.0; NUM_POINTS];
 
-        // one attribute written, then the closure gives up
+        // one attribute written, then the closure gives up -- with an error of its own, which
+        // comes back unchanged rather than squeezed into this crate's `Error`
         let res = writer.time_step("0.1", |step| {
             step.point_data("abandoned", DataAttribute::Scalar, &values)?;
-            Err(Error::InvalidData {
-                reason: "caller changed its mind".to_string(),
-            })
+            Err(CallerError::ChangedItsMind)
         });
-        std::assert_matches!(
-            res.unwrap_err(),
-            Error::InvalidData { reason } if reason == "caller changed its mind"
-        );
+        std::assert_matches!(res.unwrap_err(), CallerError::ChangedItsMind);
 
         // the heavy data of the abandoned attribute was removed again, rather than being left
         // behind with nothing in the XDMF file referencing it
@@ -1096,6 +1128,18 @@ mod tests {
                 step.point_data("kept", DataAttribute::Scalar, &values)
             })
             .unwrap();
+
+        // a rejected attribute reaches the closure's own error type through `From`, so `?` is
+        // all it takes to mix the caller's errors with this crate's
+        let res = writer.time_step("0.3", |step| {
+            step.point_data("wrong_size", DataAttribute::Scalar, &[1.0])?;
+            Err(CallerError::ChangedItsMind)
+        });
+        std::assert_matches!(
+            res.unwrap_err(),
+            CallerError::Xdmf(Error::InvalidData { reason })
+                if reason == "size of point_data 'wrong_size' must be 10, but is 1"
+        );
 
         // the abandoned step left no trace in the light data either
         let xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
@@ -1629,83 +1673,117 @@ mod tests {
         pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
     }
 
-    #[test]
-    fn write_data_survives_a_mid_write_failure() {
-        // A backend that fails while writing one attribute, after already having written an
-        // earlier one -- reproducing the shape of the original binary-backend bug (now caught
-        // upfront for that specific case by `DataWriter::validate_values`, but the
-        // `write_data_finalize`-always-runs fix in `TimeSeriesDataWriter::write_data` is generic
-        // and backend-agnostic, so it needs its own backend-agnostic regression test).
-        struct FlakyWriter {
-            write_time: Option<String>,
+    // A backend that fails on demand, to exercise the failure paths of a time step without
+    // depending on a real storage format: writing the attribute named "boom" fails, and so does
+    // finalizing the time given as `fail_finalize_at`.
+    struct FlakyWriter {
+        write_time: Option<String>,
+        fail_finalize_at: Option<&'static str>,
+    }
+
+    impl DataWriter for FlakyWriter {
+        fn format(&self) -> Format {
+            Format::XML
         }
 
-        impl DataWriter for FlakyWriter {
-            fn format(&self) -> Format {
-                Format::XML
-            }
-
-            fn data_storage(&self) -> DataStorage {
-                DataStorage::AsciiInline
-            }
-
-            fn write_mesh(
-                &mut self,
-                _points: &[f64],
-                _cells: &[u64],
-            ) -> Result<(DataContent, DataContent)> {
-                Ok((
-                    DataContent::Raw("points".to_string()),
-                    DataContent::Raw("cells".to_string()),
-                ))
-            }
-
-            fn write_data(
-                &mut self,
-                name: &str,
-                _center: attribute::Center,
-                _data: &Values<'_>,
-            ) -> Result<DataContent> {
-                if name == "boom" {
-                    return Err(Error::Io {
-                        operation: "writing data (simulated)",
-                        path: PathBuf::from("boom"),
-                        source: std::io::Error::other("simulated mid-write failure"),
-                    });
-                }
-                Ok(DataContent::Raw(format!("data_for_{name}")))
-            }
-
-            fn write_data_initialize(&mut self, time: &str) -> Result<()> {
-                if self.write_time.is_some() {
-                    return Err(Error::Internal("writing data was already initialized"));
-                }
-                self.write_time = Some(time.to_string());
-                Ok(())
-            }
-
-            fn write_data_finalize(&mut self) -> Result<()> {
-                if self.write_time.is_none() {
-                    return Err(Error::Internal("writing data was not initialized"));
-                }
-                self.write_time = None;
-                Ok(())
-            }
+        fn data_storage(&self) -> DataStorage {
+            DataStorage::AsciiInline
         }
 
-        let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let xdmf_file_path = tmp_dir.path().join("mid_write_failure.xdmf2");
+        fn write_mesh(
+            &mut self,
+            _points: &[f64],
+            _cells: &[u64],
+        ) -> Result<(DataContent, DataContent)> {
+            Ok((
+                DataContent::Raw("points".to_string()),
+                DataContent::Raw("cells".to_string()),
+            ))
+        }
 
-        let mut writer = TimeSeriesDataWriter {
-            xdmf_file_name: xdmf_file_path,
-            writer: Box::new(FlakyWriter { write_time: None }),
+        fn write_data(
+            &mut self,
+            name: &str,
+            _center: attribute::Center,
+            _data: &Values<'_>,
+        ) -> Result<DataContent> {
+            if name == "boom" {
+                return Err(Error::Io {
+                    operation: "writing data (simulated)",
+                    path: PathBuf::from("boom"),
+                    source: std::io::Error::other("simulated mid-write failure"),
+                });
+            }
+            Ok(DataContent::Raw(format!("data_for_{name}")))
+        }
+
+        fn write_data_initialize(&mut self, time: &str) -> Result<()> {
+            if self.write_time.is_some() {
+                return Err(Error::Internal("writing data was already initialized"));
+            }
+            self.write_time = Some(time.to_string());
+            Ok(())
+        }
+
+        fn write_data_finalize(&mut self) -> Result<()> {
+            let Some(time) = self.write_time.as_deref() else {
+                return Err(Error::Internal("writing data was not initialized"));
+            };
+
+            // the step stays open on this failure, like a backend that could not complete it
+            if self.fail_finalize_at == Some(time) {
+                return Err(Error::Io {
+                    operation: "finalizing data (simulated)",
+                    path: PathBuf::from("finalize"),
+                    source: std::io::Error::other("simulated finalize failure"),
+                });
+            }
+
+            self.write_time = None;
+            Ok(())
+        }
+
+        fn write_data_discard(&mut self) -> Result<()> {
+            // mirrors the real backends: the step is dropped and the writer is ready for the
+            // next one (this backend has no heavy data to remove)
+            if self.write_time.is_none() {
+                return Err(Error::Internal("writing data was not initialized"));
+            }
+            self.write_time = None;
+            Ok(())
+        }
+    }
+
+    // A `TimeSeriesDataWriter` on top of `FlakyWriter`, assembled directly rather than through
+    // `TimeSeriesWriter::write_mesh`, since only the time-step handling is under test.
+    fn flaky_writer(
+        xdmf_file_name: PathBuf,
+        fail_finalize_at: Option<&'static str>,
+    ) -> TimeSeriesDataWriter {
+        TimeSeriesDataWriter {
+            xdmf_file_name,
+            writer: Box::new(FlakyWriter {
+                write_time: None,
+                fail_finalize_at,
+            }),
             grid: Grid::new_uniform("test", dummy_geometry(), dummy_topology()),
             data_items: Vec::new(),
             num_points: 0,
             num_cells: 0,
             attributes: Vec::new(),
             written_times: HashMap::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn write_data_survives_a_mid_write_failure() {
+        // Fails while writing one attribute, after already having written an earlier one --
+        // reproducing the shape of the original binary-backend bug (now caught upfront for that
+        // specific case by `DataWriter::validate_values`, but the discard-on-error handling in
+        // `TimeSeriesDataWriter::time_step` is generic and backend-agnostic, so it needs its own
+        // backend-agnostic regression test).
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let mut writer = flaky_writer(tmp_dir.path().join("mid_write_failure.xdmf2"), None);
 
         // "ok" is written successfully before "boom" fails, so this genuinely fails partway
         // through the step, after `write_data_initialize` already ran.
@@ -1721,6 +1799,65 @@ mod tests {
         // `time_step` had skipped the discard.
         writer
             .time_step("0.0", |step| {
+                step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn time_step_discards_when_the_closure_swallows_an_attribute_error() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None);
+
+        // The closure ignores the failure of "boom" and returns `Ok`, so the step ends up with
+        // no attributes even though the failed write already initialized the backend -- the
+        // empty step must therefore be discarded, not just dropped.
+        let res = writer.time_step("0.0", |step| {
+            let _write_result = step.point_data("boom", DataAttribute::Scalar, vec![0.0; 0]);
+            Ok(())
+        });
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidData { reason } if reason.contains("at least one of point_data or cell_data")
+        );
+
+        assert!(writer.attributes.is_empty());
+        assert!(writer.written_times.is_empty());
+
+        // the backing writer is not poisoned: `FlakyWriter` would fail with
+        // `Error::Internal("writing data was already initialized")` here otherwise
+        writer
+            .time_step("0.0", |step| {
+                step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn time_step_discards_when_finalizing_fails() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let mut writer = flaky_writer(tmp_dir.path().join("finalize_failure.xdmf2"), Some("0.0"));
+
+        // every attribute is written, but completing the step fails
+        let res = writer.time_step("0.0", |step| {
+            step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
+        });
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::Io {
+                operation: "finalizing data (simulated)",
+                ..
+            }
+        );
+
+        // the step is not recorded, so its heavy data must not be kept either -- and the time
+        // stays available
+        assert!(writer.attributes.is_empty());
+        assert!(writer.written_times.is_empty());
+
+        // the step was discarded rather than left open, so a following step still works
+        writer
+            .time_step("1.0", |step| {
                 step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
             })
             .unwrap();
