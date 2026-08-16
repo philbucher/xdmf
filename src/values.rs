@@ -152,35 +152,42 @@ impl Values<'_> {
 }
 
 // Sealed so that `Coordinate` names exactly the two types the XDMF geometry can hold, and stays
-// closed to outside impls
-mod sealed {
-    pub trait Sealed {}
+// closed to outside impls. The conversion lives here rather than on `Coordinate` itself, so it is
+// callable inside the crate without becoming public API.
+pub(crate) mod sealed {
+    use std::borrow::Cow;
 
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
-}
+    use super::Values;
 
-/// A type usable as a point coordinate
-pub trait Coordinate: sealed::Sealed + Sized {
-    /// Borrow a slice of coordinates as [`Values`]
-    fn as_values(points: &[Self]) -> Values<'_>;
-}
+    /// Conversion backing [`Coordinate`](super::Coordinate), not nameable outside the crate
+    pub trait Sealed: Sized {
+        /// Borrow a slice of coordinates as [`Values`]
+        fn as_values(points: &[Self]) -> Values<'_>;
+    }
 
-impl Coordinate for f64 {
-    fn as_values(points: &[Self]) -> Values<'_> {
-        Values::F64(Cow::Borrowed(points))
+    impl Sealed for f64 {
+        fn as_values(points: &[Self]) -> Values<'_> {
+            Values::F64(Cow::Borrowed(points))
+        }
+    }
+
+    impl Sealed for f32 {
+        fn as_values(points: &[Self]) -> Values<'_> {
+            Values::F32(Cow::Borrowed(points))
+        }
     }
 }
 
-impl Coordinate for f32 {
-    fn as_values(points: &[Self]) -> Values<'_> {
-        Values::F32(Cow::Borrowed(points))
-    }
-}
+/// A type usable as a point coordinate: `f32` or `f64`
+pub trait Coordinate: sealed::Sealed {}
+
+impl Coordinate for f64 {}
+
+impl Coordinate for f32 {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{sealed::Sealed, *};
 
     #[test]
     fn vec_f64() {

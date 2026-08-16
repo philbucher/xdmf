@@ -7,7 +7,7 @@
 //! number of components per field, not just the right numeric values.
 //!
 //! Two fixtures are written per run, one with f64 coordinates and float attributes and one with
-//! f32 ones, since the two produce different bytes *and* a different `Precision` in the light data
+//! f32 ones, since the two produce different bytes *and* a different `Precision` in the light data.
 //!
 //! Usage: `cargo run --example paraview_smoke -- <output_dir> <storage>`
 //! `<storage>` is any string accepted by `xdmf::DataStorage::from_str` (e.g. `Hdf5SingleFile`).
@@ -19,7 +19,7 @@ use std::{
 };
 
 use serde::Serialize;
-use xdmf::{CellType, DataAttribute, DataStorage, TimeSeriesWriter, TimeStep};
+use xdmf::{CellType, DataAttribute, DataStorage, TimeSeriesWriter, Values};
 
 const NUM_POINTS: usize = 5;
 const NUM_CELLS: usize = 2;
@@ -139,10 +139,6 @@ fn write_fixture(
         }
     };
 
-    // reused for the narrowed copy of every f32 attribute, so the fixture does not allocate per
-    // field; stays empty for an f64 fixture
-    let mut scratch: Vec<f32> = Vec::new();
-
     let mut timesteps = Vec::new();
     for (step, scale) in [1.0, 2.0].into_iter().enumerate() {
         let mut temperature: Vec<f64> = [10.0, 11.0, 12.0, 13.0, 14.0]
@@ -189,40 +185,28 @@ fn write_fixture(
         xdmf_writer.write_time_step(&step.to_string(), |time_step| {
             // `as_flattened` reinterprets `&[[f64; N]]` as `&[f64]` without copying, so the
             // natural per-point/per-cell layout needs no intermediate `Vec`
-            write_float_data(
-                time_step,
-                Center::Point("temperature"),
+            time_step.point_data(
+                "temperature",
                 DataAttribute::Scalar,
-                &temperature,
-                precision,
-                &mut scratch,
+                at_precision(&temperature, precision),
             )?;
-            write_float_data(
-                time_step,
-                Center::Point("displacement"),
+            time_step.point_data(
+                "displacement",
                 DataAttribute::Vector,
-                displacement.as_flattened(),
-                precision,
-                &mut scratch,
+                at_precision(displacement.as_flattened(), precision),
             )?;
-            write_float_data(
-                time_step,
-                Center::Point("velocity_gradient"),
+            time_step.point_data(
+                "velocity_gradient",
                 DataAttribute::Tensor,
-                velocity_gradient.as_flattened(),
-                precision,
-                &mut scratch,
+                at_precision(velocity_gradient.as_flattened(), precision),
             )?;
 
             // integer data is unaffected by the fixture's float precision
             time_step.cell_data("region_id", DataAttribute::Scalar, &REGION_ID)?;
-            write_float_data(
-                time_step,
-                Center::Cell("stress"),
+            time_step.cell_data(
+                "stress",
                 DataAttribute::Tensor6,
-                stress.as_flattened(),
-                precision,
-                &mut scratch,
+                at_precision(stress.as_flattened(), precision),
             )
         })?;
     }
@@ -241,33 +225,14 @@ fn write_fixture(
     })
 }
 
-/// Where an attribute lives, carrying its name -- so one helper can write both kinds.
-enum Center<'a> {
-    Point(&'a str),
-    Cell(&'a str),
-}
-
-/// Write one float attribute at the fixture's precision, narrowing into `scratch` for f32.
-fn write_float_data(
-    time_step: &mut TimeStep<'_>,
-    center: Center<'_>,
-    attribute: DataAttribute,
-    values: &[f64],
-    precision: Precision,
-    scratch: &mut Vec<f32>,
-) -> xdmf::Result<()> {
+/// The attribute values at the fixture's precision: the f64 values borrowed, or an f32 copy.
+fn at_precision(values: &[f64], precision: Precision) -> Values<'_> {
     match precision {
-        Precision::F64 => match center {
-            Center::Point(name) => time_step.point_data(name, attribute, values),
-            Center::Cell(name) => time_step.cell_data(name, attribute, values),
-        },
-        Precision::F32 => {
-            scratch.clear();
-            scratch.extend(values.iter().map(|&v| v as f32));
-            match center {
-                Center::Point(name) => time_step.point_data(name, attribute, scratch.as_slice()),
-                Center::Cell(name) => time_step.cell_data(name, attribute, scratch.as_slice()),
-            }
-        }
+        Precision::F64 => values.into(),
+        Precision::F32 => values
+            .iter()
+            .map(|&v| v as f32)
+            .collect::<Vec<f32>>()
+            .into(),
     }
 }

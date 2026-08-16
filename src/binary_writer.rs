@@ -172,19 +172,34 @@ impl DataWriter for BinaryWriter {
     }
 }
 
-fn write_f64_le(vec: &[f64], writer: &mut impl Write, path: &Path) -> Result<()> {
-    for &v in vec {
-        writer
-            .write_all(&v.to_le_bytes())
-            .map_err(io_ctx("writing binary data", path))?;
-    }
-    Ok(())
+// `to_le_bytes` is an inherent method on each float type, not a trait method, so writing both
+// widths through one generic function takes this small trait
+trait LeBytes {
+    type Bytes: AsRef<[u8]>;
+
+    fn le_bytes(&self) -> Self::Bytes;
 }
 
-fn write_f32_le(vec: &[f32], writer: &mut impl Write, path: &Path) -> Result<()> {
-    for &v in vec {
+impl LeBytes for f64 {
+    type Bytes = [u8; 8];
+
+    fn le_bytes(&self) -> Self::Bytes {
+        self.to_le_bytes()
+    }
+}
+
+impl LeBytes for f32 {
+    type Bytes = [u8; 4];
+
+    fn le_bytes(&self) -> Self::Bytes {
+        self.to_le_bytes()
+    }
+}
+
+fn write_floats_le<T: LeBytes>(vec: &[T], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for v in vec {
         writer
-            .write_all(&v.to_le_bytes())
+            .write_all(v.le_bytes().as_ref())
             .map_err(io_ctx("writing binary data", path))?;
     }
     Ok(())
@@ -210,8 +225,8 @@ fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Res
 
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
-        Values::F64(v) => write_f64_le(v, writer, path),
-        Values::F32(v) => write_f32_le(v, writer, path),
+        Values::F64(v) => write_floats_le(v, writer, path),
+        Values::F32(v) => write_floats_le(v, writer, path),
         Values::U64(v) => write_u64_as_u32_le(v, writer, path),
     }
 }
@@ -221,10 +236,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_f64_le_multiple_values() {
+    fn write_floats_le_f64() {
         let vec_f64 = vec![1.0_f64, -2.5];
         let mut buffer = Vec::new();
-        write_f64_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
+        write_floats_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f64.to_le_bytes());
         expected.extend_from_slice(&(-2.5_f64).to_le_bytes());
@@ -232,16 +247,14 @@ mod tests {
     }
 
     #[test]
-    fn write_f32_le_multiple_values() {
+    fn write_floats_le_f32() {
         let vec_f32 = vec![1.0_f32, -2.5];
         let mut buffer = Vec::new();
-        write_f32_le(&vec_f32, &mut buffer, Path::new("test.bin")).unwrap();
+        write_floats_le(&vec_f32, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f32.to_le_bytes());
         expected.extend_from_slice(&(-2.5_f32).to_le_bytes());
         assert_eq!(buffer, expected);
-        // half the bytes of the same values as f64
-        assert_eq!(buffer.len(), 8);
     }
 
     #[test]

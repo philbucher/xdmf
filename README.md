@@ -61,6 +61,17 @@ nothing references. The error may be one of your own — any type that `xdmf::Er
 works, so `?` can be used on both inside the closure, and `write_time_step` hands your error back
 unchanged.
 
+### Which precision should be used for the floating point data?
+
+Both `f32` and `f64` are accepted, for the mesh coordinates as well as for the point and cell data,
+and are written at the precision they are passed in — whichever the calling code already holds. No
+conversion happens in either direction.
+
+`f32` halves the size of the written data. For attribute data that is usually all there is to it,
+but for the mesh coordinates it comes with a caveat: on a domain far away from the origin, `f32`
+coordinates produce visible geometric jitter in ParaView, because the absolute coordinate eats up
+the mantissa.
+
 ### Which data storage should be used for the heavy data?
 
 The xdmf format allows to separate the storing of light and heavy data. Different data storage methods are implemented for the latter:

@@ -59,7 +59,9 @@ impl TimeSeriesWriter {
     ///
     /// Sizes of the inputs are validated to ensure consistency with the mesh and defined cell types.
     ///
-    /// The coordinates are taken as `f32` or `f64`
+    /// The coordinates are taken as `f32` or `f64`, whichever the caller already holds, and are
+    /// written at that precision.
+    ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_mesh", xdmf::DataStorage::AsciiInline)
