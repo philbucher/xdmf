@@ -34,19 +34,29 @@ let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
 // write the mesh
 let mut time_series_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types).expect("failed to write mesh");
 
-// the data buffers, reused across time steps: `Values` only borrows them
-let point_values = vec![0.0; 9];
+// each attribute is written as it is passed, so these buffers can be refilled and reused
+// for every field of every time step
+let mut point_values = vec![0.0; 9];
 let cell_values = vec![0.0, 1.0];
 
 // write the data for 10 time steps
 for i in 0..10 {
-    time_series_writer
-        .write_data(
-            &i.to_string(),
-            [("point_data", xdmf::DataAttribute::Vector, point_values.as_slice().into())],
-            [("cell_data", xdmf::DataAttribute::Scalar, cell_values.as_slice().into())],
-        )
-        .expect("failed to write time step data");
+    let mut step = time_series_writer
+        .time_step(&i.to_string())
+        .expect("failed to start time step");
+
+    step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)
+        .expect("failed to write point data");
+
+    point_values.fill(i as f64); // the same buffer, refilled for the next attribute
+    step.point_data("more_point_data", xdmf::DataAttribute::Vector, &point_values)
+        .expect("failed to write point data");
+
+    step.cell_data("cell_data", xdmf::DataAttribute::Scalar, &cell_values)
+        .expect("failed to write cell data");
+
+    // nothing reaches the XDMF file until the step is written
+    step.write().expect("failed to write time step");
 }
 ~~~
 

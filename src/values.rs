@@ -49,6 +49,30 @@ impl<'a> From<&'a [u64]> for Values<'a> {
     }
 }
 
+impl<'a> From<&'a Vec<f64>> for Values<'a> {
+    fn from(vec: &'a Vec<f64>) -> Self {
+        Self::F64(Cow::Borrowed(vec))
+    }
+}
+
+impl<'a> From<&'a Vec<u64>> for Values<'a> {
+    fn from(vec: &'a Vec<u64>) -> Self {
+        Self::U64(Cow::Borrowed(vec))
+    }
+}
+
+impl<'a, const N: usize> From<&'a [f64; N]> for Values<'a> {
+    fn from(array: &'a [f64; N]) -> Self {
+        Self::F64(Cow::Borrowed(array))
+    }
+}
+
+impl<'a, const N: usize> From<&'a [u64; N]> for Values<'a> {
+    fn from(array: &'a [u64; N]) -> Self {
+        Self::U64(Cow::Borrowed(array))
+    }
+}
+
 impl Values<'_> {
     pub(crate) fn precision(&self, format: Format) -> u8 {
         match self {

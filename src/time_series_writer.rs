@@ -139,7 +139,7 @@ impl TimeSeriesWriter {
             num_cells,
         };
 
-        ts_writer.write()?;
+        ts_writer.write_xdmf_file()?;
 
         Ok(ts_writer)
     }
@@ -262,13 +262,10 @@ pub struct TimeSeriesDataWriter {
 }
 
 impl TimeSeriesDataWriter {
-    /// Write point and cell data for a specific time step.
+    /// Begin a time step, returning a [`TimeStep`] to write its point and cell data into.
     ///
-    /// Each entry is a `(name, attribute, values)` triple; pass an empty iterator (e.g. `[]`) to
-    /// write no data of that kind. Attributes appear in the output in the order given here.
-    ///
-    /// Accepts str for time to avoid dealing with formatting, thus leaving it to the user.
-    /// Sizes of the data arrays are validated to ensure consistency with the mesh and defined dat types.
+    /// The time is accepted as a str to avoid dealing with formatting, thus leaving it to the
+    /// user. It is validated once to avoid duplicated times
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_data", xdmf::DataStorage::AsciiInline)
@@ -284,95 +281,70 @@ impl TimeSeriesDataWriter {
     ///     .write_mesh(&coords, &connectivity, &cell_types)
     ///     .expect("failed to write mesh");
     ///
-    /// // buffers are reused across time steps, `Values` only borrows them
-    /// let point_values = vec![0.0; 9];
+    /// // each attribute is written as it is passed, so a single buffer can be refilled and
+    /// // reused for every field of every time step
+    /// let mut point_values = vec![0.0; 9];
     /// let cell_values = vec![0.0, 1.0];
     ///
     /// // write the data for 10 time steps
     /// for i in 0..10 {
-    ///     time_series_writer
-    ///         .write_data(
-    ///             &i.to_string(),
-    ///             [(
-    ///                 "point_data",
-    ///                 xdmf::DataAttribute::Vector,
-    ///                 point_values.as_slice().into(),
-    ///             )],
-    ///             [(
-    ///                 "cell_data",
-    ///                 xdmf::DataAttribute::Scalar,
-    ///                 cell_values.as_slice().into(),
-    ///             )],
-    ///         )
-    ///         .expect("failed to write time step data");
+    ///     let mut step = time_series_writer
+    ///         .time_step(&i.to_string())
+    ///         .expect("failed to start time step");
+    ///
+    ///     step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)
+    ///         .expect("failed to write point data");
+    ///
+    ///     point_values.fill(i as f64); // refill the same buffer for the next attribute
+    ///     step.point_data(
+    ///         "more_point_data",
+    ///         xdmf::DataAttribute::Vector,
+    ///         &point_values,
+    ///     )
+    ///     .expect("failed to write point data");
+    ///
+    ///     step.cell_data("cell_data", xdmf::DataAttribute::Scalar, &cell_values)
+    ///         .expect("failed to write cell data");
+    ///
+    ///     step.write().expect("failed to write time step");
     /// }
     /// ```
-    pub fn write_data<'a>(
-        &mut self,
-        time: &str,
-        point_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
-        cell_data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
-    ) -> Result<()> {
-        let point_data = collect_data(point_data, POINT_DATA)?;
-        let cell_data = collect_data(cell_data, CELL_DATA)?;
+    pub fn time_step(&mut self, time: &str) -> Result<TimeStep<'_>> {
+        let parsed_time = time
+            .parse::<f64>()
+            .map_err(|_parse_error| Error::InvalidTimeStep {
+                time: time.to_string(),
+                reason: "must be a valid float".to_string(),
+            })?;
+        let time_bits = parsed_time.to_bits();
 
-        let time_bits = self.validate_data(time, &point_data, &cell_data)?;
-
-        self.writer.write_data_initialize(time)?;
-
-        // Run `write_data_finalize` regardless of whether writing the attributes below
-        // succeeds, so a mid-write failure leaves the backing writer's `write_data_initialize`/
-        // `write_data_finalize` pairing balanced instead of poisoning every later time step.
-        // The write error (if any) must win over a finalize error, not be masked by it.
-        let write_result = self.write_attributes(&point_data, &cell_data);
-        let finalize_result = self.writer.write_data_finalize();
-
-        let new_attributes = write_result?;
-        finalize_result?;
-
-        self.attributes.push((time.to_string(), new_attributes));
-        self.written_times.insert(time_bits, time.to_string());
-
-        self.write()
-    }
-
-    fn write_attributes(
-        &mut self,
-        point_data: &[(&str, DataAttribute, Values<'_>)],
-        cell_data: &[(&str, DataAttribute, Values<'_>)],
-    ) -> Result<Vec<attribute::Attribute>> {
-        let format = self.writer.format();
-        let mut new_attributes = Vec::with_capacity(point_data.len() + cell_data.len());
-
-        for (data, center) in [
-            (point_data, attribute::Center::Node),
-            (cell_data, attribute::Center::Cell),
-        ] {
-            for (data_name, data_attribute, vals) in data {
-                let data_item = DataItem {
-                    name: None,
-                    dimensions: Some(vals.dimensions(*data_attribute)),
-                    number_type: Some(vals.number_type()),
-                    format: Some(format),
-                    precision: Some(vals.precision(format)),
-                    endian: format.endian(),
-                    data: self.writer.write_data(data_name, center, vals)?,
-                    reference: None,
-                };
-
-                new_attributes.push(attribute::Attribute {
-                    name: (*data_name).to_string(),
-                    attribute_type: (*data_attribute).into(),
-                    center,
-                    data_items: vec![data_item],
-                });
-            }
+        // check if the time step has already been written, keyed on the parsed value rather
+        // than the string so different spellings of the same instant are caught too (e.g "0.1" == "0.10")
+        if let Some(existing) = self.written_times.get(&time_bits) {
+            // naming the earlier spelling is only informative if it differs from this one
+            let reason = if existing == time {
+                "already written".to_string()
+            } else {
+                format!("already written (as '{existing}')")
+            };
+            return Err(Error::InvalidTimeStep {
+                time: time.to_string(),
+                reason,
+            });
         }
 
-        Ok(new_attributes)
+        Ok(TimeStep {
+            writer: self,
+            time: time.to_string(),
+            time_bits,
+            attributes: Vec::new(),
+            point_names: HashSet::new(),
+            cell_names: HashSet::new(),
+            initialized: false,
+        })
     }
 
-    fn write(&mut self) -> Result<()> {
+    fn write_xdmf_file(&mut self) -> Result<()> {
         self.writer.flush()?;
 
         // create the XDMF structure
@@ -430,60 +402,165 @@ impl TimeSeriesDataWriter {
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
             .map_err(io_ctx("renaming XDMF file", &temp_xdmf_file_name))
     }
+}
 
-    // Returns the bit pattern of the parsed time on success, so the caller does not have to
-    // re-parse (and re-unwrap) a value already known to be a valid float.
-    fn validate_data(
-        &self,
-        time: &str,
-        point_data: &[(&str, DataAttribute, Values<'_>)],
-        cell_data: &[(&str, DataAttribute, Values<'_>)],
-    ) -> Result<u64> {
-        let parsed_time = time
-            .parse::<f64>()
-            .map_err(|_parse_error| Error::InvalidTimeStep {
-                time: time.to_string(),
-                reason: "must be a valid float".to_string(),
-            })?;
-        let time_bits = parsed_time.to_bits();
+/// A single time step being written, obtained from [`TimeSeriesDataWriter::time_step`].
+///
+/// Each [`point_data`](Self::point_data)/[`cell_data`](Self::cell_data) call writes its heavy data
+/// before returning, so the caller's buffer is free again immediately and one buffer can serve
+/// every field of the step. The light data (XML) is written once, by [`write`](Self::write).
+///
+/// Dropping a step without writing it discards it: no `<Grid>` is added to the XDMF file and the
+/// time stays available. Heavy data already written for the step stays on disk, unreferenced.
+#[must_use = "a TimeStep is only written to the XDMF file when `write` is called"]
+pub struct TimeStep<'a> {
+    writer: &'a mut TimeSeriesDataWriter,
+    time: String,
+    time_bits: u64,
+    attributes: Vec<attribute::Attribute>,
+    // Point and cell names are tracked separately: the same name may be used for one of each
+    point_names: HashSet<String>,
+    cell_names: HashSet<String>,
+    // Whether `write_data_initialize` has run. Deferred to the first attribute so that a step
+    // which never writes anything leaves no trace at all
+    initialized: bool,
+}
 
-        // check if the time step has already been written, keyed on the parsed value rather
-        // than the string so different spellings of the same instant are caught too
-        if let Some(existing) = self.written_times.get(&time_bits) {
-            // naming the earlier spelling is only informative if it differs from this one
-            let reason = if existing == time {
-                "already written".to_string()
-            } else {
-                format!("already written (as '{existing}')")
-            };
-            return Err(Error::InvalidTimeStep {
-                time: time.to_string(),
-                reason,
+impl TimeStep<'_> {
+    /// Write one point attribute, immediately.
+    pub fn point_data<'v>(
+        &mut self,
+        name: &str,
+        attribute: DataAttribute,
+        data: impl Into<Values<'v>>,
+    ) -> Result<()> {
+        self.write_attribute(name, attribute, data.into(), attribute::Center::Node)
+    }
+
+    /// Write one cell attribute, immediately.
+    pub fn cell_data<'v>(
+        &mut self,
+        name: &str,
+        attribute: DataAttribute,
+        data: impl Into<Values<'v>>,
+    ) -> Result<()> {
+        self.write_attribute(name, attribute, data.into(), attribute::Center::Cell)
+    }
+
+    fn write_attribute(
+        &mut self,
+        name: &str,
+        data_attribute: DataAttribute,
+        values: Values<'_>,
+        center: attribute::Center,
+    ) -> Result<()> {
+        let is_point_data = center == attribute::Center::Node;
+        let (label, num_entities) = if is_point_data {
+            (POINT_DATA, self.writer.num_points)
+        } else {
+            (CELL_DATA, self.writer.num_cells)
+        };
+
+        if !is_valid_data_name(name) {
+            return Err(Error::InvalidData {
+                reason: format!(
+                    "data name '{name}' of {label} is not valid, must be non-empty and contain \
+                     only alphanumeric characters, underscores or dashes"
+                ),
             });
         }
 
-        // check if some data is provided
-        if point_data.len() + cell_data.len() == 0 {
+        let seen_names = if is_point_data {
+            &self.point_names
+        } else {
+            &self.cell_names
+        };
+        if seen_names.contains(name) {
+            return Err(Error::InvalidData {
+                reason: format!("name '{name}' of {label} is used more than once"),
+            });
+        }
+
+        let exp_size = num_entities * data_attribute.size();
+        if values.len() != exp_size {
+            return Err(Error::InvalidData {
+                reason: format!(
+                    "size of {label} '{name}' must be {exp_size}, but is {}",
+                    values.len()
+                ),
+            });
+        }
+
+        // reject values the backend's format cannot represent (e.g. binary's u64->u32 range)
+        // before anything is written, so a caller mistake leaves no partial output behind
+        self.writer.writer.validate_values(&values)?;
+
+        if !self.initialized {
+            self.writer.writer.write_data_initialize(&self.time)?;
+            self.initialized = true;
+        }
+
+        let format = self.writer.writer.format();
+        let data_item = DataItem {
+            name: None,
+            dimensions: Some(values.dimensions(data_attribute)),
+            number_type: Some(values.number_type()),
+            format: Some(format),
+            precision: Some(values.precision(format)),
+            endian: format.endian(),
+            data: self.writer.writer.write_data(name, center, &values)?,
+            reference: None,
+        };
+
+        self.attributes.push(attribute::Attribute {
+            name: name.to_string(),
+            attribute_type: data_attribute.into(),
+            center,
+            data_items: vec![data_item],
+        });
+
+        // recorded only once the attribute is actually written, so a rejected call can be
+        // retried under the same name
+        if is_point_data {
+            self.point_names.insert(name.to_string());
+        } else {
+            self.cell_names.insert(name.to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Finish the time step and write it to the XDMF file.
+    pub fn write(mut self) -> Result<()> {
+        if self.attributes.is_empty() {
             return Err(Error::InvalidData {
                 reason: "at least one of point_data or cell_data must be provided".to_string(),
             });
         }
 
-        check_data_size(point_data, self.num_points, POINT_DATA)?;
-        check_data_size(cell_data, self.num_cells, CELL_DATA)?;
+        // cleared before the `?` so that `Drop` does not finalize a second time if this fails
+        self.initialized = false;
+        self.writer.writer.write_data_finalize()?;
 
-        // check that names do not contain forbidden characters
-        validate_data_name(point_data, POINT_DATA)?;
-        validate_data_name(cell_data, CELL_DATA)?;
+        let attributes = std::mem::take(&mut self.attributes);
+        let time = std::mem::take(&mut self.time);
 
-        // reject values the backend's format cannot represent (e.g. binary's u64->u32 range)
-        // up front, before write_data_initialize runs, so a caller mistake here can never leave
-        // the writer poisoned for the next call
-        for (_, _, vals) in point_data.iter().chain(cell_data.iter()) {
-            self.writer.validate_values(vals)?;
+        self.writer.attributes.push((time.clone(), attributes));
+        self.writer.written_times.insert(self.time_bits, time);
+
+        self.writer.write_xdmf_file()
+    }
+}
+
+impl Drop for TimeStep<'_> {
+    fn drop(&mut self) {
+        if self.initialized {
+            // The step is being abandoned rather than written, so its data is discarded --
+            // but the backend's `write_data_initialize`/`write_data_finalize` pairing still has
+            // to be balanced, or every later time step fails with `Error::Internal`. `Drop`
+            // cannot report errors, and there is nothing a caller could do about one here.
+            let _ = self.writer.writer.write_data_finalize();
         }
-
-        Ok(time_bits)
     }
 }
 
@@ -495,60 +572,6 @@ impl TimeSeriesDataWriter {
 const POINT_DATA: &str = "point_data";
 /// Label for cell data in user-facing error messages, named after `write_data`'s argument.
 const CELL_DATA: &str = "cell_data";
-
-// Collect the caller's iterator, keeping its order but rejecting a name used more than once
-// (which would otherwise produce two attributes of the same name in the same grid).
-fn collect_data<'a>(
-    data: impl IntoIterator<Item = (&'a str, DataAttribute, Values<'a>)>,
-    label: &str,
-) -> Result<Vec<(&'a str, DataAttribute, Values<'a>)>> {
-    let collected: Vec<_> = data.into_iter().collect();
-
-    let mut seen_names = HashSet::with_capacity(collected.len());
-    for (name, _, _) in &collected {
-        if !seen_names.insert(name) {
-            return Err(Error::InvalidData {
-                reason: format!("name '{name}' of {label} is used more than once"),
-            });
-        }
-    }
-
-    Ok(collected)
-}
-
-// check sizes of point_data and cell_data
-fn check_data_size(
-    data_input: &[(&str, DataAttribute, Values<'_>)],
-    num_entities: usize,
-    label: &str,
-) -> Result<()> {
-    for (name, data_attribute, vals) in data_input {
-        let exp_size = num_entities * data_attribute.size();
-        if vals.len() != exp_size {
-            return Err(Error::InvalidData {
-                reason: format!(
-                    "size of {label} '{name}' must be {exp_size}, but is {}",
-                    vals.len()
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_data_name(data_input: &[(&str, DataAttribute, Values<'_>)], label: &str) -> Result<()> {
-    for (name, _, _) in data_input {
-        if !is_valid_data_name(name) {
-            return Err(Error::InvalidData {
-                reason: format!(
-                    "data name '{name}' of {label} is not valid, must be non-empty and contain \
-                     only alphanumeric characters, underscores or dashes"
-                ),
-            });
-        };
-    }
-    Ok(())
-}
 
 fn is_valid_data_name(name: &str) -> bool {
     if name.is_empty() {
@@ -971,47 +994,177 @@ mod tests {
             .unwrap();
 
         let values = vec![5.0; NUM_POINTS];
-        let point_data = || {
-            [(
-                "point_data1",
-                DataAttribute::Scalar,
-                values.as_slice().into(),
-            )]
-        };
 
         // Valid time step
-        writer.write_data("0.1", point_data(), []).unwrap();
+        let mut step = writer.time_step("0.1").unwrap();
+        step.point_data("point_data1", DataAttribute::Scalar, &values)
+            .unwrap();
+        step.write().unwrap();
 
         // no data at all provided
-        let res = writer.write_data("1.0", [], []);
+        let res = writer.time_step("1.0").unwrap().write();
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidData { reason } if reason.contains("at least one of point_data or cell_data")
         );
 
         // Invalid time step (already exists)
-        let res = writer.write_data("0.1", point_data(), []);
+        let res = writer.time_step("0.1");
         std::assert_matches!(
-            res.unwrap_err(),
+            res.err().unwrap(),
             Error::InvalidTimeStep { time, reason }
                 if time == "0.1" && reason == "already written"
         );
 
         // Invalid time step (not a float)
-        let res = writer.write_data("invalid_time", [], []);
+        let res = writer.time_step("invalid_time");
         std::assert_matches!(
-            res.unwrap_err(),
+            res.err().unwrap(),
             Error::InvalidTimeStep { time, reason }
                 if time == "invalid_time" && reason.contains("must be a valid float")
         );
 
         // Invalid time step (empty)
-        let res = writer.write_data("", [], []);
+        let res = writer.time_step("");
         std::assert_matches!(
-            res.unwrap_err(),
+            res.err().unwrap(),
             Error::InvalidTimeStep { time, reason }
                 if time.is_empty() && reason.contains("must be a valid float")
         );
+    }
+
+    #[test]
+    fn time_step_dropped_without_write_leaves_the_writer_usable() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::Ascii).unwrap();
+
+        const NUM_POINTS: usize = 10;
+
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; NUM_POINTS * 3],
+                &[0, 2, 3, 4],
+                &[CellType::Vertex; 4],
+            )
+            .unwrap();
+
+        let values = vec![5.0; NUM_POINTS];
+
+        // a step whose data is written but which is never finished with `write`
+        {
+            let mut step = writer.time_step("0.1").unwrap();
+            step.point_data("abandoned", DataAttribute::Scalar, &values)
+                .unwrap();
+        }
+
+        // the backing writer is not poisoned: the same time can be used again (the abandoned
+        // step never consumed it), and so can a different one
+        let mut step = writer.time_step("0.1").unwrap();
+        step.point_data("kept", DataAttribute::Scalar, &values)
+            .unwrap();
+        step.write().unwrap();
+
+        let mut step = writer.time_step("0.2").unwrap();
+        step.point_data("kept", DataAttribute::Scalar, &values)
+            .unwrap();
+        step.write().unwrap();
+
+        // the abandoned step left no trace in the light data
+        let xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+        assert!(!xdmf.contains("abandoned"));
+        assert_eq!(xdmf.matches("<Grid Name=\"time_series-t").count(), 2);
+    }
+
+    #[test]
+    fn time_step_with_no_attributes_is_not_initialized() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::Ascii).unwrap();
+
+        let mut writer = writer
+            .write_mesh(&[0.0; 3], &[0], &[CellType::Vertex])
+            .unwrap();
+
+        // dropped with nothing written: `write_data_initialize` never ran, so there is nothing
+        // for `Drop` to finalize and no per-step file to leave behind
+        drop(writer.time_step("0.1").unwrap());
+
+        let mut step = writer.time_step("0.1").unwrap();
+        step.point_data("data", DataAttribute::Scalar, &[1.0])
+            .unwrap();
+        step.write().unwrap();
+    }
+
+    #[test]
+    fn time_step_mixes_value_types_within_one_step() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_POINTS: usize = 4;
+
+        let mut writer = writer
+            .write_mesh(
+                &[0.0; NUM_POINTS * 3],
+                &[0, 1, 2, 3],
+                &[CellType::Vertex; 4],
+            )
+            .unwrap();
+
+        // f64 and u64 attributes in the same step -- the case a single generic type parameter
+        // on the old list-shaped `write_data` could not express
+        let floats = vec![1.5; NUM_POINTS];
+        let ids: Vec<u64> = (0..NUM_POINTS as u64).collect();
+
+        let mut step = writer.time_step("0.0").unwrap();
+        step.point_data("floats", DataAttribute::Scalar, &floats)
+            .unwrap();
+        step.cell_data("ids", DataAttribute::Scalar, &ids).unwrap();
+        step.write().unwrap();
+
+        let xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+        assert!(xdmf.contains(r#"Name="floats" AttributeType="Scalar" Center="Node""#));
+        assert!(xdmf.contains(r#"Name="ids" AttributeType="Scalar" Center="Cell""#));
+        assert!(xdmf.contains(r#"NumberType="UInt""#));
+    }
+
+    #[test]
+    fn time_step_reuses_a_single_buffer_across_attributes() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
+
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+
+        const NUM_POINTS: usize = 3;
+
+        let mut writer = writer
+            .write_mesh(&[0.0; NUM_POINTS * 3], &[0, 1, 2], &[CellType::Vertex; 3])
+            .unwrap();
+
+        // the point of the whole builder: one allocation, refilled between attributes
+        let mut buf = vec![0.0; NUM_POINTS];
+
+        let mut step = writer.time_step("0.0").unwrap();
+
+        buf.fill(1.0);
+        step.point_data("first", DataAttribute::Scalar, &buf)
+            .unwrap();
+
+        buf.fill(2.0);
+        step.point_data("second", DataAttribute::Scalar, &buf)
+            .unwrap();
+
+        step.write().unwrap();
+
+        let xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+        let one = "1.0000000000000000e0";
+        let two = "2.0000000000000000e0";
+        assert!(xdmf.contains(&format!(">{one} {one} {one}<")));
+        assert!(xdmf.contains(&format!(">{two} {two} {two}<")));
     }
 
     #[test]
@@ -1032,18 +1185,16 @@ mod tests {
             .unwrap();
 
         let values = vec![5.0; NUM_POINTS];
-        let point_data = || {
-            [(
-                "point_data1",
-                DataAttribute::Scalar,
-                values.as_slice().into(),
-            )]
+        let write_step = |writer: &mut TimeSeriesDataWriter, time: &str| -> Result<()> {
+            let mut step = writer.time_step(time)?;
+            step.point_data("point_data1", DataAttribute::Scalar, &values)?;
+            step.write()
         };
 
-        writer.write_data("0.1", point_data(), []).unwrap();
+        write_step(&mut writer, "0.1").unwrap();
 
         // a different spelling of the same numeric value is still a duplicate
-        let res = writer.write_data("0.10", point_data(), []);
+        let res = write_step(&mut writer, "0.10");
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
@@ -1051,7 +1202,7 @@ mod tests {
         );
 
         // a genuinely different value is accepted
-        writer.write_data("0.2", point_data(), []).unwrap();
+        write_step(&mut writer, "0.2").unwrap();
     }
 
     #[test]
@@ -1073,29 +1224,25 @@ mod tests {
 
         let values = vec![5.0; NUM_POINTS];
 
-        let res = writer.write_data(
-            "0.0",
-            [
-                ("duplicate", DataAttribute::Scalar, values.as_slice().into()),
-                ("duplicate", DataAttribute::Scalar, values.as_slice().into()),
-            ],
-            [],
-        );
+        let mut step = writer.time_step("0.0").unwrap();
+        step.point_data("duplicate", DataAttribute::Scalar, &values)
+            .unwrap();
+        let res = step.point_data("duplicate", DataAttribute::Scalar, &values);
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidData { reason }
                 if reason.contains("name 'duplicate' of point_data is used more than once")
         );
+        drop(step);
 
         // the same name for point_data and cell_data is allowed, they are separate entities
         let cell_values = vec![5.0; 4];
-        writer
-            .write_data(
-                "0.0",
-                [("data", DataAttribute::Scalar, values.as_slice().into())],
-                [("data", DataAttribute::Scalar, cell_values.as_slice().into())],
-            )
+        let mut step = writer.time_step("0.0").unwrap();
+        step.point_data("data", DataAttribute::Scalar, &values)
             .unwrap();
+        step.cell_data("data", DataAttribute::Scalar, &cell_values)
+            .unwrap();
+        step.write().unwrap();
     }
 
     #[test]
@@ -1118,7 +1265,9 @@ mod tests {
 
         let mut err_for = |name: &str, attribute: DataAttribute, len: usize| -> Error {
             writer
-                .write_data("0.0", [(name, attribute, vec![5.0; len].into())], [])
+                .time_step("0.0")
+                .unwrap()
+                .point_data(name, attribute, vec![5.0; len])
                 .unwrap_err()
         };
 
@@ -1173,7 +1322,9 @@ mod tests {
 
         let mut err_for = |name: &str, attribute: DataAttribute, len: usize| -> Error {
             writer
-                .write_data("0.0", [], [(name, attribute, vec![5.0; len].into())])
+                .time_step("0.0")
+                .unwrap()
+                .cell_data(name, attribute, vec![5.0; len])
                 .unwrap_err()
         };
 
@@ -1210,17 +1361,20 @@ mod tests {
 
     #[test]
     fn test_validate_data_names() {
-        let data = [("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1].into())];
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
 
-        validate_data_name(&data, CELL_DATA).unwrap();
+        let writer = TimeSeriesWriter::new(&xdmf_file_path, DataStorage::AsciiInline).unwrap();
+        let mut writer = writer
+            .write_mesh(&[0.0; 3], &[0], &[CellType::Vertex])
+            .unwrap();
 
-        let data_invalid_name = [(
-            "cell[_data]_ten",
-            DataAttribute::Scalar,
-            vec![0.0; 1].into(),
-        )];
+        let mut step = writer.time_step("0.0").unwrap();
 
-        let res = validate_data_name(&data_invalid_name, POINT_DATA);
+        step.cell_data("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1])
+            .unwrap();
+
+        let res = step.point_data("cell[_data]_ten", DataAttribute::Scalar, vec![0.0; 1]);
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidData { reason }
@@ -1362,12 +1516,17 @@ mod tests {
             written_times: HashMap::new(),
         };
 
-        let point_data = || [("scalar_data", DataAttribute::Scalar, vec![0.0; 0].into())];
+        let write_step = |writer: &mut TimeSeriesDataWriter, time: &str| {
+            let mut step = writer.time_step(time).unwrap();
+            step.point_data("scalar_data", DataAttribute::Scalar, vec![0.0; 0])
+                .unwrap();
+            step.write().unwrap();
+        };
 
-        writer.write_data("0.0", point_data(), []).unwrap();
-        writer.write_data("1.0", point_data(), []).unwrap();
-        writer.write_data("2.0", point_data(), []).unwrap();
-        writer.write_data("10.0", point_data(), []).unwrap();
+        write_step(&mut writer, "0.0");
+        write_step(&mut writer, "1.0");
+        write_step(&mut writer, "2.0");
+        write_step(&mut writer, "10.0");
 
         // Check that the data are in the correct order
 
@@ -1517,27 +1676,21 @@ mod tests {
         };
 
         // "ok" is written successfully before "boom" fails, so this genuinely fails partway
-        // through the attribute loop, after `write_data_initialize` already ran.
-        let res = writer.write_data(
-            "0.0",
-            [
-                ("ok", DataAttribute::Scalar, vec![0.0; 0].into()),
-                ("boom", DataAttribute::Scalar, vec![0.0; 0].into()),
-            ],
-            [],
-        );
+        // through the step, after `write_data_initialize` already ran.
+        let mut step = writer.time_step("0.0").unwrap();
+        step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
+            .unwrap();
+        let res = step.point_data("boom", DataAttribute::Scalar, vec![0.0; 0]);
         std::assert_matches!(res.unwrap_err(), Error::Io { .. });
+        drop(step);
 
         // The failed step must not have consumed the time slot ("0.0" is retried, not a new
         // time) and must not have left the backing writer poisoned: `FlakyWriter` itself would
         // fail with `Error::Internal("writing data was already initialized")` here if
-        // `write_data_finalize` had been skipped on the error path above.
-        writer
-            .write_data(
-                "0.0",
-                [("ok", DataAttribute::Scalar, vec![0.0; 0].into())],
-                [],
-            )
+        // `TimeStep::drop` had skipped `write_data_finalize`.
+        let mut step = writer.time_step("0.0").unwrap();
+        step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
             .unwrap();
+        step.write().unwrap();
     }
 }

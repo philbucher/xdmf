@@ -21,7 +21,7 @@ pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use error::{Error, Result};
-pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
+pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use values::Values;
 pub use xdmf_elements::CellType;
 
@@ -104,9 +104,9 @@ pub(crate) trait DataWriter {
     }
 
     /// Validate that `data` can be represented by this backend's format, without mutating state
-    /// or touching disk. Called for every attribute before `write_data_initialize` runs, so a
-    /// value out of the backend's representable range is reported as an upfront caller error
-    /// rather than as a mid-write failure that would otherwise leave the writer poisoned.
+    /// or touching disk. Called for each attribute before it is written, so a value out of the
+    /// backend's representable range is reported as a caller error that leaves no partial output
+    /// behind, rather than as a mid-write failure.
     fn validate_values(&self, _data: &Values<'_>) -> Result<()> {
         Ok(())
     }

@@ -38,21 +38,16 @@ fn write_and_verify_binary() {
         .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
-    xdmf_writer
-        .write_data(
-            "0",
-            [(
-                "temperature",
-                xdmf::DataAttribute::Scalar,
-                vec![10.0, 11.0, 12.0, 13.0].into(),
-            )],
-            [(
-                "region_id",
-                xdmf::DataAttribute::Scalar,
-                vec![100_u64, 200].into(),
-            )],
-        )
+    let mut step = xdmf_writer.time_step("0").unwrap();
+    step.point_data(
+        "temperature",
+        xdmf::DataAttribute::Scalar,
+        vec![10.0, 11.0, 12.0, 13.0],
+    )
+    .unwrap();
+    step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![100_u64, 200])
         .unwrap();
+    step.write().unwrap();
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
     let xdmf_xml = std::fs::read_to_string(&xdmf_file).unwrap();
@@ -101,14 +96,11 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
         .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
-    let res = xdmf_writer.write_data(
-        "0",
-        [],
-        [(
-            "region_id",
-            xdmf::DataAttribute::Scalar,
-            vec![u64::from(u32::MAX) + 1].into(),
-        )],
+    let mut step = xdmf_writer.time_step("0").unwrap();
+    let res = step.cell_data(
+        "region_id",
+        xdmf::DataAttribute::Scalar,
+        vec![u64::from(u32::MAX) + 1],
     );
     std::assert_matches!(
         res.unwrap_err(),
@@ -121,12 +113,11 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
     let bin_dir = xdmf_file_path.with_extension("bin");
     assert!(!bin_dir.join("data_t_0_cell_data_region_id.bin").exists());
 
+    drop(step);
+
     // the writer must not be left poisoned by the failed step: a following valid step succeeds
-    xdmf_writer
-        .write_data(
-            "1",
-            [],
-            [("region_id", xdmf::DataAttribute::Scalar, vec![7_u64].into())],
-        )
+    let mut step = xdmf_writer.time_step("1").unwrap();
+    step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u64])
         .unwrap();
+    step.write().unwrap();
 }
