@@ -1,6 +1,6 @@
 """Run under `pvpython` (ParaView's bundled interpreter, not a regular Python) to check that the
-xdmf time series -- written beforehand by `cargo run --example paraview_smoke` -- actually open
-and read back correctly in ParaView. Every fixture listed in `expected.json` is checked; that is
+xdmf time series -- written beforehand by `cargo run --example paraview_smoke` -- actually opens
+and reads back correctly in ParaView. Every fixture listed in `expected.json` is checked; that is
 one per float precision (f64 and f32 coordinates/attributes) for the storage backend under test.
 Also checks that vector/tensor fields come back with the right number of components, not just the
 right numeric values, since XDMF's `AttributeType` (Scalar/Vector/.../Matrix) is what ParaView uses
@@ -28,6 +28,11 @@ SUPPORTS_MATRIX_ATTRIBUTE = (vtkVersion.GetVTKMajorVersion(), vtkVersion.GetVTKM
     9,
     6,
 )
+
+# How many fixtures `paraview_smoke` writes per run: one f64 and one f32. Checked rather than just
+# iterated over, so that an `expected.json` which lists fewer fixtures than expected -- or none at
+# all -- fails loudly instead of passing this script vacuously.
+EXPECTED_NUM_FIXTURES = 2
 
 
 def fail(message: str) -> None:
@@ -85,7 +90,11 @@ def check_fixture(fixture: dict, directory: Path) -> None:
 def main(expected_path: Path) -> None:
     expected = json.loads(expected_path.read_text())
 
-    for fixture in expected["fixtures"]:
+    fixtures = expected.get("fixtures", [])
+    if len(fixtures) != EXPECTED_NUM_FIXTURES:
+        fail(f"{expected_path}: expected {EXPECTED_NUM_FIXTURES} fixture(s), got {len(fixtures)}")
+
+    for fixture in fixtures:
         check_fixture(fixture, expected_path.parent)
 
 
