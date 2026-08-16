@@ -42,7 +42,7 @@ let cell_values = vec![0.0, 1.0];
 // write the data for 10 time steps
 for i in 0..10 {
     time_series_writer
-        .time_step(&i.to_string(), |step| {
+        .write_time_step(&i.to_string(), |step| {
             step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)?;
 
             point_values.fill(i as f64); // the same buffer, refilled for the next attribute
@@ -58,7 +58,7 @@ The step is scoped to the closure: when it returns `Ok`, the step is added to th
 returns an error, the step is discarded and the heavy data already written for it is removed again.
 So a step can neither be left half-written by forgetting to complete it, nor leave data behind that
 nothing references. The error may be one of your own — any type that `xdmf::Error` converts into
-works, so `?` can be used on both inside the closure, and `time_step` hands your error back
+works, so `?` can be used on both inside the closure, and `write_time_step` hands your error back
 unchanged.
 
 ### Which data storage should be used for the heavy data?

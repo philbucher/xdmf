@@ -56,7 +56,7 @@ fn write_xdmf() {
 
         // deliberately not in alphabetical order: attributes must come out in the order written
         xdmf_writer
-            .time_step(&i.to_string(), |step| {
+            .write_time_step(&i.to_string(), |step| {
                 step.point_data(
                     "point_data_scalar",
                     xdmf::DataAttribute::Scalar,
@@ -344,7 +344,7 @@ fn write_xdmf_point_mesh() {
         let point_data_scalar: Vec<f64> = (0..17).map(|j| j as f64 + i as f64).collect();
 
         xdmf_writer
-            .time_step(&i.to_string(), |step| {
+            .write_time_step(&i.to_string(), |step| {
                 step.point_data(
                     "point_data_scalar",
                     xdmf::DataAttribute::Scalar,

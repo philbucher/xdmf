@@ -17,7 +17,8 @@ longer-standing complaint.
 > below, all decided during implementation:
 >
 > - **The step is scoped to a closure, not returned as a value to be finished by hand.** The
->   signature is `time_step(time, |step| -> Result<()>)`; there is no public `commit()`/`write()`.
+>   signature is `write_time_step(time, |step| -> Result<()>)` (named for `write_mesh`, the only
+>   other writing method); there is no public `commit()`/`write()`.
 >   The design below assumed an explicit finishing call guarded by `#[must_use]`, but that lint
 >   only fires when the value is discarded as a statement — every real call site binds it with
 >   `let mut step = ...`, so forgetting to finish the step was silent. Scoping it to a closure
@@ -39,8 +40,13 @@ longer-standing complaint.
 >   builder is agnostic to the variant count — `impl Into<Values<'a>>` is unchanged either way —
 >   so this stays `reader`'s work and is not duplicated here. See "Prerequisites".
 > - **`write_data_initialize` is deferred to the first attribute**, rather than running eagerly in
->   `time_step()`. A step that writes nothing never creates a per-step file, so there is nothing to
->   clean up and nothing for `write_data_discard` to be called on.
+>   `write_time_step()`. A step that writes nothing never creates a per-step file, so there is
+>   nothing to clean up and nothing for `write_data_discard` to be called on.
+> - **Ascii/Binary record a data file's path directly after `File::create`**, not after writing it:
+>   a write or flush that fails partway leaves the (partial) file on disk, so the discard has to
+>   know about it. Recording it any earlier would be wrong in the other direction — a failed
+>   `File::create` would leave a path to a file that never existed, which the discard would then
+>   fail to remove. The removal loop the two backends share lives in `crate::remove_step_files`.
 > - `From<&Vec<T>>` and `From<&[T; N]>` impls were appended to `values.rs` (see the gotcha below).
 >   Kept deliberately append-only, since `reader` rewrites that file into a macro — reconciling is
 >   "add two lines inside the macro".

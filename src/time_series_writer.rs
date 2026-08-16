@@ -276,6 +276,12 @@ impl TimeSeriesDataWriter {
     /// `write_step` may fail with any error type that this crate's [`Error`] converts into, so a
     /// caller can abort a step with an error of their own and get it back unchanged.
     ///
+    /// A step contains exactly the attributes that were written successfully: if `write_step`
+    /// ignores the error of a rejected attribute and returns `Ok` anyway, the step is written
+    /// without that attribute rather than failing. Only a step left with no attributes at all is
+    /// rejected, since a `<Grid>` without data is of no use. Propagating the error with `?` --
+    /// as the example below does -- is therefore what keeps a step all-or-nothing.
+    ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_data", xdmf::DataStorage::AsciiInline)
@@ -299,7 +305,7 @@ impl TimeSeriesDataWriter {
     /// // write the data for 10 time steps
     /// for i in 0..10 {
     ///     time_series_writer
-    ///         .time_step(&i.to_string(), |step| {
+    ///         .write_time_step(&i.to_string(), |step| {
     ///             step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)?;
     ///
     ///             point_values.fill(i as f64); // refill the same buffer for the next attribute
@@ -314,7 +320,7 @@ impl TimeSeriesDataWriter {
     ///         .expect("failed to write time step");
     /// }
     /// ```
-    pub fn time_step<F, E>(&mut self, time: &str, write_step: F) -> Result<(), E>
+    pub fn write_time_step<F, E>(&mut self, time: &str, write_step: F) -> Result<(), E>
     where
         F: FnOnce(&mut TimeStep<'_>) -> Result<(), E>,
         E: From<Error>,
@@ -426,7 +432,7 @@ impl TimeSeriesDataWriter {
 }
 
 /// A single time step being written, handed to the closure passed to
-/// [`TimeSeriesDataWriter::time_step`].
+/// [`TimeSeriesDataWriter::write_time_step`].
 ///
 /// Each [`point_data`](Self::point_data)/[`cell_data`](Self::cell_data) call writes its heavy data
 /// before returning, so the caller's buffer is free again immediately and one buffer can serve
@@ -558,7 +564,7 @@ impl TimeStep<'_> {
             // An attribute can fail *after* it initialized the backend, and a closure that
             // ignores that error still arrives here -- so the step is discarded rather than
             // simply dropped, otherwise the backend would stay initialized and every later
-            // step would fail. The caller's error wins over a cleanup failure, as in `time_step`.
+            // step would fail. The caller's error wins over a cleanup failure, as in `write_time_step`.
             let _discard_result = self.discard();
             return Err(Error::InvalidData {
                 reason: "at least one of point_data or cell_data must be provided".to_string(),
@@ -1032,20 +1038,20 @@ mod tests {
 
         // Valid time step
         writer
-            .time_step("0.1", |step| {
+            .write_time_step("0.1", |step| {
                 step.point_data("point_data1", DataAttribute::Scalar, &values)
             })
             .unwrap();
 
         // no data at all provided
-        let res = writer.time_step("1.0", |_step| Ok(()));
+        let res = writer.write_time_step("1.0", |_step| Ok(()));
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidData { reason } if reason.contains("at least one of point_data or cell_data")
         );
 
         // Invalid time step (already exists)
-        let res = writer.time_step("0.1", |_step| Ok(()));
+        let res = writer.write_time_step("0.1", |_step| Ok(()));
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
@@ -1053,7 +1059,7 @@ mod tests {
         );
 
         // Invalid time step (not a float)
-        let res = writer.time_step("invalid_time", |_step| Ok(()));
+        let res = writer.write_time_step("invalid_time", |_step| Ok(()));
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
@@ -1061,7 +1067,7 @@ mod tests {
         );
 
         // Invalid time step (empty)
-        let res = writer.time_step("", |_step| Ok(()));
+        let res = writer.write_time_step("", |_step| Ok(()));
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
@@ -1070,9 +1076,9 @@ mod tests {
     }
 
     #[test]
-    fn time_step_erroring_out_discards_the_data_it_already_wrote() {
-        // A caller's own error type, as `time_step`'s closure may use: this crate's errors
-        // convert into it, and it comes back out of `time_step` unchanged.
+    fn write_time_step_erroring_out_discards_the_data_it_already_wrote() {
+        // A caller's own error type, as `write_time_step`'s closure may use: this crate's errors
+        // convert into it, and it comes back out of `write_time_step` unchanged.
         #[derive(Debug)]
         enum CallerError {
             ChangedItsMind,
@@ -1105,7 +1111,7 @@ mod tests {
 
         // one attribute written, then the closure gives up -- with an error of its own, which
         // comes back unchanged rather than squeezed into this crate's `Error`
-        let res = writer.time_step("0.1", |step| {
+        let res = writer.write_time_step("0.1", |step| {
             step.point_data("abandoned", DataAttribute::Scalar, &values)?;
             Err(CallerError::ChangedItsMind)
         });
@@ -1119,19 +1125,19 @@ mod tests {
         // the backing writer is not poisoned: the same time can be used again (the abandoned
         // step never consumed it), and so can a different one
         writer
-            .time_step("0.1", |step| {
+            .write_time_step("0.1", |step| {
                 step.point_data("kept", DataAttribute::Scalar, &values)
             })
             .unwrap();
         writer
-            .time_step("0.2", |step| {
+            .write_time_step("0.2", |step| {
                 step.point_data("kept", DataAttribute::Scalar, &values)
             })
             .unwrap();
 
         // a rejected attribute reaches the closure's own error type through `From`, so `?` is
         // all it takes to mix the caller's errors with this crate's
-        let res = writer.time_step("0.3", |step| {
+        let res = writer.write_time_step("0.3", |step| {
             step.point_data("wrong_size", DataAttribute::Scalar, &[1.0])?;
             Err(CallerError::ChangedItsMind)
         });
@@ -1148,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn time_step_erroring_out_before_writing_anything_needs_no_cleanup() {
+    fn write_time_step_erroring_out_before_writing_anything_needs_no_cleanup() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
 
@@ -1160,7 +1166,7 @@ mod tests {
 
         // the closure fails before any attribute is written, so `write_data_initialize` never
         // ran -- discarding must not report the unbalanced call as an internal error
-        let res = writer.time_step("0.1", |_step| {
+        let res = writer.write_time_step("0.1", |_step| {
             Err(Error::InvalidData {
                 reason: "nothing to write".to_string(),
             })
@@ -1171,14 +1177,14 @@ mod tests {
         );
 
         writer
-            .time_step("0.1", |step| {
+            .write_time_step("0.1", |step| {
                 step.point_data("data", DataAttribute::Scalar, &[1.0])
             })
             .unwrap();
     }
 
     #[test]
-    fn time_step_mixes_value_types_within_one_step() {
+    fn write_time_step_mixes_value_types_within_one_step() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
 
@@ -1200,7 +1206,7 @@ mod tests {
         let ids: Vec<u64> = (0..NUM_POINTS as u64).collect();
 
         writer
-            .time_step("0.0", |step| {
+            .write_time_step("0.0", |step| {
                 step.point_data("floats", DataAttribute::Scalar, &floats)?;
                 step.cell_data("ids", DataAttribute::Scalar, &ids)
             })
@@ -1213,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn time_step_reuses_a_single_buffer_across_attributes() {
+    fn write_time_step_reuses_a_single_buffer_across_attributes() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let xdmf_file_path = tmp_dir.path().join("test_output.xdmf");
 
@@ -1229,7 +1235,7 @@ mod tests {
         let mut buf = vec![0.0; NUM_POINTS];
 
         writer
-            .time_step("0.0", |step| {
+            .write_time_step("0.0", |step| {
                 buf.fill(1.0);
                 step.point_data("first", DataAttribute::Scalar, &buf)?;
 
@@ -1264,7 +1270,7 @@ mod tests {
 
         let values = vec![5.0; NUM_POINTS];
         let write_step = |writer: &mut TimeSeriesDataWriter, time: &str| -> Result<()> {
-            writer.time_step(time, |step| {
+            writer.write_time_step(time, |step| {
                 step.point_data("point_data1", DataAttribute::Scalar, &values)
             })
         };
@@ -1302,7 +1308,7 @@ mod tests {
 
         let values = vec![5.0; NUM_POINTS];
 
-        let res = writer.time_step("0.0", |step| {
+        let res = writer.write_time_step("0.0", |step| {
             step.point_data("duplicate", DataAttribute::Scalar, &values)?;
             step.point_data("duplicate", DataAttribute::Scalar, &values)
         });
@@ -1315,7 +1321,7 @@ mod tests {
         // the same name for point_data and cell_data is allowed, they are separate entities
         let cell_values = vec![5.0; 4];
         writer
-            .time_step("0.0", |step| {
+            .write_time_step("0.0", |step| {
                 step.point_data("data", DataAttribute::Scalar, &values)?;
                 step.cell_data("data", DataAttribute::Scalar, &cell_values)
             })
@@ -1342,7 +1348,7 @@ mod tests {
 
         let mut err_for = |name: &str, attribute: DataAttribute, len: usize| -> Error {
             writer
-                .time_step("0.0", |step| {
+                .write_time_step("0.0", |step| {
                     step.point_data(name, attribute, vec![5.0; len])
                 })
                 .unwrap_err()
@@ -1399,7 +1405,7 @@ mod tests {
 
         let mut err_for = |name: &str, attribute: DataAttribute, len: usize| -> Error {
             writer
-                .time_step("0.0", |step| {
+                .write_time_step("0.0", |step| {
                     step.cell_data(name, attribute, vec![5.0; len])
                 })
                 .unwrap_err()
@@ -1446,7 +1452,7 @@ mod tests {
             .write_mesh(&[0.0; 3], &[0], &[CellType::Vertex])
             .unwrap();
 
-        let res = writer.time_step("0.0", |step| {
+        let res = writer.write_time_step("0.0", |step| {
             step.cell_data("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1])?;
             step.point_data("cell[_data]_ten", DataAttribute::Scalar, vec![0.0; 1])
         });
@@ -1593,7 +1599,7 @@ mod tests {
 
         let write_step = |writer: &mut TimeSeriesDataWriter, time: &str| {
             writer
-                .time_step(time, |step| {
+                .write_time_step(time, |step| {
                     step.point_data("scalar_data", DataAttribute::Scalar, vec![0.0; 0])
                 })
                 .unwrap();
@@ -1780,14 +1786,14 @@ mod tests {
         // Fails while writing one attribute, after already having written an earlier one --
         // reproducing the shape of the original binary-backend bug (now caught upfront for that
         // specific case by `DataWriter::validate_values`, but the discard-on-error handling in
-        // `TimeSeriesDataWriter::time_step` is generic and backend-agnostic, so it needs its own
+        // `TimeSeriesDataWriter::write_time_step` is generic and backend-agnostic, so it needs its own
         // backend-agnostic regression test).
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let mut writer = flaky_writer(tmp_dir.path().join("mid_write_failure.xdmf2"), None);
 
         // "ok" is written successfully before "boom" fails, so this genuinely fails partway
         // through the step, after `write_data_initialize` already ran.
-        let res = writer.time_step("0.0", |step| {
+        let res = writer.write_time_step("0.0", |step| {
             step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])?;
             step.point_data("boom", DataAttribute::Scalar, vec![0.0; 0])
         });
@@ -1796,23 +1802,23 @@ mod tests {
         // The failed step must not have consumed the time slot ("0.0" is retried, not a new
         // time) and must not have left the backing writer poisoned: `FlakyWriter` itself would
         // fail with `Error::Internal("writing data was already initialized")` here if
-        // `time_step` had skipped the discard.
+        // `write_time_step` had skipped the discard.
         writer
-            .time_step("0.0", |step| {
+            .write_time_step("0.0", |step| {
                 step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
             })
             .unwrap();
     }
 
     #[test]
-    fn time_step_discards_when_the_closure_swallows_an_attribute_error() {
+    fn write_time_step_discards_when_the_closure_swallows_an_attribute_error() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None);
 
         // The closure ignores the failure of "boom" and returns `Ok`, so the step ends up with
         // no attributes even though the failed write already initialized the backend -- the
         // empty step must therefore be discarded, not just dropped.
-        let res = writer.time_step("0.0", |step| {
+        let res = writer.write_time_step("0.0", |step| {
             let _write_result = step.point_data("boom", DataAttribute::Scalar, vec![0.0; 0]);
             Ok(())
         });
@@ -1827,19 +1833,42 @@ mod tests {
         // the backing writer is not poisoned: `FlakyWriter` would fail with
         // `Error::Internal("writing data was already initialized")` here otherwise
         writer
-            .time_step("0.0", |step| {
+            .write_time_step("0.0", |step| {
                 step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
             })
             .unwrap();
     }
 
     #[test]
-    fn time_step_discards_when_finalizing_fails() {
+    fn write_time_step_keeps_a_step_whose_closure_swallowed_an_attribute_error() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None);
+
+        // As above, but one attribute did make it: a step holds exactly what was written
+        // successfully, so swallowing the error of "boom" writes the step without it rather
+        // than failing. Only a step left with nothing at all is rejected.
+        writer
+            .write_time_step("0.0", |step| {
+                step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])?;
+                let _write_result = step.point_data("boom", DataAttribute::Scalar, vec![0.0; 0]);
+                // annotated because nothing else in this closure pins the error type
+                Ok::<(), Error>(())
+            })
+            .unwrap();
+
+        let (time, attributes) = writer.attributes.first().unwrap();
+        assert_eq!(time, "0.0");
+        assert_eq!(attributes.len(), 1);
+        assert_eq!(attributes[0].name, "ok");
+    }
+
+    #[test]
+    fn write_time_step_discards_when_finalizing_fails() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
         let mut writer = flaky_writer(tmp_dir.path().join("finalize_failure.xdmf2"), Some("0.0"));
 
         // every attribute is written, but completing the step fails
-        let res = writer.time_step("0.0", |step| {
+        let res = writer.write_time_step("0.0", |step| {
             step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
         });
         std::assert_matches!(
@@ -1857,7 +1886,7 @@ mod tests {
 
         // the step was discarded rather than left open, so a following step still works
         writer
-            .time_step("1.0", |step| {
+            .write_time_step("1.0", |step| {
                 step.point_data("ok", DataAttribute::Scalar, vec![0.0; 0])
             })
             .unwrap();

@@ -1,7 +1,10 @@
 //! A library for writing XDMF files, which are commonly used in scientific simulations for visualizing datasets on meshes, for example with [Paraview](https://www.paraview.org/).
 //!
 //! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
-use std::{path::Path, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use xdmf_elements::{
@@ -260,6 +263,32 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> Resu
     }
 
     Ok(())
+}
+
+/// Remove the files written for an abandoned time step, shared by the file-per-attribute backends
+/// (`Ascii`/`Binary`) implementing [`DataWriter::write_data_discard`].
+///
+/// The paths are taken out of `step_files`, so they are forgotten even if a removal fails -- a
+/// second discard attempt on the same paths would only report the same failure again. Every file
+/// is attempted before reporting, so one failure does not leave the rest behind; the first error
+/// is the one returned.
+pub(crate) fn remove_step_files(step_files: &mut Vec<PathBuf>) -> Result<()> {
+    let mut first_error = None;
+
+    for path in std::mem::take(step_files) {
+        let result = std::fs::remove_file(&path)
+            .map_err(error::io_ctx("removing discarded data file", &path));
+        if let Err(error) = result
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

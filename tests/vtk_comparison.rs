@@ -161,7 +161,7 @@ mod tests {
             self.writer
                 .as_mut()
                 .unwrap()
-                .time_step(format!("{time}").as_str(), |step| {
+                .write_time_step(format!("{time}").as_str(), |step| {
                     step.point_data("pressure", xdmf::DataAttribute::Scalar, data)?;
                     step.point_data("velocity", xdmf::DataAttribute::Vector, &vec_data)
                 })

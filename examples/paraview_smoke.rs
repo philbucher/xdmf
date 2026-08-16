@@ -103,7 +103,7 @@ fn main() -> IoResult<()> {
             stress: stress.clone(),
         });
 
-        xdmf_writer.time_step(&step.to_string(), |time_step| {
+        xdmf_writer.write_time_step(&step.to_string(), |time_step| {
             // `as_flattened` reinterprets `&[[f64; N]]` as `&[f64]` without copying, so the
             // natural per-point/per-cell layout needs no intermediate `Vec`
             time_step.point_data("temperature", DataAttribute::Scalar, &temperature)?;

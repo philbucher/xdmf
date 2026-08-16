@@ -109,9 +109,13 @@ impl DataWriter for BinaryWriter {
         );
         let data_path = self.bin_files_dir.join(&data_file_name);
 
-        let mut data_file = BufWriter::new(
-            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?,
-        );
+        let data_file =
+            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?;
+
+        // Recorded once the file exists
+        self.step_files.push(data_path.clone());
+
+        let mut data_file = BufWriter::new(data_file);
 
         values_to_writer(data, &mut data_file, &data_path)?;
 
@@ -119,8 +123,6 @@ impl DataWriter for BinaryWriter {
         data_file
             .flush()
             .map_err(io_ctx("flushing data file", &data_path))?;
-
-        self.step_files.push(data_path);
 
         Ok(self.relative_path(&data_file_name).into())
     }
@@ -150,27 +152,10 @@ impl DataWriter for BinaryWriter {
             return Err(Error::Internal("writing data was not initialized"));
         }
 
-        // Taken before removing, so the files are forgotten even if a removal fails -- a second
-        // discard attempt on the same paths would only report the same failure again. Every file
-        // is attempted before reporting, so one failure does not leave the rest behind; the first
-        // error is the one returned.
-        let mut first_error = None;
-        for path in std::mem::take(&mut self.step_files) {
-            let result =
-                std::fs::remove_file(&path).map_err(io_ctx("removing discarded data file", &path));
-            if let Err(error) = result
-                && first_error.is_none()
-            {
-                first_error = Some(error);
-            }
-        }
-
+        // the step is over either way, so the writer is reset before the removals are reported
         self.write_time = None;
 
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        crate::remove_step_files(&mut self.step_files)
     }
 
     fn validate_values(&self, data: &Values<'_>) -> Result<()> {
@@ -399,6 +384,29 @@ mod tests {
 
         assert!(bin_dir.join("data_t_0.5_point_data_kept.bin").exists());
         assert!(!node_file.exists());
+    }
+
+    #[test]
+    fn binary_writer_write_data_discard_after_a_failed_create() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = BinaryWriter::new(&file_name).unwrap();
+
+        // a directory in the place of the data file makes `File::create` fail
+        let bin_dir = file_name.with_extension("bin");
+        std::fs::create_dir(bin_dir.join("data_t_0.5_point_data_boom.bin")).unwrap();
+
+        writer.write_data_initialize("0.5").unwrap();
+        std::assert_matches!(
+            writer
+                .write_data("boom", attribute::Center::Node, &vec![1.0].into())
+                .unwrap_err(),
+            Error::Io { operation, .. } if operation == "creating data file"
+        );
+
+        // no file was created, so the failed attribute recorded nothing and the discard has
+        // nothing to remove -- recording the path any earlier would fail here instead
+        writer.write_data_discard().unwrap();
     }
 
     #[test]

@@ -39,7 +39,7 @@ fn write_and_verify_binary() {
         .unwrap();
 
     xdmf_writer
-        .time_step("0", |step| {
+        .write_time_step("0", |step| {
             step.point_data(
                 "temperature",
                 xdmf::DataAttribute::Scalar,
@@ -97,7 +97,7 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
         .unwrap();
 
     // the attribute's error propagates out of the closure, so the step is never written
-    let res = xdmf_writer.time_step("0", |step| {
+    let res = xdmf_writer.write_time_step("0", |step| {
         step.cell_data(
             "region_id",
             xdmf::DataAttribute::Scalar,
@@ -117,7 +117,7 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
 
     // the writer must not be left poisoned by the failed step: a following valid step succeeds
     xdmf_writer
-        .time_step("1", |step| {
+        .write_time_step("1", |step| {
             step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u64])
         })
         .unwrap();
