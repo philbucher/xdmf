@@ -12,7 +12,8 @@ use std::{
 };
 
 use crate::{
-    CellType, DataAttribute, DataStorage, DataWriter, Error, Result, Values, create_writer,
+    CellType, Coordinate, DataAttribute, DataStorage, DataWriter, Error, Result, Values,
+    create_writer,
     error::io_ctx,
     mpi_safe_create_dir_all,
     xdmf_elements::{
@@ -57,6 +58,8 @@ impl TimeSeriesWriter {
     /// Writes the mesh to the XDMF file, returning a `TimeSeriesDataWriter` for writing time steps.
     ///
     /// Sizes of the inputs are validated to ensure consistency with the mesh and defined cell types.
+    ///
+    /// The coordinates are taken as `f32` or `f64`
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_mesh", xdmf::DataStorage::AsciiInline)
@@ -72,14 +75,15 @@ impl TimeSeriesWriter {
     /// # // hidden: doctests run in the crate root, so the example cleans up after itself
     /// # std::fs::remove_file("xdmf_write_mesh.xdmf2").expect("the example writes this file");
     /// ```
-    pub fn write_mesh(
+    pub fn write_mesh<C: Coordinate>(
         mut self,
-        points: &[f64],
+        points: &[C],
         connectivity: &[u64],
         cell_types: &[CellType],
     ) -> Result<TimeSeriesDataWriter> {
-        validate_points_and_cells(points, connectivity, cell_types)?;
+        validate_points_and_cells(points.len(), connectivity, cell_types)?;
 
+        let points = C::as_values(points);
         let num_points = points.len() / 3;
         let num_cells = if cell_types.is_empty() {
             num_points
@@ -89,7 +93,7 @@ impl TimeSeriesWriter {
 
         let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
 
-        let (points_data, cells_data) = self.writer.write_mesh(points, &prepared_cells)?;
+        let (points_data, cells_data) = self.writer.write_mesh(&points, &prepared_cells)?;
 
         let format = self.writer.format();
 
@@ -97,8 +101,8 @@ impl TimeSeriesWriter {
             name: Some("coords".to_string()),
             dimensions: Some(Dimensions(vec![num_points, 3])),
             data: points_data,
-            number_type: Some(NumberType::Float),
-            precision: Some(8),
+            number_type: Some(points.number_type()),
+            precision: Some(points.precision(format)),
             format: Some(format),
             endian: format.endian(),
             reference: None,
@@ -147,25 +151,24 @@ impl TimeSeriesWriter {
     }
 }
 
-// Validate that the points and cells are valid
+// Validate that the points and cells are valid.
 fn validate_points_and_cells(
-    points: &[f64],
+    num_coordinates: usize,
     connectivity: &[u64],
     cell_types: &[CellType],
 ) -> Result<()> {
     // at least one point is required
-    if points.is_empty() {
+    if num_coordinates == 0 {
         return Err(Error::InvalidMesh {
             reason: "at least one point is required".to_string(),
         });
     }
 
     // check that points are a multiple of 3 (x, y, z)
-    if !points.len().is_multiple_of(3) {
+    if !num_coordinates.is_multiple_of(3) {
         return Err(Error::InvalidMesh {
             reason: format!(
-                "points must have 3 dimensions, but {} is not a multiple of 3",
-                points.len()
+                "points must have 3 dimensions, but {num_coordinates} is not a multiple of 3"
             ),
         });
     }
@@ -174,12 +177,12 @@ fn validate_points_and_cells(
     let max_connectivity_index = connectivity.iter().max();
 
     if let Some(&max_index) = max_connectivity_index
-        && max_index as usize >= points.len() / 3
+        && max_index as usize >= num_coordinates / 3
     {
         return Err(Error::InvalidMesh {
             reason: format!(
                 "connectivity index {max_index} is out of bounds, the mesh only has {} points",
-                points.len() / 3
+                num_coordinates / 3
             ),
         });
     }
@@ -906,7 +909,7 @@ mod tests {
     fn test_validate_points_and_cells() {
         // valid input, must not return an error
         validate_points_and_cells(
-            &[0.0; 33],
+            33,
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -920,13 +923,13 @@ mod tests {
     #[test]
     fn validate_points_and_cells_only_points() {
         // valid input, must not return an error
-        validate_points_and_cells(&[0.0; 33], &[], &[]).unwrap();
+        validate_points_and_cells(33, &[], &[]).unwrap();
     }
 
     #[test]
     fn validate_points_and_cells_points_empty() {
         let res = validate_points_and_cells(
-            &[],
+            0,
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -944,7 +947,7 @@ mod tests {
     #[test]
     fn validate_points_and_cells_points_not_3d() {
         let res = validate_points_and_cells(
-            &[0.0; 22],
+            22,
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -962,7 +965,7 @@ mod tests {
     #[test]
     fn validate_points_and_cells_conn_index_out_of_bounds() {
         let res = validate_points_and_cells(
-            &[0.0; 33],
+            33,
             &[0, 1, 2, 3, 4, 5, 6, 70],
             &[
                 CellType::Vertex,
@@ -982,7 +985,7 @@ mod tests {
     #[test]
     fn validate_points_and_cells_conn_mismatch() {
         let res = validate_points_and_cells(
-            &[0.0; 33],
+            33,
             &[0, 1, 2, 3, 4, 5, 6, 7],
             &[
                 CellType::Vertex,
@@ -1630,7 +1633,7 @@ mod tests {
 
             fn write_mesh(
                 &mut self,
-                _points: &[f64],
+                _points: &Values<'_>,
                 _cells: &[u64],
             ) -> Result<(DataContent, DataContent)> {
                 Ok((
@@ -1764,7 +1767,7 @@ mod tests {
 
         fn write_mesh(
             &mut self,
-            _points: &[f64],
+            _points: &Values<'_>,
             _cells: &[u64],
         ) -> Result<(DataContent, DataContent)> {
             Ok((

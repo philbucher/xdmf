@@ -14,7 +14,7 @@ them. Revisit deliberately, not by drift.
 | 1 | Error type (`API_IMPROVEMENTS_PLAN.md` item 5) | **Dedicated `Error` enum**, landed *before* the reader so reader errors are typed from day one. |
 | 2 | Reader scope at 1.0 | **Round-trip own output + best-effort common subset** of foreign XDMF2. Anything else → explicit `Unsupported` error. |
 | 3 | Python wheels and HDF5 | **Static HDF5 built into the wheel**, so `pip install` gives working HDF5 storage with no system library. |
-| 4 | `Values` numeric types | **Add `F32`**, plus an opt-in f64→f32 downcast on write. Not a full numeric type set. Unchanged by the benchmark findings, but the *size claim* is now gated on a measurement — see `03_values_and_f32.md`. |
+| 4 | `Values` numeric types | **Add `F32`**, plus an opt-in f64→f32 downcast on write. Not a full numeric type set. Unchanged by the benchmark findings, but the *size claim* is now gated on a measurement — see `03_values_and_f32.md`. **Amended 2026-08-16:** `write_mesh` also becomes generic over f32/f64 points via a sealed `Coordinate` trait (Part 3 of that plan), replacing the earlier "coordinates stay f64" position. |
 | 5 | Submeshes / blocks | **Overlapping blocks stay allowed**; the per-step copies get optimized away instead of the semantics being restricted. |
 | 6 | Light-data (XML) writing | **Append + patch tail.** The `.xdmf2` stays a complete, openable file after every step, but the per-step cost becomes O(1) instead of O(steps). |
 | 7 | `multiple-features` branch | **Cherry-pick selectively**, treat the rest as a reference implementation. Main has diverged too far to merge. |
@@ -37,6 +37,13 @@ them. Revisit deliberately, not by drift.
   rewrite (`02_performance.md` part B, decision 6), which is a separate, larger piece of M0/M2 and
   was never part of `API_IMPROVEMENTS_PLAN.md`.
 
+- **2026-08-16, M3 Parts 1 and 3.** `Values::F32` and f32-or-f64 points in `write_mesh` (sealed
+  `Coordinate` trait), including the `dimensions()` restructure and the HDF5 backend's points
+  dataset now going through `write_values` like any other data. The ParaView smoke fixture writes
+  an f32 fixture alongside the f64 one; both verified locally on 5.13.2 and 6.1.1 across all five
+  storage backends. Part 2 (`with_reduced_precision`) and its measurement gate remain open — see
+  `03_values_and_f32.md`.
+
 ## Sub-plans
 
 | Plan | Milestone | Covers |
@@ -44,7 +51,7 @@ them. Revisit deliberately, not by drift.
 | [`API_IMPROVEMENTS_PLAN.md`](API_IMPROVEMENTS_PLAN.md) | M0 | Pre-existing defects and interface cleanups (see its "Adjustments" section) |
 | [`01_error_type.md`](01_error_type.md) | M1 | The `Error` enum, migration of 29 message assertions and 49 `IoResult` signatures |
 | [`02_performance.md`](02_performance.md) | M2 | Benchmark harness, O(n²) light-data write, allocation elimination, HDF5 tuning |
-| [`03_values_and_f32.md`](03_values_and_f32.md) | M3 | `Values::F32`, opt-in f64→f32 downcast, ParaView verification |
+| [`03_values_and_f32.md`](03_values_and_f32.md) | M3 | `Values::F32`, f32-or-f64 points in `write_mesh`, opt-in f64→f32 downcast, ParaView verification |
 | [`04_submeshes.md`](04_submeshes.md) | M4 | `write_mesh_with_blocks`, zero-copy fast paths, block validation |
 | [`05_reader.md`](05_reader.md) | M5 | `TimeSeriesReader` / `TimeSeriesDataReader`, per-format `DataReader` backends |
 | [`06_python_bindings.md`](06_python_bindings.md) | M6 | Review of the vibe-coded bindings, GIL release, abi3 + static-HDF5 wheels on PyPI |

@@ -1,7 +1,18 @@
 # M3 — `f32` support and the `Values` type
 
+> **Status (2026-08-16): Parts 1 and 3 are done**, on `main`'s working tree. `Values::F32` exists
+> with all four `From` impls, every backend handles it, `dimensions()` was restructured, and
+> `write_mesh` is generic over the sealed `Coordinate` trait. Verified per the checklist below:
+> unit tests, per-backend round trips, and the ParaView smoke test extended to two fixtures and run
+> locally against 5.13.2 and 6.1.1 across all five storage backends (20 fixture checks, all green).
+> **Part 2 (`with_reduced_precision`) and the measurement gate are still open** — no size claim has
+> been made in the docs, which is exactly what the gate governs.
+
 `README.md`: *"f32 bit floats should be added to `Values`"*. Decision 4 in `ROADMAP.md`: add the
 variant **and** an opt-in f64→f32 downcast on write. Not a full numeric type set.
+
+Part 3 (added 2026-08-16) extends this to mesh coordinates: `write_mesh` accepts f32 or f64 points.
+It depends on Part 1 and is independent of Part 2.
 
 ## Why the downcast is worth having as well
 
@@ -111,10 +122,12 @@ Internally a `bool` (or a small `FloatPrecision { Full, Reduced }` enum if a thi
 Deliberate: f32 coordinates on a large domain produce visible geometric jitter in ParaView, because
 the absolute coordinate magnitude eats the mantissa. Attribute values do not have that problem —
 nobody notices 7 significant digits on a pressure field. So `with_reduced_precision()` affects
-`write_data` only, and `write_mesh` keeps f64 coordinates.
+`write_data` only, and `write_mesh` keeps whatever precision the caller passed.
 
-Document that reasoning on the method itself. If someone later wants f32 coordinates for a small,
-origin-centred domain, that is a *second*, separately named opt-in — do not add it now (no caller).
+Document that reasoning on the method itself. Coordinates are covered by Part 3 below instead, and
+in a better form than "a second opt-in": the caller passes the type they already hold, so no f64
+coordinate is ever silently degraded, and the jitter caveat becomes a doc note rather than a reason
+to withhold the feature.
 
 ### Implementation: no per-step allocation
 
@@ -147,13 +160,77 @@ Unchanged: integers are not downcast by this switch. Note that the `Binary` back
 narrows u64→u32 unconditionally (a ParaView reader bug workaround, `src/binary_writer.rs:145`), which
 is a separate mechanism and stays separate.
 
+## Part 3 — f32 or f64 points in `write_mesh`
+
+Requested 2026-08-16. Supersedes the "do not add it now" note in Part 2: coordinates become
+caller-typed rather than switch-controlled.
+
+### Why it forces Part 1 first
+
+`DataWriter` is a `dyn` trait, so `DataWriter::write_mesh` cannot be generic — points have to reach
+the backends as an enum, and that enum is `Values`. So Part 1 is a hard prerequisite, and Part 1
+alone makes `point_data`/`cell_data` accept f32 as a side effect (wanted anyway).
+
+### The payoff: points stop being a special case
+
+Once the backend method takes `&Values`, every backend writes points through the **same helper it
+already uses for attribute data** — `values_to_string`/`values_to_writer` in `ascii_writer.rs`,
+`values_to_writer` in `binary_writer.rs`, `write_values` in `hdf5_writer.rs`. No new match arms
+anywhere, and `hdf5_writer::write_mesh`'s hand-rolled points dataset (`src/hdf5_writer.rs:316-326`,
+duplicating shape/shuffle/deflate) collapses into the existing `write_values` call. There is
+deliberately no unreachable `Values::U64` arm to write an `Error::Internal` for — see the API shape
+below, which makes u64 points unrepresentable.
+
+### Public API — sealed `Coordinate` trait (decided 2026-08-16)
+
+```rust
+pub fn write_mesh<C: Coordinate>(
+    self,
+    points: &[C],
+    connectivity: &[u64],
+    cell_types: &[CellType],
+) -> Result<TimeSeriesDataWriter>
+```
+
+Sealed, with impls for `f32` and `f64` only and one private method converting `&[Self]` into a
+borrowed `Values`. u64 points are a compile error rather than a runtime `InvalidMesh`, which is
+what makes the unreachable-arm question above disappear. Existing `&[f64]` and `&[0.0; N]` call
+sites keep compiling untouched — an unconstrained float literal still falls back to `f64` before the
+trait bound is checked.
+
+The rejected alternative was `points: impl Into<Values<'_>>`, mirroring `point_data`/`cell_data`
+exactly and adding zero public surface, but demoting a type mistake to a runtime error. Not
+speculative API per `CLAUDE.md`: this request is its caller. Related but separate — the sealed
+`ValueType` trait on `multiple-features` stays deferred to M5; unify the two then if they overlap.
+
+### Touch points
+
+| File | Change |
+|------|--------|
+| `src/values.rs` | the sealed `Coordinate` trait and its two impls |
+| `src/lib.rs` | `DataWriter::write_mesh(&mut self, points: &Values<'_>, cells: &[u64])` |
+| `src/{ascii,binary,hdf5}_writer.rs` | delegate points to the existing value helper; drop hdf5's duplicate dataset code |
+| `src/time_series_writer.rs` | generic `write_mesh`; coords `DataItem` takes `number_type()`/`precision(format)` from the values instead of the hardcoded `NumberType::Float` / `Some(8)` (`:96-105`); `validate_points_and_cells` takes the point count instead of `&[f64]` (it only reads `len()`/`is_empty()`); the two `DummyWriter` mocks (`:1631`, `:1765`) follow the trait |
+
+### Docs on `write_mesh`
+
+f32 halves the geometry payload; f32 coordinates on a large-magnitude domain produce visible jitter
+in ParaView because the absolute coordinate eats the mantissa. Same reasoning as Part 2, stated once
+here since this is now where a caller chooses.
+
 ## Verification
 
+0. **Spike first, before any of the above.** Hand-write a `.xdmf2` with `NumberType="Float"
+   Precision="4"` geometry per storage mode and open it with the local pvpython 5.13 and 6.1. This
+   is the one way the feature fails silently — a file that opens and shows garbage geometry. See the
+   `paraview-install-locations` note for where those live.
 1. **Unit tests** in `src/values.rs` mirroring the existing `vec_f64`/`vec_u64` tests for `F32`:
    precision per format, number type, dimensions for each `DataAttribute`, `len`.
-2. **Round-trip through each backend**: write f32 attribute data, read the file back (HDF5 via the
-   `hdf5` crate, binary via raw bytes, ascii via text) and compare with `assert_approx_eq!` per the
-   `CLAUDE.md` convention.
+2. **Round-trip through each backend**: write f32 attribute data *and* f32 points, read the file
+   back (HDF5 via the `hdf5` crate, binary via raw bytes, ascii via text) and compare with
+   `assert_approx_eq!` per the `CLAUDE.md` convention. Assert the coords `DataItem` carries
+   `Precision="4"` for f32 points and `"8"` for f64, and that the existing f64 call sites compile
+   unchanged.
 3. **Downcast tests**: f64 input + `with_reduced_precision()` produces the same bytes as the
    equivalent f32 input without it; `DataItem` `Precision="4"` appears in the XML; the saturating-cast
    edge case.
@@ -161,10 +238,13 @@ is a separate mechanism and stays separate.
    compressed size on noisy data, before any size claim goes into the docs.
 4. **ParaView smoke test — required.** Per `ROADMAP.md`'s verification rules, this changes what bytes
    land in the file, so extend `examples/paraview_smoke.rs` and `expected.json` rather than only
-   adding Rust tests: add an f32-valued point attribute and an f32-valued cell attribute to the
-   fixture, and assert their values in `verify_with_pvpython.py`. This runs across all 10 existing
-   matrix jobs at no extra CI cost, which is exactly the situation the "extend the fixture, not the
-   matrix" rule is for.
+   adding Rust tests. `paraview_smoke.rs` writes one fixture per invocation today; make it write
+   **two** — the existing f64 one plus `fixture_<storage>_f32` with f32 coordinates, an f32 point
+   attribute and an f32 cell attribute — turn `expected.json` into a list of fixtures, and have
+   `verify_with_pvpython.py` loop over it. Keeping both preserves ParaView coverage of the f64
+   default, which a single converted fixture would silently drop. This runs across all 10 existing
+   matrix jobs at no extra CI cost and needs no workflow change, which is exactly the situation the
+   "extend the fixture, not the matrix" rule is for.
 
 ## Noted, not scheduled
 

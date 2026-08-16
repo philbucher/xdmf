@@ -25,7 +25,7 @@ pub mod xdmf_elements;
 // Re-export types used in the public API
 pub use error::{Error, Result};
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
-pub use values::Values;
+pub use values::{Coordinate, Values};
 pub use xdmf_elements::CellType;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
@@ -84,7 +84,11 @@ pub(crate) trait DataWriter {
 
     fn data_storage(&self) -> DataStorage;
 
-    fn write_mesh(&mut self, points: &[f64], cells: &[u64]) -> Result<(DataContent, DataContent)>;
+    fn write_mesh(
+        &mut self,
+        points: &Values<'_>,
+        cells: &[u64],
+    ) -> Result<(DataContent, DataContent)>;
 
     fn write_data(
         &mut self,
