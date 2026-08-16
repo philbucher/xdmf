@@ -3,11 +3,8 @@
 use std::borrow::Cow;
 
 use crate::{
-    DataAttribute, Error, Result,
-    xdmf_elements::{
-        data_item::{Format, NumberType},
-        dimensions::Dimensions,
-    },
+    DataAttribute,
+    xdmf_elements::{data_item::NumberType, dimensions::Dimensions},
 };
 
 macro_rules! define_values {
@@ -60,38 +57,15 @@ macro_rules! define_values {
 
 define_values!(F64(f64), F32(f32), I64(i64), I32(i32), U64(u64), U32(u32));
 
-/// Width in bytes that `NumberType="UInt"` data is written at, in *every* format.
-///
-/// `ParaView`'s Xdmf2 reader builds a 32-bit array for `UInt` whatever `Precision` the light data
-/// declares, so a `u64` above `u32::MAX` is read back truncated (ascii formats) or clamped to
-/// `u32::MAX` (HDF5) -- silently, without any reader error. Rather than write 8 bytes the reader
-/// then ignores, `u64` data is capped at `u32::MAX` and stored narrowed: the upper 4 bytes could
-/// only ever be zeros. Unlike the `Binary` backend's narrowing of `i64`, this is a property of the
-/// reader, so switching `DataStorage` does not lift it -- `i64` is decoded at the full 64 bits and
-/// is the way to store integers beyond 32 bits.
-pub(crate) const UINT_PRECISION: u8 = 4;
-
-const UINT_RANGE_REASON: &str = "u64 data must fit in 32 bits, since ParaView decodes UInt data \
-                                 as 32-bit whatever precision is declared; no DataStorage avoids \
-                                 this, use i64 for integers beyond 32 bits";
-
-/// Narrow a `u64` to the 32 bits [`UINT_PRECISION`] writes, rejecting anything that does not fit.
-pub(crate) fn checked_uint(value: u64) -> Result<u32> {
-    u32::try_from(value).map_err(|_err| Error::IntegerOutOfRange {
-        value: i128::from(value),
-        reason: UINT_RANGE_REASON.to_string(),
-    })
-}
-
 impl Values<'_> {
-    pub(crate) fn precision(&self, format: Format) -> u8 {
+    /// Width in bytes each element type is written at, which is simply its own width.
+    ///
+    /// No storage writes anything narrower: a backend that cannot carry a type says so through
+    /// [`crate::paraview`] instead of quietly storing fewer bytes than the caller handed over.
+    pub(crate) fn precision(&self) -> u8 {
         match self {
-            Self::F64(_) => 8,
-            // `u64` sits with the 4-byte types rather than with `i64`: it is written narrowed to
-            // 32 bits in every format (see `UINT_PRECISION`), so its values and its declared
-            // precision agree everywhere.
-            Self::F32(_) | Self::I32(_) | Self::U32(_) | Self::U64(_) => UINT_PRECISION,
-            Self::I64(_) => format.int_precision(),
+            Self::F64(_) | Self::I64(_) | Self::U64(_) => 8,
+            Self::F32(_) | Self::I32(_) | Self::U32(_) => 4,
         }
     }
 
@@ -122,19 +96,6 @@ impl Values<'_> {
             }
             _ => Dimensions(vec![len / attribute.size(), attribute.size()]),
         }
-    }
-
-    // Checked up front, before any backend touches disk, so a value that could not be read back
-    // is reported as a caller error rather than written and silently misread.
-    pub(crate) fn validate_uint_range(&self) -> Result<()> {
-        let Self::U64(values) = self else {
-            return Ok(());
-        };
-
-        for &value in values.iter() {
-            checked_uint(value)?;
-        }
-        Ok(())
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -178,8 +139,12 @@ pub(crate) mod sealed {
     /// Conversion backing [`ConnectivityIndex`](super::ConnectivityIndex), not nameable outside
     /// the crate
     pub trait SealedIndex: Copy + Sized {
-        /// The largest index that survives being read back, which is not always what the type
-        /// itself can hold -- see the `u64` impl.
+        /// The largest index this type can hold.
+        ///
+        /// Deliberately the type's own limit and nothing else: the lower cap `ParaView` puts on
+        /// `UInt` connectivity is a restriction on the *values*, so it is enforced once, with
+        /// every other one, by [`crate::paraview`] -- not duplicated here, where it could not be
+        /// skipped along with the rest.
         const MAX_INDEX: i128;
 
         /// Borrow a slice of indices as [`Values`]
@@ -223,9 +188,7 @@ pub(crate) mod sealed {
 
     impl_sealed_index!(
         U32(u32, u32::MAX as i128),
-        // not `u64::MAX`: `UInt` connectivity is decoded at 32 bits whatever precision the light
-        // data declares, so a wider index is read back as a different point (see `UINT_PRECISION`)
-        U64(u64, u32::MAX as i128),
+        U64(u64, u64::MAX as i128),
         I32(i32, i32::MAX as i128),
         I64(i64, i64::MAX as i128),
     );
@@ -268,8 +231,7 @@ mod tests {
         std::assert_matches!(values, Values::F64(_));
 
         assert_eq!(values.number_type(), NumberType::Float);
-        assert_eq!(values.precision(Format::XML), 8);
-        assert_eq!(values.precision(Format::Binary), 8);
+        assert_eq!(values.precision(), 8);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -298,9 +260,7 @@ mod tests {
 
         // same NumberType as f64, only the precision distinguishes the two in the light data
         assert_eq!(values.number_type(), NumberType::Float);
-        assert_eq!(values.precision(Format::XML), 4);
-        assert_eq!(values.precision(Format::HDF), 4);
-        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(values.precision(), 4);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -327,10 +287,7 @@ mod tests {
         std::assert_matches!(values, Values::U64(_));
 
         assert_eq!(values.number_type(), NumberType::UInt);
-        // narrowed to 32 bits in *every* format, unlike i64 -- see `UINT_PRECISION`
-        assert_eq!(values.precision(Format::XML), 4);
-        assert_eq!(values.precision(Format::HDF), 4);
-        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(values.precision(), 8);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -344,11 +301,9 @@ mod tests {
         let values = vec_u32.into();
         std::assert_matches!(values, Values::U32(_));
 
-        // same NumberType as u64, and 32 bits wide in every format
+        // same NumberType as u64, but half the width
         assert_eq!(values.number_type(), NumberType::UInt);
-        assert_eq!(values.precision(Format::XML), 4);
-        assert_eq!(values.precision(Format::HDF), 4);
-        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(values.precision(), 4);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -363,10 +318,7 @@ mod tests {
         std::assert_matches!(values, Values::I64(_));
 
         assert_eq!(values.number_type(), NumberType::Int);
-        assert_eq!(values.precision(Format::XML), 8);
-        assert_eq!(values.precision(Format::HDF), 8);
-        // narrowed to 32 bits for binary, see `Format::int_precision`
-        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(values.precision(), 8);
         assert_eq!(
             values.dimensions(DataAttribute::Vector),
             Dimensions(vec![2, 3])
@@ -381,9 +333,7 @@ mod tests {
         std::assert_matches!(values, Values::I32(_));
 
         assert_eq!(values.number_type(), NumberType::Int);
-        assert_eq!(values.precision(Format::XML), 4);
-        assert_eq!(values.precision(Format::HDF), 4);
-        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(values.precision(), 4);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
             Dimensions(vec![6])
@@ -408,7 +358,7 @@ mod tests {
         let values = Values::from(vec_f32.as_slice());
         std::assert_matches!(values, Values::F32(Cow::Borrowed(_)));
 
-        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(values.precision(), 4);
         assert_eq!(values.len(), 6);
 
         let vec_u64 = vec![1_u64, 2, 3];
@@ -487,9 +437,10 @@ mod tests {
 
     #[test]
     fn connectivity_index_limits() {
-        // the unsigned types share a limit: `u64` is capped by the reader, not by the type
+        // each type's own limit -- the lower one ParaView puts on `u64` is checked on the values,
+        // by `validate_paraview_uint_range`, so that it can be skipped with the rest
         assert_eq!(u32::MAX_INDEX, i128::from(u32::MAX));
-        assert_eq!(u64::MAX_INDEX, i128::from(u32::MAX));
+        assert_eq!(u64::MAX_INDEX, i128::from(u64::MAX));
         assert_eq!(i32::MAX_INDEX, i128::from(i32::MAX));
         assert_eq!(i64::MAX_INDEX, i128::from(i64::MAX));
 

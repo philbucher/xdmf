@@ -162,11 +162,6 @@ impl Format {
     pub(crate) fn endian(self) -> Option<Endian> {
         matches!(self, Self::Binary).then_some(Endian::Little)
     }
-
-    ///  Paraview's legacy Xdmf2 reader silently misreads 64-bit integers in binary format, thus using 32-bit
-    pub(crate) fn int_precision(self) -> u8 {
-        if matches!(self, Self::Binary) { 4 } else { 8 }
-    }
 }
 
 /// Byte order of externally stored binary data (only meaningful for [`Format::Binary`]).
@@ -221,13 +216,6 @@ mod tests {
         assert_eq!(Format::XML.endian(), None);
         assert_eq!(Format::HDF.endian(), None);
         assert_eq!(Format::Binary.endian(), Some(Endian::Little));
-    }
-
-    #[test]
-    fn format_int_precision() {
-        assert_eq!(Format::XML.int_precision(), 8);
-        assert_eq!(Format::HDF.int_precision(), 8);
-        assert_eq!(Format::Binary.int_precision(), 4);
     }
 
     #[test]

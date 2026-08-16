@@ -26,7 +26,7 @@ fn write_and_verify_binary() {
 
     // 4 points, 2 triangles sharing an edge
     let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
-    let connectivity = [0_u64, 1, 2, 0, 2, 3];
+    let connectivity = [0_u32, 1, 2, 0, 2, 3];
     let cell_types = [xdmf::CellType::Triangle, xdmf::CellType::Triangle];
 
     let tmp_dir = TempDir::new().unwrap();
@@ -45,7 +45,7 @@ fn write_and_verify_binary() {
                 xdmf::DataAttribute::Scalar,
                 vec![10.0, 11.0, 12.0, 13.0],
             )?;
-            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![100_u64, 200])
+            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![100_u32, 200])
         })
         .unwrap();
 
@@ -82,12 +82,12 @@ fn write_and_verify_binary() {
 }
 
 #[test]
-fn binary_write_data_rejects_i64_too_large_for_i32() {
-    // binary format is only using 32-bit integers, due to a bug in the paraview reader that
-    // misreads 64-bit integers. Unlike the u64 cap, which applies to every storage, this one is
-    // the Binary backend's own, so the error says another DataStorage would take the value.
+fn binary_rejects_64_bit_integer_data() {
+    // ParaView reads 64-bit integers in `Format="Binary"` at the wrong stride, so the storage
+    // refuses the *type* rather than narrowing it behind the caller's back: it would otherwise put
+    // an i32 in the file where an i64 was passed. The error says which storages do take it.
     let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
-    let connectivity = [0_u64, 1, 2];
+    let connectivity = [0_u32, 1, 2];
     let cell_types = [xdmf::CellType::Triangle];
 
     let tmp_dir = TempDir::new().unwrap();
@@ -99,17 +99,27 @@ fn binary_write_data_rejects_i64_too_large_for_i32() {
         .unwrap();
 
     // the attribute's error propagates out of the closure, so the step is never written
+    // rejected whatever it holds, so even a value that would fit in an i32 does not get through
+    for value in [i64::from(i32::MAX) + 1, 7_i64] {
+        let res = xdmf_writer.write_time_step("0", |step| {
+            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![value])
+        });
+        std::assert_matches!(
+            res.unwrap_err(),
+            xdmf::Error::InvalidData { reason }
+                if reason.contains("cannot hold i64 data")
+                    && reason.contains("use another DataStorage"),
+            "Binary must refuse an i64 of {value}"
+        );
+    }
+
+    // ...and u64 goes the same way
     let res = xdmf_writer.write_time_step("0", |step| {
-        step.cell_data(
-            "region_id",
-            xdmf::DataAttribute::Scalar,
-            vec![i64::from(i32::MAX) + 1],
-        )
+        step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u64])
     });
     std::assert_matches!(
         res.unwrap_err(),
-        xdmf::Error::IntegerOutOfRange { value, reason }
-            if value == i128::from(i32::MAX) + 1 && reason.contains("another DataStorage")
+        xdmf::Error::InvalidData { reason } if reason.contains("cannot hold u64 data")
     );
 
     // the rejected value is caught before any file for this step is opened, so nothing is left
@@ -120,7 +130,7 @@ fn binary_write_data_rejects_i64_too_large_for_i32() {
     // the writer must not be left poisoned by the failed step: a following valid step succeeds
     xdmf_writer
         .write_time_step("1", |step| {
-            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u64])
+            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u32])
         })
         .unwrap();
 }
@@ -137,7 +147,7 @@ fn write_and_verify_binary_signed_integers() {
 
     // 3 points forming a triangle
     let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
-    let connectivity = [0_u64, 1, 2];
+    let connectivity = [0_u32, 1, 2];
     let cell_types = [xdmf::CellType::Triangle];
 
     let tmp_dir = TempDir::new().unwrap();
@@ -150,42 +160,41 @@ fn write_and_verify_binary_signed_integers() {
 
     xdmf_writer
         .write_time_step("0", |step| {
-            step.point_data("level_i64", xdmf::DataAttribute::Scalar, vec![-1_i64, 0, 1])?;
-            step.point_data("level_i32", xdmf::DataAttribute::Scalar, vec![-2_i32, 0, 2])
+            step.point_data("level_i32", xdmf::DataAttribute::Scalar, vec![-2_i32, 0, 2])?;
+            step.point_data(
+                "flag_u32",
+                xdmf::DataAttribute::Scalar,
+                vec![0_u32, 1, u32::MAX],
+            )
         })
         .unwrap();
 
-    // both signed widths are declared as 4-byte Int, since the i64 data is narrowed on the way out
+    // the 32-bit types are what this storage carries, at their own width and nothing else
     let xdmf_xml = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
     assert_eq!(
         xdmf_xml
             .matches(r#"NumberType="Int" Format="Binary" Precision="4""#)
             .count(),
-        2
+        1
+    );
+    assert_eq!(
+        xdmf_xml
+            .matches(r#"NumberType="UInt" Format="Binary" Precision="4""#)
+            .count(),
+        2, // the connectivity is u32 here too
     );
 
     let bin_dir = xdmf_file_path.with_extension("bin");
     assert_eq!(
-        read_i32_le(&bin_dir.join("data_t_0_point_data_level_i64.bin")),
-        vec![-1, 0, 1]
-    );
-    assert_eq!(
         read_i32_le(&bin_dir.join("data_t_0_point_data_level_i32.bin")),
         vec![-2, 0, 2]
     );
-
-    // an i64 below i32's range does not survive the narrowing and is rejected
-    let res = xdmf_writer.write_time_step("1", |step| {
-        step.point_data(
-            "level_i64",
-            xdmf::DataAttribute::Scalar,
-            vec![0_i64, 0, i64::from(i32::MIN) - 1],
-        )
-    });
-    std::assert_matches!(
-        res.unwrap_err(),
-        xdmf::Error::IntegerOutOfRange { value, .. }
-            if value == i128::from(i32::MIN) - 1
+    assert_eq!(
+        std::fs::read(bin_dir.join("data_t_0_point_data_flag_u32.bin"))
+            .unwrap()
+            .len(),
+        12,
+        "3 values at 4 bytes each, with nothing widened or narrowed on the way out"
     );
 }
 
@@ -201,7 +210,7 @@ fn write_and_verify_binary_f32() {
 
     // same mesh as `write_and_verify_binary`, but held as f32 by the caller
     let coords: [f32; 12] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
-    let connectivity = [0_u64, 1, 2, 0, 2, 3];
+    let connectivity = [0_u32, 1, 2, 0, 2, 3];
     let cell_types = [xdmf::CellType::Triangle, xdmf::CellType::Triangle];
 
     let tmp_dir = TempDir::new().unwrap();

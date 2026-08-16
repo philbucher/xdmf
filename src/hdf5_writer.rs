@@ -7,7 +7,6 @@ use hdf5::{File as H5File, Group as H5Group, H5Type};
 use crate::{
     DataStorage, DataWriter, Error, Result, Values,
     error::io_ctx,
-    values::checked_uint,
     xdmf_elements::{
         attribute,
         data_item::{DataContent, Format},
@@ -344,17 +343,7 @@ fn write_values(
         Values::I64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
         Values::I32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
         Values::U32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
-        // stored narrowed, to match the `UINT_PRECISION` the light data declares. The copy is
-        // unavoidable -- HDF5 writes from a contiguous slice of the dataset's own type -- but it
-        // is half the size of the input, and every value is known to fit by the time it gets here.
-        Values::U64(v) => {
-            let narrowed = v
-                .iter()
-                .copied()
-                .map(checked_uint)
-                .collect::<Result<Vec<_>>>()?;
-            create_and_write(group, dataset_name, &narrowed, shape, deflate_level)
-        }
+        Values::U64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
     }
 }
 
@@ -604,8 +593,9 @@ mod tests {
         assert_eq!(dataset_u32.dtype().unwrap().size(), 4);
         assert_eq!(dataset_u32.read::<u32, _>().unwrap().to_vec(), vec_u32);
 
-        // u64 is the exception: stored narrowed to 32 bits, matching the `UINT_PRECISION` the
-        // light data declares, since ParaView decodes UInt at 32 bits either way
+        // u64 too: stored as the 8-byte type it is, like every other one. ParaView reads that
+        // back correctly (measured on 5.13 and 6.1) as long as the values fit in 32 bits, which
+        // `crate::paraview` is what enforces -- this backend just writes what it is given.
         let vec_u64 = vec![1_u64, 2, u64::from(u32::MAX)];
         write_values(&group, "test_u64", &vec_u64.clone().into(), 6).unwrap();
 
@@ -615,12 +605,8 @@ mod tests {
             .unwrap()
             .dataset("test_u64")
             .unwrap();
-        assert_eq!(dataset_u64.dtype().unwrap().size(), 4);
-        assert_eq!(
-            dataset_u64.read::<u64, _>().unwrap().to_vec(),
-            vec_u64,
-            "the narrowed values must still read back as the u64s that went in"
-        );
+        assert_eq!(dataset_u64.dtype().unwrap().size(), 8);
+        assert_eq!(dataset_u64.read::<u64, _>().unwrap().to_vec(), vec_u64);
 
         let dataset_i64 = group_read.dataset("test_i64").unwrap();
         assert_eq!(dataset_i64.dtype().unwrap().size(), 8);

@@ -15,7 +15,7 @@ use crate::{
     CellType, ConnectivityIndex, Coordinate, DataAttribute, DataStorage, DataWriter, Error, Result,
     Values, create_writer,
     error::io_ctx,
-    mpi_safe_create_dir_all,
+    mpi_safe_create_dir_all, paraview,
     xdmf_elements::{
         Information, Xdmf, attribute,
         data_item::DataItem,
@@ -115,10 +115,9 @@ impl TimeSeriesWriter {
         let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points)?;
         let cells = I::as_values(&prepared_cells);
 
-        // the connectivity goes through the same checks as any other integer data, so the index
-        // type and the storage together decide which meshes can be written
-        cells.validate_uint_range()?;
-        self.writer.validate_values(&cells)?;
+        // the connectivity goes through the same check as any other integer data, so the index
+        // type and the storage together decide which meshes ParaView can be given
+        paraview::validate(&cells, self.writer.format())?;
 
         let (points_data, cells_data) = self.writer.write_mesh(&points, &cells)?;
 
@@ -129,7 +128,7 @@ impl TimeSeriesWriter {
             dimensions: Some(Dimensions(vec![num_points, 3])),
             data: points_data,
             number_type: Some(points.number_type()),
-            precision: Some(points.precision(format)),
+            precision: Some(points.precision()),
             format: Some(format),
             endian: format.endian(),
             reference: None,
@@ -141,7 +140,7 @@ impl TimeSeriesWriter {
             number_type: Some(cells.number_type()),
             data: cells_data,
             format: Some(format),
-            precision: Some(cells.precision(format)),
+            precision: Some(cells.precision()),
             endian: format.endian(),
             reference: None,
         };
@@ -208,10 +207,8 @@ fn validate_points_and_cells<I: ConnectivityIndex>(
     if num_points as i128 - 1 > I::MAX_INDEX {
         return Err(Error::InvalidMesh {
             reason: format!(
-                "the mesh has {num_points} points, but its connectivity can only index up to {}; \
-                 use i64 connectivity for a larger mesh, which the Hdf5SingleFile and \
-                 Hdf5MultipleFiles storages write at the full width (ParaView decodes UInt at 32 \
-                 bits whatever precision is declared, so u32 and u64 share the same limit)",
+                "the mesh has {num_points} points, but its connectivity type can only index up \
+                 to {}; a wider one is needed to write it",
                 I::MAX_INDEX
             ),
         });
@@ -602,12 +599,10 @@ impl TimeStep<'_> {
             });
         }
 
-        // reject values that cannot be read back correctly before anything is written, so a caller
-        // mistake leaves no partial output behind. The u64 range is capped for every storage,
-        // while `validate_values` adds whatever the backend's own format cannot represent on top
-        // (e.g. binary's narrowing of i64 to i32).
-        values.validate_uint_range()?;
-        self.writer.writer.validate_values(&values)?;
+        // reject values ParaView would read back as different numbers, before anything is written,
+        // so a caller mistake leaves no partial output behind. Done here rather than by the
+        // backend, which validates nothing -- see the `paraview` module.
+        paraview::validate(&values, self.writer.writer.format())?;
 
         if !self.initialized {
             self.writer.writer.write_data_initialize(&self.time)?;
@@ -620,7 +615,7 @@ impl TimeStep<'_> {
             dimensions: Some(values.dimensions(data_attribute)),
             number_type: Some(values.number_type()),
             format: Some(format),
-            precision: Some(values.precision(format)),
+            precision: Some(values.precision()),
             endian: format.endian(),
             data: self.writer.writer.write_data(name, center, &values)?,
             reference: None,
@@ -1018,11 +1013,6 @@ mod tests {
         let too_many_u32 = usize::try_from(u32::MAX).unwrap() + 2;
         let too_many_i32 = usize::try_from(i32::MAX).unwrap() + 2;
 
-        // `u64` is capped where `u32` is: the limit is what ParaView decodes, not what fits
-        std::assert_matches!(
-            validate_points_and_cells(3 * too_many_u32, &[] as &[u64], &[]).unwrap_err(),
-            Error::InvalidMesh { reason } if reason.contains("can only index up to 4294967295")
-        );
         std::assert_matches!(
             validate_points_and_cells(3 * too_many_u32, &[] as &[u32], &[]).unwrap_err(),
             Error::InvalidMesh { reason } if reason.contains("can only index up to 4294967295")
@@ -1033,11 +1023,31 @@ mod tests {
         );
 
         // one point less is exactly what each type reaches, and is still addressable
-        validate_points_and_cells(3 * (too_many_u32 - 1), &[] as &[u64], &[]).unwrap();
+        validate_points_and_cells(3 * (too_many_u32 - 1), &[] as &[u32], &[]).unwrap();
         validate_points_and_cells(3 * (too_many_i32 - 1), &[] as &[i32], &[]).unwrap();
 
-        // `i64` lifts the limit past anything a mesh can reach
+        // the 64-bit types hold any index a mesh can have, so this helper lets both through --
+        // the lower cap ParaView puts on `u64` is checked on the connectivity values instead, by
+        // `validate_paraview` (see `connectivity_above_the_paraview_uint_cap_is_rejected`)
+        validate_points_and_cells(3 * too_many_u32, &[] as &[u64], &[]).unwrap();
         validate_points_and_cells(3 * too_many_u32, &[] as &[i64], &[]).unwrap();
+    }
+
+    // The mesh that would trip this needs over 4 billion points, which cannot be built in a test,
+    // so the check is exercised where `write_mesh` reaches it: on the prepared connectivity, which
+    // goes through the same `validate_paraview` as any other integer data.
+    #[test]
+    fn connectivity_above_the_paraview_uint_cap_is_rejected() {
+        let too_large = Values::from(vec![u64::from(u32::MAX) + 1]);
+
+        std::assert_matches!(
+            paraview::validate(&too_large, Format::XML).unwrap_err(),
+            Error::IntegerOutOfRange { value, reason }
+                if value == i128::from(u32::MAX) + 1 && reason.contains("no DataStorage avoids this")
+        );
+
+        // ...and the largest index it does allow is accepted
+        paraview::validate(&Values::from(vec![u64::from(u32::MAX)]), Format::XML).unwrap();
     }
 
     #[test]
@@ -1982,7 +1992,7 @@ mod tests {
     fn write_data_survives_a_mid_write_failure() {
         // Fails while writing one attribute, after already having written an earlier one --
         // reproducing the shape of the original binary-backend bug (now caught upfront for that
-        // specific case by `DataWriter::validate_values`, but the discard-on-error handling in
+        // specific case by `paraview::validate`, but the discard-on-error handling in
         // `TimeSeriesDataWriter::write_time_step` is generic and backend-agnostic, so it needs its own
         // backend-agnostic regression test).
         let tmp_dir = temp_dir::TempDir::new().unwrap();

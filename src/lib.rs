@@ -17,7 +17,7 @@ mod binary_writer;
 mod error;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
-
+mod paraview;
 mod time_series_writer;
 mod values;
 pub mod xdmf_elements;
@@ -118,14 +118,6 @@ pub(crate) trait DataWriter {
 
     // flush the writer, if applicable
     fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Validate that `data` can be represented by this backend's format, without mutating state
-    /// or touching disk. Called for each attribute before it is written, so a value out of the
-    /// backend's representable range is reported as a caller error that leaves no partial output
-    /// behind, rather than as a mid-write failure.
-    fn validate_values(&self, _data: &Values<'_>) -> Result<()> {
         Ok(())
     }
 }

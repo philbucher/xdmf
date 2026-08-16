@@ -189,7 +189,7 @@ fn write_xdmf() {
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 2e0 0e0 0e0 0e0 1e0 0e0 1e0 1e0 0e0 2e0 1e0 0e0 0e0 2e0 0e0 1e0 2e0 0e0 2e0 2e0 0e0 5e-1 -5e-1 2e-1 -5e-1 5e-1 2e-1 1.5e0 -5e-1 2e-1 2.5e0 5e-1 2e-1 5e-1 1.5e0 2e-1 5e-1 2.5e0 2e-1 1.5e0 2.5e0 2e-1 2.5e0 1.5e0 2e-1</DataItem>
-        <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="4">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
+        <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -303,7 +303,7 @@ fn write_xdmf_only_point_mesh() {
             </Topology>
         </Grid>
         <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 2e0 0e0 0e0 0e0 1e0 0e0 1e0 1e0 0e0 2e0 1e0 0e0 0e0 2e0 0e0 1e0 2e0 0e0 2e0 2e0 0e0 5e-1 -5e-1 2e-1 -5e-1 5e-1 2e-1 1.5e0 -5e-1 2e-1 2.5e0 5e-1 2e-1 5e-1 1.5e0 2e-1 5e-1 2.5e0 2e-1 1.5e0 2.5e0 2e-1 2.5e0 1.5e0 2e-1</DataItem>
-        <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="4">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
+        <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -396,7 +396,7 @@ fn write_xdmf_point_mesh() {
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="17 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 2e0 0e0 0e0 0e0 1e0 0e0 1e0 1e0 0e0 2e0 1e0 0e0 0e0 2e0 0e0 1e0 2e0 0e0 2e0 2e0 0e0 5e-1 -5e-1 2e-1 -5e-1 5e-1 2e-1 1.5e0 -5e-1 2e-1 2.5e0 5e-1 2e-1 5e-1 1.5e0 2e-1 5e-1 2.5e0 2e-1 1.5e0 2.5e0 2e-1 2.5e0 1.5e0 2e-1</DataItem>
-        <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="4">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
+        <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -467,7 +467,7 @@ fn write_xdmf_f32_points() {
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="3 3" NumberType="Float" Format="XML" Precision="4">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0</DataItem>
-        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">4 0 1 2</DataItem>
+        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -524,7 +524,7 @@ fn write_xdmf_integer_data() {
                 </Topology>
                 <Time Value="0"/>
                 <Attribute Name="rank_u64" AttributeType="Scalar" Center="Node">
-                    <DataItem Dimensions="3" NumberType="UInt" Format="XML" Precision="4">1 2 3</DataItem>
+                    <DataItem Dimensions="3" NumberType="UInt" Format="XML" Precision="8">1 2 3</DataItem>
                 </Attribute>
                 <Attribute Name="rank_u32" AttributeType="Scalar" Center="Node">
                     <DataItem Dimensions="3" NumberType="UInt" Format="XML" Precision="4">1 2 3</DataItem>
@@ -538,7 +538,7 @@ fn write_xdmf_integer_data() {
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="3 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0</DataItem>
-        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">4 0 1 2</DataItem>
+        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -557,7 +557,8 @@ fn write_data_rejects_i64_beyond_the_double_mantissa_for_ascii_only() {
     const TWO_POW_53: i64 = 1 << 53;
 
     let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
-    let connectivity = [0_u64, 1, 2];
+    // u32, so that the Binary case below fails on the attribute rather than on the mesh
+    let connectivity = [0_u32, 1, 2];
     let cell_types = [xdmf::CellType::Triangle];
 
     let write = |storage, values: Vec<i64>| {
@@ -600,10 +601,10 @@ fn write_data_rejects_i64_beyond_the_double_mantissa_for_ascii_only() {
         write(storage, vec![i64::MAX, i64::MIN, 0]).unwrap();
     }
 
-    // Binary has its own, much lower limit and refuses it for its own reason
+    // Binary does not take i64 at any magnitude, so it refuses the type rather than the range
     std::assert_matches!(
-        write(xdmf::DataStorage::Binary, vec![TWO_POW_53, 0, 0]).unwrap_err(),
-        xdmf::Error::IntegerOutOfRange { reason, .. } if reason.contains("another DataStorage")
+        write(xdmf::DataStorage::Binary, vec![0, 0, 0]).unwrap_err(),
+        xdmf::Error::InvalidData { reason } if reason.contains("cannot hold i64 data")
     );
 }
 
@@ -616,10 +617,11 @@ fn write_data_rejects_u64_above_u32_max_for_every_storage() {
     let connectivity = [0_u64, 1, 2];
     let cell_types = [xdmf::CellType::Triangle];
 
+    // Binary is absent on purpose: it refuses u64 outright, whatever the value, which
+    // `write_mesh_rejects_64_bit_connectivity_for_binary` and the binary_writer tests cover
     let storages = [
         xdmf::DataStorage::Ascii,
         xdmf::DataStorage::AsciiInline,
-        xdmf::DataStorage::Binary,
         #[cfg(feature = "hdf5")]
         xdmf::DataStorage::Hdf5SingleFile {
             deflate_level: None,
@@ -705,22 +707,59 @@ fn write_mesh_connectivity_index_types() {
     );
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, u64),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">4 0 1 2</DataItem>"#
+        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>"#
     );
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, i32),
         r#"<DataItem Name="connectivity" Dimensions="4" NumberType="Int" Format="XML" Precision="4">4 0 1 2</DataItem>"#
     );
-    // i64 is the one type that keeps its full width, so it is the one that lifts the u32::MAX
-    // limit on the mesh size -- but only where the storage can hold it
+    // i64 is the one type that lifts the u32::MAX limit on the mesh size, and it too is written
+    // at its own width
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, i64),
         r#"<DataItem Name="connectivity" Dimensions="4" NumberType="Int" Format="XML" Precision="8">4 0 1 2</DataItem>"#
     );
+
+    // ...while Binary takes the 32-bit types only, since ParaView misreads 64-bit integers there
     assert_eq!(
-        connectivity_line_for!(xdmf::DataStorage::Binary, i64),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="Int" Format="Binary" Precision="4" Endian="Little">test_output.bin/cells.bin</DataItem>"#
+        connectivity_line_for!(xdmf::DataStorage::Binary, u32),
+        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="Binary" Precision="4" Endian="Little">test_output.bin/cells.bin</DataItem>"#
     );
+}
+
+#[test]
+fn write_mesh_rejects_64_bit_connectivity_for_binary() {
+    // the connectivity is data like any other, so the Binary storage refuses it at 64 bits too --
+    // rather than narrowing it and putting a type in the file that the caller did not pass
+    let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
+    let cell_types = [xdmf::CellType::Triangle];
+
+    for expected in ["cannot hold u64 data", "cannot hold i64 data"] {
+        let tmp_dir = TempDir::new().unwrap();
+        let xdmf_writer = TimeSeriesWriter::new(
+            tmp_dir.path().join("test_output"),
+            xdmf::DataStorage::Binary,
+        )
+        .unwrap();
+
+        // `TimeSeriesDataWriter` is not `Debug`, so the error is taken out of the `Result` first
+        let error = if expected.starts_with("cannot hold u64") {
+            xdmf_writer
+                .write_mesh(&coords, &[0_u64, 1, 2], &cell_types)
+                .err()
+        } else {
+            xdmf_writer
+                .write_mesh(&coords, &[0_i64, 1, 2], &cell_types)
+                .err()
+        }
+        .unwrap();
+
+        std::assert_matches!(
+            error,
+            xdmf::Error::InvalidData { reason } if reason.contains(expected),
+            "Binary must refuse 64-bit connectivity"
+        );
+    }
 }
 
 #[test]

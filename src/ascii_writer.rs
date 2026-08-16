@@ -52,10 +52,6 @@ impl DataWriter for AsciiInlineWriter {
     ) -> Result<DataContent> {
         Ok(values_to_string(data).into())
     }
-
-    fn validate_values(&self, data: &Values<'_>) -> Result<()> {
-        validate_int_range(data)
-    }
 }
 
 /// This writer uses the XML format, but instead of writing the data directly into the xdmf file,
@@ -206,45 +202,6 @@ impl DataWriter for AsciiWriter {
 
         crate::remove_step_files(&mut self.step_files)
     }
-
-    fn validate_values(&self, data: &Values<'_>) -> Result<()> {
-        validate_int_range(data)
-    }
-}
-
-/// Largest magnitude an `i64` may have in the ascii storage methods.
-///
-/// `ParaView` parses their integers through a `double`, whose mantissa holds 53 bits, so a value
-/// past this comes back rounded -- and `i64::MAX` comes back as `i64::MIN`, sign flipped, which
-/// looks like data rather than like a failure. The digits written to the file are exact either
-/// way, so this is the reader's limit and not the writer's, but it is rejected up front all the
-/// same: every other backend already refuses what its reader cannot represent, rather than leave a
-/// number in the output that `ParaView` will display as a different one.
-///
-/// Values above this that happen to be even do survive the `double`. The check stays on the range
-/// that is exact for *every* value rather than the one that is exact if you are lucky.
-const MAX_EXACT_ASCII_INT: u64 = 1 << 53;
-
-fn validate_int_range(data: &Values<'_>) -> Result<()> {
-    let Values::I64(values) = data else {
-        // u64 is already capped far below this by `Values::validate_uint_range`, and no other
-        // element type reaches 53 bits of mantissa in the first place
-        return Ok(());
-    };
-
-    for &value in values.iter() {
-        if value.unsigned_abs() > MAX_EXACT_ASCII_INT {
-            return Err(Error::IntegerOutOfRange {
-                value: i128::from(value),
-                reason: format!(
-                    "the ascii storage methods are read back through a double, so an i64 beyond \
-                     +/-{MAX_EXACT_ASCII_INT} is shown rounded; the Hdf5SingleFile and \
-                     Hdf5MultipleFiles storages keep the full width"
-                ),
-            });
-        }
-    }
-    Ok(())
 }
 
 pub trait FormatNumber {
@@ -374,28 +331,6 @@ mod tests {
         assert_eq!(num.format_number(), "1000");
         let num: usize = 123_456_789;
         assert_eq!(num.format_number(), "123456789");
-    }
-
-    #[test]
-    fn validate_int_range_boundary() {
-        // 2^53 itself is the last integer a double holds exactly, so it is still accepted
-        let max = i64::try_from(MAX_EXACT_ASCII_INT).unwrap();
-        validate_int_range(&vec![max, -max, 0, 1].into()).unwrap();
-
-        for out_of_range in [max + 1, -max - 1, i64::MAX, i64::MIN] {
-            std::assert_matches!(
-                validate_int_range(&vec![0_i64, out_of_range].into()).unwrap_err(),
-                Error::IntegerOutOfRange { value, reason }
-                    if value == i128::from(out_of_range) && reason.contains("read back through a double"),
-                "an i64 of {out_of_range} must be rejected for the ascii storages"
-            );
-        }
-
-        // every other element type is unaffected -- u64 is capped far below this already, and the
-        // rest cannot reach 53 bits
-        validate_int_range(&vec![u64::from(u32::MAX)].into()).unwrap();
-        validate_int_range(&vec![i32::MIN, i32::MAX].into()).unwrap();
-        validate_int_range(&vec![f64::MAX, f64::MIN].into()).unwrap();
     }
 
     // Deterministic bit patterns rather than a `rand` dependency, so a failure is reproducible.

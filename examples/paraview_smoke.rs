@@ -7,9 +7,10 @@
 //! number of components per field, not just the right numeric values.
 //!
 //! The cell data covers every integer element type the writer supports (`u64`, `i64`, `u32`,
-//! `i32`) at the edges of its range, which is what pins down the 64-bit handling: for
-//! `DataStorage::Binary` the writer narrows `i64`/`u64` to 32 bits, and dropping that narrowing
-//! makes `ParaView` fail to read the file at all.
+//! `i32`) at the edges of its range, which is what pins down the 64-bit handling. `ParaView` reads
+//! 64-bit integers correctly from the ascii and HDF5 storages but at the wrong stride from
+//! `Format="Binary"`, so `DataStorage::Binary` refuses `i64`/`u64` outright and its fixtures carry
+//! the 32-bit fields only.
 //!
 //! One fixture is written per (coordinate precision, connectivity index type) pair: f64 and f32
 //! coordinates produce different bytes *and* a different `Precision` in the light data, and each
@@ -54,12 +55,9 @@ const REGION_ID: [u64; NUM_CELLS] = [100, 200];
 // (u32 read as i32, or the sign bit of a negative i32 dropped) cannot pass
 const LEVEL_I32: [i32; NUM_CELLS] = [i32::MIN, i32::MAX];
 const FLAG_U32: [u32; NUM_CELLS] = [0, u32::MAX];
-// the 64-bit fields stay inside the 32-bit range, since `DataStorage::Binary` narrows them on the
-// way out (ParaView's legacy Xdmf2 reader misreads 64-bit integers in `Format="Binary"`)
 const LEVEL_I64: [i64; NUM_CELLS] = [i32::MIN as i64, i32::MAX as i64];
-// ...while this one deliberately does not, so the storages that keep the full width are checked on
-// values that cannot survive unless they really are read back as 64-bit integers. Skipped for
-// `Binary`, which rejects anything out of 32-bit range outright.
+// deliberately out of 32-bit range, so the storages that carry 64-bit integers are checked on
+// values that cannot survive unless they really are read back as 64-bit.
 //
 // +/-(2^53 - 1) rather than something wider, because that is the largest magnitude that reads back
 // exactly from *every* storage: ParaView parses the ascii formats' integers through a double, so
@@ -113,6 +111,9 @@ struct ExpectedFixture {
 
 #[derive(Serialize)]
 struct Expected {
+    /// Which storage wrote these, so the verification script knows how many fixtures to expect --
+    /// `Binary` carries fewer, having no 64-bit integer types.
+    storage: String,
     fixtures: Vec<ExpectedFixture>,
 }
 
@@ -172,7 +173,15 @@ enum IndexType {
 }
 
 impl IndexType {
-    const ALL: [Self; 4] = [Self::U32, Self::U64, Self::I32, Self::I64];
+    /// The types a given storage can carry: `Binary` takes the 32-bit ones only, since `ParaView`
+    /// reads 64-bit integers in `Format="Binary"` at the wrong stride and the writer refuses them.
+    fn all_for(storage: DataStorage) -> &'static [Self] {
+        if matches!(storage, DataStorage::Binary) {
+            &[Self::U32, Self::I32]
+        } else {
+            &[Self::U32, Self::U64, Self::I32, Self::I64]
+        }
+    }
 
     fn suffix(self) -> &'static str {
         match self {
@@ -220,7 +229,7 @@ fn main() -> IoResult<()> {
 
     let mut fixtures = Vec::new();
     for precision in [Precision::F64, Precision::F32] {
-        for index_type in IndexType::ALL {
+        for &index_type in IndexType::all_for(storage) {
             fixtures.push(write_fixture(
                 output_dir,
                 storage_arg,
@@ -231,7 +240,10 @@ fn main() -> IoResult<()> {
         }
     }
 
-    let expected = Expected { fixtures };
+    let expected = Expected {
+        storage: storage_arg.to_lowercase(),
+        fixtures,
+    };
 
     let expected_json =
         serde_json::to_string(&expected).map_err(|e| IoError::new(InvalidInput, e.to_string()))?;
@@ -270,9 +282,9 @@ fn write_fixture(
         index_type.suffix()
     ));
 
-    // `Binary` narrows 64-bit integers to 32 bits and refuses anything that does not fit, so the
-    // out-of-32-bit-range field is written for every other storage only
-    let writes_wide_integers = !matches!(storage, DataStorage::Binary);
+    // `Binary` cannot carry 64-bit integers at all -- ParaView reads them at the wrong stride --
+    // so it refuses them and its fixtures carry the 32-bit fields only
+    let writes_64_bit_integers = !matches!(storage, DataStorage::Binary);
 
     let mut coords = COORDS;
     precision.narrow_expected(&mut coords);
@@ -321,12 +333,12 @@ fn write_fixture(
         precision.narrow_expected(stress.as_flattened_mut());
 
         let mut integers = vec![
-            ExpectedIntegerField::new("region_id", REGION_ID),
-            ExpectedIntegerField::new("level_i64", LEVEL_I64),
             ExpectedIntegerField::new("level_i32", LEVEL_I32),
             ExpectedIntegerField::new("flag_u32", FLAG_U32),
         ];
-        if writes_wide_integers {
+        if writes_64_bit_integers {
+            integers.push(ExpectedIntegerField::new("region_id", REGION_ID));
+            integers.push(ExpectedIntegerField::new("level_i64", LEVEL_I64));
             integers.push(ExpectedIntegerField::new("level_i64_wide", LEVEL_I64_WIDE));
         }
 
@@ -359,11 +371,11 @@ fn write_fixture(
             )?;
 
             // integer data is unaffected by the fixture's float precision
-            time_step.cell_data("region_id", DataAttribute::Scalar, &REGION_ID)?;
-            time_step.cell_data("level_i64", DataAttribute::Scalar, &LEVEL_I64)?;
             time_step.cell_data("level_i32", DataAttribute::Scalar, &LEVEL_I32)?;
             time_step.cell_data("flag_u32", DataAttribute::Scalar, &FLAG_U32)?;
-            if writes_wide_integers {
+            if writes_64_bit_integers {
+                time_step.cell_data("region_id", DataAttribute::Scalar, &REGION_ID)?;
+                time_step.cell_data("level_i64", DataAttribute::Scalar, &LEVEL_I64)?;
                 time_step.cell_data("level_i64_wide", DataAttribute::Scalar, &LEVEL_I64_WIDE)?;
             }
 
