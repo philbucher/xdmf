@@ -22,6 +22,9 @@ pub(crate) struct BinaryWriter {
     bin_files_dir: PathBuf,
     folder_name: PathBuf,
     write_time: Option<String>,
+    // Files written for the time step currently in progress, so an abandoned step can remove
+    // them again instead of leaving them behind unreferenced.
+    step_files: Vec<PathBuf>,
 }
 
 impl BinaryWriter {
@@ -38,6 +41,7 @@ impl BinaryWriter {
             folder_name: folder_name.into(),
             bin_files_dir,
             write_time: None,
+            step_files: Vec::new(),
         })
     }
 
@@ -105,9 +109,13 @@ impl DataWriter for BinaryWriter {
         );
         let data_path = self.bin_files_dir.join(&data_file_name);
 
-        let mut data_file = BufWriter::new(
-            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?,
-        );
+        let data_file =
+            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?;
+
+        // Recorded once the file exists
+        self.step_files.push(data_path.clone());
+
+        let mut data_file = BufWriter::new(data_file);
 
         values_to_writer(data, &mut data_file, &data_path)?;
 
@@ -125,6 +133,7 @@ impl DataWriter for BinaryWriter {
         }
 
         self.write_time = Some(time.to_string());
+        self.step_files.clear();
         Ok(())
     }
 
@@ -134,7 +143,19 @@ impl DataWriter for BinaryWriter {
         }
 
         self.write_time = None;
+        self.step_files.clear();
         Ok(())
+    }
+
+    fn write_data_discard(&mut self) -> Result<()> {
+        if self.write_time.is_none() {
+            return Err(Error::Internal("writing data was not initialized"));
+        }
+
+        // the step is over either way, so the writer is reset before the removals are reported
+        self.write_time = None;
+
+        crate::remove_step_files(&mut self.step_files)
     }
 
     fn validate_values(&self, data: &Values<'_>) -> Result<()> {
@@ -319,6 +340,73 @@ mod tests {
         assert_eq!(bytes, expected);
 
         writer.write_data_finalize().unwrap();
+    }
+
+    #[test]
+    fn binary_writer_write_data_discard() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = BinaryWriter::new(&file_name).unwrap();
+
+        std::assert_matches!(
+            writer.write_data_discard().unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
+
+        let bin_dir = file_name.with_extension("bin");
+        let node_file = bin_dir.join("data_t_0.5_point_data_discarded.bin");
+        let cell_file = bin_dir.join("data_t_0.5_cell_data_discarded.bin");
+
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data("discarded", attribute::Center::Node, &vec![1.0, 2.0].into())
+            .unwrap();
+        writer
+            .write_data("discarded", attribute::Center::Cell, &vec![3.0].into())
+            .unwrap();
+        assert!(node_file.exists());
+        assert!(cell_file.exists());
+
+        writer.write_data_discard().unwrap();
+
+        // every file written for the step is removed, not just the last one
+        assert!(!node_file.exists());
+        assert!(!cell_file.exists());
+        assert!(writer.write_time.is_none());
+        assert!(writer.step_files.is_empty());
+
+        // the time can be written again afterwards, and finalizing keeps what it wrote
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data("kept", attribute::Center::Node, &vec![4.0].into())
+            .unwrap();
+        writer.write_data_finalize().unwrap();
+
+        assert!(bin_dir.join("data_t_0.5_point_data_kept.bin").exists());
+        assert!(!node_file.exists());
+    }
+
+    #[test]
+    fn binary_writer_write_data_discard_after_a_failed_create() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = BinaryWriter::new(&file_name).unwrap();
+
+        // a directory in the place of the data file makes `File::create` fail
+        let bin_dir = file_name.with_extension("bin");
+        std::fs::create_dir(bin_dir.join("data_t_0.5_point_data_boom.bin")).unwrap();
+
+        writer.write_data_initialize("0.5").unwrap();
+        std::assert_matches!(
+            writer
+                .write_data("boom", attribute::Center::Node, &vec![1.0].into())
+                .unwrap_err(),
+            Error::Io { operation, .. } if operation == "creating data file"
+        );
+
+        // no file was created, so the failed attribute recorded nothing and the discard has
+        // nothing to remove -- recording the path any earlier would fail here instead
+        writer.write_data_discard().unwrap();
     }
 
     #[test]

@@ -49,6 +49,7 @@ them. Revisit deliberately, not by drift.
 | [`05_reader.md`](05_reader.md) | M5 | `TimeSeriesReader` / `TimeSeriesDataReader`, per-format `DataReader` backends |
 | [`06_python_bindings.md`](06_python_bindings.md) | M6 | Review of the vibe-coded bindings, GIL release, abi3 + static-HDF5 wheels on PyPI |
 | [`07_mpi.md`](07_mpi.md) | post-1.0 | API draft only: collective sizing, global node ids, verification strategy |
+| [`08_write_data_builder.md`](08_write_data_builder.md) | M7 (before M6 Part 2) | Per-attribute `TimeStep` builder replacing `write_data`'s tuple lists; intra-step buffer reuse; `Values` out of caller code |
 
 ### Historical records (not plans to execute)
 

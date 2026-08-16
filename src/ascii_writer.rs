@@ -56,6 +56,9 @@ pub(crate) struct AsciiWriter {
     txt_files_dir: PathBuf,
     folder_name: PathBuf,
     write_time: Option<String>,
+    // Files written for the time step currently in progress, so an abandoned step can remove
+    // them again instead of leaving them behind unreferenced.
+    step_files: Vec<PathBuf>,
 }
 
 impl AsciiWriter {
@@ -72,6 +75,7 @@ impl AsciiWriter {
             folder_name: folder_name.into(),
             txt_files_dir,
             write_time: None,
+            step_files: Vec::new(),
         })
     }
 
@@ -142,9 +146,13 @@ impl DataWriter for AsciiWriter {
         );
         let data_path = self.txt_files_dir.join(&data_file_name);
 
-        let mut data_file = BufWriter::new(
-            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?,
-        );
+        let data_file =
+            File::create(&data_path).map_err(io_ctx("creating data file", &data_path))?;
+
+        // Recorded once the file exists
+        self.step_files.push(data_path.clone());
+
+        let mut data_file = BufWriter::new(data_file);
 
         values_to_writer(data, &mut data_file).map_err(io_ctx("writing data", &data_path))?;
 
@@ -162,6 +170,7 @@ impl DataWriter for AsciiWriter {
         }
 
         self.write_time = Some(time.to_string());
+        self.step_files.clear();
         Ok(())
     }
 
@@ -171,7 +180,19 @@ impl DataWriter for AsciiWriter {
         }
 
         self.write_time = None;
+        self.step_files.clear();
         Ok(())
+    }
+
+    fn write_data_discard(&mut self) -> Result<()> {
+        if self.write_time.is_none() {
+            return Err(Error::Internal("writing data was not initialized"));
+        }
+
+        // the step is over either way, so the writer is reset before the removals are reported
+        self.write_time = None;
+
+        crate::remove_step_files(&mut self.step_files)
     }
 }
 
@@ -375,6 +396,125 @@ mod tests {
             result,
             "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0".into()
         );
+    }
+
+    #[test]
+    fn ascii_writer_write_data_discard() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = AsciiWriter::new(&file_name).unwrap();
+
+        std::assert_matches!(
+            writer.write_data_discard().unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
+
+        let txt_dir = file_name.with_extension("txt");
+        let node_file = txt_dir.join("data_t_0.5_point_data_discarded.txt");
+        let cell_file = txt_dir.join("data_t_0.5_cell_data_discarded.txt");
+
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data(
+                "discarded",
+                attribute::Center::Node,
+                &Values::F64(vec![1.0, 2.0].into()),
+            )
+            .unwrap();
+        writer
+            .write_data(
+                "discarded",
+                attribute::Center::Cell,
+                &Values::F64(vec![3.0].into()),
+            )
+            .unwrap();
+        assert!(node_file.exists());
+        assert!(cell_file.exists());
+
+        writer.write_data_discard().unwrap();
+
+        // every file written for the step is removed, not just the last one
+        assert!(!node_file.exists());
+        assert!(!cell_file.exists());
+        assert!(writer.write_time.is_none());
+        assert!(writer.step_files.is_empty());
+
+        // the time can be written again afterwards, and finalizing keeps what it wrote
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data(
+                "kept",
+                attribute::Center::Node,
+                &Values::F64(vec![4.0].into()),
+            )
+            .unwrap();
+        writer.write_data_finalize().unwrap();
+
+        assert!(txt_dir.join("data_t_0.5_point_data_kept.txt").exists());
+        assert!(!node_file.exists());
+    }
+
+    #[test]
+    fn ascii_writer_write_data_discard_removes_every_file_despite_a_failure() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = AsciiWriter::new(&file_name).unwrap();
+
+        let txt_dir = file_name.with_extension("txt");
+        let first_file = txt_dir.join("data_t_0.5_point_data_first.txt");
+        let second_file = txt_dir.join("data_t_0.5_point_data_second.txt");
+
+        writer.write_data_initialize("0.5").unwrap();
+        for name in ["first", "second"] {
+            writer
+                .write_data(
+                    name,
+                    attribute::Center::Node,
+                    &Values::F64(vec![1.0].into()),
+                )
+                .unwrap();
+        }
+
+        // removing the first file fails (it is already gone), which must not stop the second one
+        // from being removed
+        std::fs::remove_file(&first_file).unwrap();
+
+        std::assert_matches!(
+            writer.write_data_discard().unwrap_err(),
+            Error::Io { operation, path, .. }
+                if operation == "removing discarded data file" && path == first_file
+        );
+
+        assert!(!second_file.exists());
+        assert!(writer.write_time.is_none());
+        assert!(writer.step_files.is_empty());
+    }
+
+    #[test]
+    fn ascii_writer_write_data_discard_after_a_failed_create() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = AsciiWriter::new(&file_name).unwrap();
+
+        // a directory in the place of the data file makes `File::create` fail
+        let txt_dir = file_name.with_extension("txt");
+        std::fs::create_dir(txt_dir.join("data_t_0.5_point_data_boom.txt")).unwrap();
+
+        writer.write_data_initialize("0.5").unwrap();
+        std::assert_matches!(
+            writer
+                .write_data(
+                    "boom",
+                    attribute::Center::Node,
+                    &Values::F64(vec![1.0].into()),
+                )
+                .unwrap_err(),
+            Error::Io { operation, .. } if operation == "creating data file"
+        );
+
+        // no file was created, so the failed attribute recorded nothing and the discard has
+        // nothing to remove -- recording the path any earlier would fail here instead
+        writer.write_data_discard().unwrap();
     }
 
     #[test]

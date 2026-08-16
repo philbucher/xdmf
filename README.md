@@ -34,21 +34,32 @@ let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
 // write the mesh
 let mut time_series_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types).expect("failed to write mesh");
 
-// the data buffers, reused across time steps: `Values` only borrows them
-let point_values = vec![0.0; 9];
+// each attribute is written as it is passed, so these buffers can be refilled and reused
+// for every field of every time step
+let mut point_values = vec![0.0; 9];
 let cell_values = vec![0.0, 1.0];
 
 // write the data for 10 time steps
 for i in 0..10 {
     time_series_writer
-        .write_data(
-            &i.to_string(),
-            [("point_data", xdmf::DataAttribute::Vector, point_values.as_slice().into())],
-            [("cell_data", xdmf::DataAttribute::Scalar, cell_values.as_slice().into())],
-        )
-        .expect("failed to write time step data");
+        .write_time_step(&i.to_string(), |step| {
+            step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)?;
+
+            point_values.fill(i as f64); // the same buffer, refilled for the next attribute
+            step.point_data("more_point_data", xdmf::DataAttribute::Vector, &point_values)?;
+
+            step.cell_data("cell_data", xdmf::DataAttribute::Scalar, &cell_values)
+        })
+        .expect("failed to write time step");
 }
 ~~~
+
+The step is scoped to the closure: when it returns `Ok`, the step is added to the XDMF file; when it
+returns an error, the step is discarded and the heavy data already written for it is removed again.
+So a step can neither be left half-written by forgetting to complete it, nor leave data behind that
+nothing references. The error may be one of your own — any type that `xdmf::Error` converts into
+works, so `?` can be used on both inside the closure, and `write_time_step` hands your error back
+unchanged.
 
 ### Which data storage should be used for the heavy data?
 

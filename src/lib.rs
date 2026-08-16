@@ -1,7 +1,10 @@
 //! A library for writing XDMF files, which are commonly used in scientific simulations for visualizing datasets on meshes, for example with [Paraview](https://www.paraview.org/).
 //!
 //! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
-use std::{path::Path, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use xdmf_elements::{
@@ -21,7 +24,7 @@ pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use error::{Error, Result};
-pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter};
+pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use values::Values;
 pub use xdmf_elements::CellType;
 
@@ -98,15 +101,26 @@ pub(crate) trait DataWriter {
         Ok(())
     }
 
+    /// End the current time step and remove the heavy data written for it.
+    ///
+    /// Called instead of [`write_data_finalize`](Self::write_data_finalize) when a time step is
+    /// abandoned rather than written -- an attribute was rejected, or the caller's closure
+    /// returned an error. Without it the step's heavy data would stay on disk with no `<Grid>`
+    /// in the XDMF file referencing it. Backends that write nothing until the step is complete
+    /// (e.g. `AsciiInline`) keep the default, which is just to finalize.
+    fn write_data_discard(&mut self) -> Result<()> {
+        self.write_data_finalize()
+    }
+
     // flush the writer, if applicable
     fn flush(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Validate that `data` can be represented by this backend's format, without mutating state
-    /// or touching disk. Called for every attribute before `write_data_initialize` runs, so a
-    /// value out of the backend's representable range is reported as an upfront caller error
-    /// rather than as a mid-write failure that would otherwise leave the writer poisoned.
+    /// or touching disk. Called for each attribute before it is written, so a value out of the
+    /// backend's representable range is reported as a caller error that leaves no partial output
+    /// behind, rather than as a mid-write failure.
     fn validate_values(&self, _data: &Values<'_>) -> Result<()> {
         Ok(())
     }
@@ -249,6 +263,32 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> Resu
     }
 
     Ok(())
+}
+
+/// Remove the files written for an abandoned time step, shared by the file-per-attribute backends
+/// (`Ascii`/`Binary`) implementing [`DataWriter::write_data_discard`].
+///
+/// The paths are drained out of `step_files`, so they are forgotten even if a removal fails -- a
+/// second discard attempt on the same paths would only report the same failure again. Every file
+/// is attempted before reporting, so one failure does not leave the rest behind; the first error
+/// is the one returned.
+pub(crate) fn remove_step_files(step_files: &mut Vec<PathBuf>) -> Result<()> {
+    let mut first_error = None;
+
+    for path in step_files.drain(..) {
+        let result = std::fs::remove_file(&path)
+            .map_err(error::io_ctx("removing discarded data file", &path));
+        if let Err(error) = result
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

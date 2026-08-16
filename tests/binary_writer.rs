@@ -39,19 +39,14 @@ fn write_and_verify_binary() {
         .unwrap();
 
     xdmf_writer
-        .write_data(
-            "0",
-            [(
+        .write_time_step("0", |step| {
+            step.point_data(
                 "temperature",
                 xdmf::DataAttribute::Scalar,
-                vec![10.0, 11.0, 12.0, 13.0].into(),
-            )],
-            [(
-                "region_id",
-                xdmf::DataAttribute::Scalar,
-                vec![100_u64, 200].into(),
-            )],
-        )
+                vec![10.0, 11.0, 12.0, 13.0],
+            )?;
+            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![100_u64, 200])
+        })
         .unwrap();
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -101,15 +96,14 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
         .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
 
-    let res = xdmf_writer.write_data(
-        "0",
-        [],
-        [(
+    // the attribute's error propagates out of the closure, so the step is never written
+    let res = xdmf_writer.write_time_step("0", |step| {
+        step.cell_data(
             "region_id",
             xdmf::DataAttribute::Scalar,
-            vec![u64::from(u32::MAX) + 1].into(),
-        )],
-    );
+            vec![u64::from(u32::MAX) + 1],
+        )
+    });
     std::assert_matches!(
         res.unwrap_err(),
         xdmf::Error::IntegerTooLargeForBinary { value }
@@ -123,10 +117,8 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
 
     // the writer must not be left poisoned by the failed step: a following valid step succeeds
     xdmf_writer
-        .write_data(
-            "1",
-            [],
-            [("region_id", xdmf::DataAttribute::Scalar, vec![7_u64].into())],
-        )
+        .write_time_step("1", |step| {
+            step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u64])
+        })
         .unwrap();
 }

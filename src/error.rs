@@ -2,8 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// Result alias using this crate's [`Error`] type.
-pub type Result<T> = std::result::Result<T, Error>;
+/// Result alias defaulting to this crate's [`Error`] type.
+///
+/// The error type is a parameter so that APIs taking a caller-supplied closure can name the
+/// caller's own error type; everything else uses the default.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The error type for all fallible operations in this crate.
 ///
@@ -58,7 +61,8 @@ pub enum Error {
         /// What is wrong with the mesh.
         reason: String,
     },
-    /// A time step string is not a valid float, or was already written.
+    /// A time step string is not a valid finite float, was already written, or its step was left
+    /// without any data.
     #[error("invalid time step '{time}': {reason}")]
     InvalidTimeStep {
         /// The offending time step string.
@@ -66,8 +70,7 @@ pub enum Error {
         /// What is wrong with it.
         reason: String,
     },
-    /// A data field given to `write_data` is invalid (wrong size, bad name, duplicate name, or
-    /// no data given at all).
+    /// A data field written into a time step is invalid (wrong size, bad name, or duplicate name).
     #[error("invalid data: {reason}")]
     InvalidData {
         /// What is wrong with the data.

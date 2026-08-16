@@ -161,14 +161,10 @@ mod tests {
             self.writer
                 .as_mut()
                 .unwrap()
-                .write_data(
-                    format!("{time}").as_str(),
-                    [
-                        ("pressure", xdmf::DataAttribute::Scalar, data.into()),
-                        ("velocity", xdmf::DataAttribute::Vector, vec_data.into()),
-                    ],
-                    [],
-                )
+                .write_time_step(format!("{time}").as_str(), |step| {
+                    step.point_data("pressure", xdmf::DataAttribute::Scalar, data)?;
+                    step.point_data("velocity", xdmf::DataAttribute::Vector, &vec_data)
+                })
                 .unwrap();
 
             // Implement step writing logic here

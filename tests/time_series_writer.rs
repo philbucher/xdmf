@@ -54,44 +54,42 @@ fn write_xdmf() {
             .map(|j| 1. * j as f64 + 1.5 * i as f64)
             .collect();
 
-        // deliberately not in alphabetical order: attributes must come out in the order given here
-        let point_data = [
-            (
-                "point_data_scalar",
-                xdmf::DataAttribute::Scalar,
-                point_data_scalar.into(),
-            ),
-            (
-                "point_data_vector",
-                xdmf::DataAttribute::Vector,
-                point_data_vec.into(),
-            ),
-            (
-                "point_data_tensor",
-                xdmf::DataAttribute::Tensor,
-                point_data_tensor.into(),
-            ),
-            (
-                "point_data_tensor6",
-                xdmf::DataAttribute::Tensor6,
-                point_data_tensor6.into(),
-            ),
-            (
-                "point_data_matrix_2x2",
-                xdmf::DataAttribute::Matrix(2, 2),
-                point_data_matrix2x2.into(),
-            ),
-            (
-                "point_data_generic-5",
-                xdmf::DataAttribute::Generic(5),
-                point_data_generic.into(),
-            ),
-        ];
-
-        let cell_data = [("cell_data", xdmf::DataAttribute::Scalar, cell_data.into())];
-
+        // deliberately not in alphabetical order: attributes must come out in the order written
         xdmf_writer
-            .write_data(&i.to_string(), point_data, cell_data)
+            .write_time_step(&i.to_string(), |step| {
+                step.point_data(
+                    "point_data_scalar",
+                    xdmf::DataAttribute::Scalar,
+                    &point_data_scalar,
+                )?;
+                step.point_data(
+                    "point_data_vector",
+                    xdmf::DataAttribute::Vector,
+                    &point_data_vec,
+                )?;
+                step.point_data(
+                    "point_data_tensor",
+                    xdmf::DataAttribute::Tensor,
+                    &point_data_tensor,
+                )?;
+                step.point_data(
+                    "point_data_tensor6",
+                    xdmf::DataAttribute::Tensor6,
+                    &point_data_tensor6,
+                )?;
+                step.point_data(
+                    "point_data_matrix_2x2",
+                    xdmf::DataAttribute::Matrix(2, 2),
+                    &point_data_matrix2x2,
+                )?;
+                step.point_data(
+                    "point_data_generic-5",
+                    xdmf::DataAttribute::Generic(5),
+                    &point_data_generic,
+                )?;
+
+                step.cell_data("cell_data", xdmf::DataAttribute::Scalar, &cell_data)
+            })
             .unwrap();
     }
 
@@ -346,15 +344,13 @@ fn write_xdmf_point_mesh() {
         let point_data_scalar: Vec<f64> = (0..17).map(|j| j as f64 + i as f64).collect();
 
         xdmf_writer
-            .write_data(
-                &i.to_string(),
-                [(
+            .write_time_step(&i.to_string(), |step| {
+                step.point_data(
                     "point_data_scalar",
                     xdmf::DataAttribute::Scalar,
-                    point_data_scalar.into(),
-                )],
-                [],
-            )
+                    &point_data_scalar,
+                )
+            })
             .unwrap();
     }
 
