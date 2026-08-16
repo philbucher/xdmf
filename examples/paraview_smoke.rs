@@ -55,6 +55,12 @@ struct Expected {
 }
 
 /// Which width the coordinates and the float attributes of a fixture are written at.
+///
+/// The two methods below feed the two sides of the comparison the verification script makes, and
+/// are both needed: [`narrow_expected`](Self::narrow_expected) fixes up what `expected.json` says
+/// `ParaView` must read back, [`values`](Self::values) fixes up what is actually written. They stay
+/// separate rather than becoming one call because the f64 case writes a *borrow* of the same buffer
+/// the expectations are taken from, which rules out handing out a `&mut` and a `&` at once.
 #[derive(Clone, Copy, PartialEq)]
 enum Precision {
     F64,
@@ -62,13 +68,31 @@ enum Precision {
 }
 
 impl Precision {
-    /// Round every value to what it becomes as an `f32`, so the recorded expectations are the
+    /// Rounds every value to what it becomes as an `f32`, so the recorded expectations are the
     /// values `ParaView` must read back rather than the ones that went in.
-    fn narrow(self, values: &mut [f64]) {
+    ///
+    /// Not a no-op on anything but round numbers: `0.1_f64 as f32` widens back to
+    /// `0.10000000149011612`, and the script compares exactly.
+    fn narrow_expected(self, values: &mut [f64]) {
         if self == Self::F32 {
             for value in values {
                 *value = f64::from(*value as f32);
             }
+        }
+    }
+
+    /// The values as they are written at this precision: the `f64` values borrowed, or an `f32`
+    /// copy.
+    ///
+    /// Lossless in practice, since every caller narrows first.
+    fn values(self, values: &[f64]) -> Values<'_> {
+        match self {
+            Self::F64 => values.into(),
+            Self::F32 => values
+                .iter()
+                .map(|&v| v as f32)
+                .collect::<Vec<f32>>()
+                .into(),
         }
     }
 }
@@ -128,7 +152,7 @@ fn write_fixture(
     let base_path = output_dir.join(format!("fixture_{}{suffix}", storage_arg.to_lowercase()));
 
     let mut coords = COORDS;
-    precision.narrow(&mut coords);
+    precision.narrow_expected(&mut coords);
 
     let xdmf_writer = TimeSeriesWriter::new(&base_path, storage)?;
     let mut xdmf_writer = match precision {
@@ -168,10 +192,10 @@ fn write_fixture(
             })
             .collect();
 
-        precision.narrow(&mut temperature);
-        precision.narrow(displacement.as_flattened_mut());
-        precision.narrow(velocity_gradient.as_flattened_mut());
-        precision.narrow(stress.as_flattened_mut());
+        precision.narrow_expected(&mut temperature);
+        precision.narrow_expected(displacement.as_flattened_mut());
+        precision.narrow_expected(velocity_gradient.as_flattened_mut());
+        precision.narrow_expected(stress.as_flattened_mut());
 
         timesteps.push(ExpectedTimestep {
             time: step as f64,
@@ -188,17 +212,17 @@ fn write_fixture(
             time_step.point_data(
                 "temperature",
                 DataAttribute::Scalar,
-                at_precision(&temperature, precision),
+                precision.values(&temperature),
             )?;
             time_step.point_data(
                 "displacement",
                 DataAttribute::Vector,
-                at_precision(displacement.as_flattened(), precision),
+                precision.values(displacement.as_flattened()),
             )?;
             time_step.point_data(
                 "velocity_gradient",
                 DataAttribute::Tensor,
-                at_precision(velocity_gradient.as_flattened(), precision),
+                precision.values(velocity_gradient.as_flattened()),
             )?;
 
             // integer data is unaffected by the fixture's float precision
@@ -206,7 +230,7 @@ fn write_fixture(
             time_step.cell_data(
                 "stress",
                 DataAttribute::Tensor6,
-                at_precision(stress.as_flattened(), precision),
+                precision.values(stress.as_flattened()),
             )
         })?;
     }
@@ -223,16 +247,4 @@ fn write_fixture(
         points: coords.chunks_exact(3).map(<[f64]>::to_vec).collect(),
         timesteps,
     })
-}
-
-/// The attribute values at the fixture's precision: the f64 values borrowed, or an f32 copy.
-fn at_precision(values: &[f64], precision: Precision) -> Values<'_> {
-    match precision {
-        Precision::F64 => values.into(),
-        Precision::F32 => values
-            .iter()
-            .map(|&v| v as f32)
-            .collect::<Vec<f32>>()
-            .into(),
-    }
 }
