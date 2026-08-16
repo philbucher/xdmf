@@ -47,6 +47,15 @@ longer-standing complaint.
 >   know about it. Recording it any earlier would be wrong in the other direction — a failed
 >   `File::create` would leave a path to a file that never existed, which the discard would then
 >   fail to remove. The removal loop the two backends share lives in `crate::remove_step_files`.
+> - **Time-step validation gained two rules, and the empty-step error changed variant.** Contrary
+>   to "Things to get right" below, not every `reason` string kept its meaning: an empty step now
+>   fails with `Error::InvalidTimeStep { time, reason: "no data written, needs at least one
+>   point_data or cell_data" }` instead of `Error::InvalidData` — the failure is about the step, not
+>   about a field, and `InvalidTimeStep` is the variant that carries the time the caller needs to
+>   know. The two new rules: a time must parse as a **finite** float (`f64::from_str` accepts
+>   `"NaN"`/`"inf"`/`"infinity"` and overflows `"1e400"` to infinity, none of which a reader can
+>   place on a time line), and zero is normalized before keying `written_times`, since `-0.0` and
+>   `0.0` are the same instant with different `to_bits()`.
 > - `From<&Vec<T>>` and `From<&[T; N]>` impls were appended to `values.rs` (see the gotcha below).
 >   Kept deliberately append-only, since `reader` rewrites that file into a macro — reconciling is
 >   "add two lines inside the macro".
@@ -56,7 +65,7 @@ longer-standing complaint.
 > `TimeStep<'a>` (it borrows the writer), so the binding needs its own owned handle either way —
 > this has not been checked against `reader`'s actual `python/src/writer.rs`.
 >
-> Verified: `cargo nextest run` (131 tests, and 116 with `--no-default-features`), `--release`,
+> Verified: `cargo nextest run` (141 tests, and 126 with `--no-default-features`), `--release`,
 > `cargo test --doc`, clippy with `-D warnings` on both feature sets, `cargo doc` with
 > `-D warnings -D missing_docs`, `cargo +nightly fmt --check`. The `test_write_data_preserve_order`
 > golden XML is byte-identical. All five storage backends were regenerated through

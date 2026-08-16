@@ -69,6 +69,8 @@ impl TimeSeriesWriter {
     ///
     /// // write the mesh
     /// let mut ts_writer = xdmf_writer.write_mesh(&coords, &connectivity, &cell_types);
+    /// # // hidden: doctests run in the crate root, so the example cleans up after itself
+    /// # std::fs::remove_file("xdmf_write_mesh.xdmf2").expect("the example writes this file");
     /// ```
     pub fn write_mesh(
         mut self,
@@ -254,8 +256,7 @@ pub struct TimeSeriesDataWriter {
     data_items: Vec<DataItem>,
     attributes: Vec<(String, Vec<attribute::Attribute>)>,
     // Keyed on `f64::to_bits` of the parsed time, not the caller's string, so two spellings of
-    // the same instant (e.g. "0.1" and "0.10") are recognized as the same duplicate. The value
-    // is the spelling first used, for the error message.
+    // the same instant (e.g. "0.1" and "0.10") are recognized as the same duplicate.
     written_times: HashMap<u64, String>,
     num_points: usize,
     num_cells: usize,
@@ -266,7 +267,8 @@ impl TimeSeriesDataWriter {
     ///
     /// The step is completed when `write_step` returns: on `Ok` its `<Grid>` is added to the XDMF
     /// file, on `Err` the step is discarded and the heavy data already written for it is removed
-    /// again.
+    /// again. Should that removal fail in turn, the caller's error is still the one reported --
+    /// so heavy data can be left behind, unreferenced by any `<Grid>`, without that being said.
     ///
     /// The time is accepted as a str to avoid dealing with formatting, thus leaving it to the
     /// user. It is validated once, up front, to reject duplicated times. Each attribute is
@@ -275,6 +277,12 @@ impl TimeSeriesDataWriter {
     ///
     /// `write_step` may fail with any error type that this crate's [`Error`] converts into, so a
     /// caller can abort a step with an error of their own and get it back unchanged.
+    ///
+    /// The error type is inferred from the closure, which works as long as one type is implied --
+    /// as in the example below, where every `?` is on an [`Error`]. A closure that mixes error
+    /// types (say a `?` on an [`Error`] and one on the caller's own error) leaves nothing to
+    /// infer from and needs the type stated, most readably as a return type on the closure:
+    /// `|step| -> Result<(), MyError> { ... }`.
     ///
     /// A step contains exactly the attributes that were written successfully: if `write_step`
     /// ignores the error of a rejected attribute and returns `Ok` anyway, the step is written
@@ -319,6 +327,8 @@ impl TimeSeriesDataWriter {
     ///         })
     ///         .expect("failed to write time step");
     /// }
+    /// # // hidden: doctests run in the crate root, so the example cleans up after itself
+    /// # std::fs::remove_file("xdmf_write_data.xdmf2").expect("the example writes this file");
     /// ```
     pub fn write_time_step<F, E>(&mut self, time: &str, write_step: F) -> Result<(), E>
     where
@@ -331,7 +341,20 @@ impl TimeSeriesDataWriter {
                 time: time.to_string(),
                 reason: "must be a valid float".to_string(),
             })?;
-        let time_bits = parsed_time.to_bits();
+
+        // `f64::from_str` accepts "NaN"/"inf"/"infinity" and overflows large literals to infinity,
+        // none of which name an instant a reader can place on a time line
+        if !parsed_time.is_finite() {
+            return Err(Error::InvalidTimeStep {
+                time: time.to_string(),
+                reason: "must be a finite float".to_string(),
+            }
+            .into());
+        }
+
+        // Zero is normalized because -0.0 and 0.0 are the same instant with different bit
+        // patterns, which the duplicate check below would otherwise take for two different times.
+        let time_bits = if parsed_time == 0.0 { 0.0 } else { parsed_time }.to_bits();
 
         // check if the time step has already been written, keyed on the parsed value rather
         // than the string so different spellings of the same instant are caught too (e.g "0.1" == "0.10")
@@ -561,13 +584,15 @@ impl TimeStep<'_> {
     /// Complete the time step, adding its `<Grid>` to the XDMF file.
     fn finish(self) -> Result<()> {
         if self.attributes.is_empty() {
+            let time = self.time.clone();
             // An attribute can fail *after* it initialized the backend, and a closure that
             // ignores that error still arrives here -- so the step is discarded rather than
             // simply dropped, otherwise the backend would stay initialized and every later
             // step would fail. The caller's error wins over a cleanup failure, as in `write_time_step`.
             let _discard_result = self.discard();
-            return Err(Error::InvalidData {
-                reason: "at least one of point_data or cell_data must be provided".to_string(),
+            return Err(Error::InvalidTimeStep {
+                time,
+                reason: format!("no data written, needs at least one {POINT_DATA} or {CELL_DATA}"),
             });
         }
 
@@ -1047,7 +1072,8 @@ mod tests {
         let res = writer.write_time_step("1.0", |_step| Ok(()));
         std::assert_matches!(
             res.unwrap_err(),
-            Error::InvalidData { reason } if reason.contains("at least one of point_data or cell_data")
+            Error::InvalidTimeStep { time, reason }
+                if time == "1.0" && reason.contains("no data written")
         );
 
         // Invalid time step (already exists)
@@ -1072,6 +1098,46 @@ mod tests {
             res.unwrap_err(),
             Error::InvalidTimeStep { time, reason }
                 if time.is_empty() && reason.contains("must be a valid float")
+        );
+    }
+
+    #[test]
+    fn write_time_step_rejects_non_finite_times() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let mut writer = flaky_writer(tmp_dir.path().join("non_finite_times.xdmf2"), None);
+
+        // all of these parse as a float, the last one by overflowing to infinity
+        for time in ["NaN", "inf", "-infinity", "1e400"] {
+            let res = writer.write_time_step(time, |step| {
+                step.point_data("data", DataAttribute::Scalar, vec![0.0; 0])
+            });
+            std::assert_matches!(
+                res.unwrap_err(),
+                Error::InvalidTimeStep { time: rejected, reason }
+                    if rejected == time && reason == "must be a finite float"
+            );
+        }
+
+        assert!(writer.attributes.is_empty());
+    }
+
+    #[test]
+    fn write_time_step_treats_negative_zero_as_the_time_already_written() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let mut writer = flaky_writer(tmp_dir.path().join("negative_zero.xdmf2"), None);
+
+        writer
+            .write_time_step("0.0", |step| {
+                step.point_data("data", DataAttribute::Scalar, vec![0.0; 0])
+            })
+            .unwrap();
+
+        // -0.0 is the same instant as 0.0, despite the two having different bit patterns
+        let res = writer.write_time_step("-0.0", |_step| Ok(()));
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidTimeStep { time, reason }
+                if time == "-0.0" && reason == "already written (as '0.0')"
         );
     }
 
@@ -1824,7 +1890,8 @@ mod tests {
         });
         std::assert_matches!(
             res.unwrap_err(),
-            Error::InvalidData { reason } if reason.contains("at least one of point_data or cell_data")
+            Error::InvalidTimeStep { time, reason }
+                if time == "0.0" && reason.contains("no data written")
         );
 
         assert!(writer.attributes.is_empty());

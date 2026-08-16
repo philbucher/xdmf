@@ -61,7 +61,8 @@ pub enum Error {
         /// What is wrong with the mesh.
         reason: String,
     },
-    /// A time step string is not a valid float, or was already written.
+    /// A time step string is not a valid finite float, was already written, or its step was left
+    /// without any data.
     #[error("invalid time step '{time}': {reason}")]
     InvalidTimeStep {
         /// The offending time step string.
@@ -69,8 +70,7 @@ pub enum Error {
         /// What is wrong with it.
         reason: String,
     },
-    /// A data field given to `write_data` is invalid (wrong size, bad name, duplicate name, or
-    /// no data given at all).
+    /// A data field written into a time step is invalid (wrong size, bad name, or duplicate name).
     #[error("invalid data: {reason}")]
     InvalidData {
         /// What is wrong with the data.
