@@ -267,7 +267,10 @@ fn values_to_string(data: &Values<'_>) -> String {
     match data {
         Values::F64(v) => array_to_string_fmt(v),
         Values::F32(v) => array_to_string_fmt(v),
+        Values::I64(v) => array_to_string_fmt(v),
+        Values::I32(v) => array_to_string_fmt(v),
         Values::U64(v) => array_to_string_fmt(v),
+        Values::U32(v) => array_to_string_fmt(v),
     }
 }
 
@@ -275,7 +278,10 @@ fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> std::io::Resu
     match data {
         Values::F64(v) => array_to_writer_fmt(v, writer),
         Values::F32(v) => array_to_writer_fmt(v, writer),
+        Values::I64(v) => array_to_writer_fmt(v, writer),
+        Values::I32(v) => array_to_writer_fmt(v, writer),
         Values::U64(v) => array_to_writer_fmt(v, writer),
+        Values::U32(v) => array_to_writer_fmt(v, writer),
     }
 }
 

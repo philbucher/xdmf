@@ -107,7 +107,7 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
     std::assert_matches!(
         res.unwrap_err(),
         xdmf::Error::IntegerTooLargeForBinary { value }
-            if value == u64::from(u32::MAX) + 1
+            if value == i128::from(u32::MAX) + 1
     );
 
     // the rejected value is caught before any file for this step is opened, so nothing is left
@@ -121,6 +121,70 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
             step.cell_data("region_id", xdmf::DataAttribute::Scalar, vec![7_u64])
         })
         .unwrap();
+}
+
+#[test]
+fn write_and_verify_binary_signed_integers() {
+    fn read_i32_le(path: &std::path::Path) -> Vec<i32> {
+        let bytes = std::fs::read(path).unwrap();
+        bytes
+            .chunks_exact(4)
+            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    // 3 points forming a triangle
+    let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 2];
+    let cell_types = [xdmf::CellType::Triangle];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::Binary).unwrap();
+    let mut xdmf_writer = xdmf_writer
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    xdmf_writer
+        .write_time_step("0", |step| {
+            step.point_data("level_i64", xdmf::DataAttribute::Scalar, vec![-1_i64, 0, 1])?;
+            step.point_data("level_i32", xdmf::DataAttribute::Scalar, vec![-2_i32, 0, 2])
+        })
+        .unwrap();
+
+    // both signed widths are declared as 4-byte Int, since the i64 data is narrowed on the way out
+    let xdmf_xml = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+    assert_eq!(
+        xdmf_xml
+            .matches(r#"NumberType="Int" Format="Binary" Precision="4""#)
+            .count(),
+        2
+    );
+
+    let bin_dir = xdmf_file_path.with_extension("bin");
+    assert_eq!(
+        read_i32_le(&bin_dir.join("data_t_0_point_data_level_i64.bin")),
+        vec![-1, 0, 1]
+    );
+    assert_eq!(
+        read_i32_le(&bin_dir.join("data_t_0_point_data_level_i32.bin")),
+        vec![-2, 0, 2]
+    );
+
+    // an i64 below i32's range is rejected the same way an oversized u64 is
+    let res = xdmf_writer.write_time_step("1", |step| {
+        step.point_data(
+            "level_i64",
+            xdmf::DataAttribute::Scalar,
+            vec![0_i64, 0, i64::from(i32::MIN) - 1],
+        )
+    });
+    std::assert_matches!(
+        res.unwrap_err(),
+        xdmf::Error::IntegerTooLargeForBinary { value }
+            if value == i128::from(i32::MIN) - 1
+    );
 }
 
 #[test]

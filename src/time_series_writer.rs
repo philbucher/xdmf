@@ -116,7 +116,7 @@ impl TimeSeriesWriter {
             number_type: Some(NumberType::UInt),
             data: cells_data,
             format: Some(format),
-            precision: Some(format.uint_precision()),
+            precision: Some(format.int_precision()),
             endian: format.endian(),
             reference: None,
         };

@@ -72,6 +72,17 @@ but for the mesh coordinates it comes with a caveat: on a domain far away from t
 coordinates produce visible geometric jitter in ParaView, because the absolute coordinate eats up
 the mantissa.
 
+### Can integer data be written?
+
+Yes — point and cell data also accept `i32`, `i64`, `u32` and `u64` (for example a partition rank,
+a material id or a flag), again at the width they are passed in. Mesh coordinates stay floating
+point.
+
+The one exception is `DataStorage::Binary`: ParaView's legacy Xdmf2 reader misreads 64-bit integers
+there, so `i64`/`u64` data is narrowed to 32 bits on the way out, and a value that does not fit is
+reported as an error rather than silently truncated. The other storage methods write 64-bit
+integers as they are.
+
 ### Which data storage should be used for the heavy data?
 
 The xdmf format allows to separate the storing of light and heavy data. Different data storage methods are implemented for the latter:

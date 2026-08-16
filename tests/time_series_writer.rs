@@ -481,3 +481,71 @@ fn write_xdmf_f32_points() {
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
 }
+
+#[test]
+fn write_xdmf_integer_data() {
+    // 3 points forming a triangle
+    let node_coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 2];
+    let cell_types = [xdmf::CellType::Triangle];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let xdmf_writer =
+        TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    let mut xdmf_writer = xdmf_writer
+        .write_mesh(&node_coords, &connectivity, &cell_types)
+        .unwrap();
+
+    // all four integer widths in the same step; signed data may be negative
+    xdmf_writer
+        .write_time_step("0", |step| {
+            step.point_data("rank_u64", xdmf::DataAttribute::Scalar, &[1_u64, 2, 3])?;
+            step.point_data("rank_u32", xdmf::DataAttribute::Scalar, &[1_u32, 2, 3])?;
+            step.point_data("level_i64", xdmf::DataAttribute::Scalar, &[-1_i64, 0, 1])?;
+            step.point_data("level_i32", xdmf::DataAttribute::Scalar, &[-1_i32, 0, 1])
+        })
+        .unwrap();
+
+    // the signed types are declared as `Int` and the unsigned ones as `UInt`, with the precision
+    // following the width the caller handed over
+    let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="time_series" GridType="Collection" CollectionType="Temporal">
+            <Grid Name="time_series-t0" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+                </Geometry>
+                <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
+                </Topology>
+                <Time Value="0"/>
+                <Attribute Name="rank_u64" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="3" NumberType="UInt" Format="XML" Precision="8">1 2 3</DataItem>
+                </Attribute>
+                <Attribute Name="rank_u32" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="3" NumberType="UInt" Format="XML" Precision="4">1 2 3</DataItem>
+                </Attribute>
+                <Attribute Name="level_i64" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="8">-1 0 1</DataItem>
+                </Attribute>
+                <Attribute Name="level_i32" AttributeType="Scalar" Center="Node">
+                    <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="4">-1 0 1</DataItem>
+                </Attribute>
+            </Grid>
+        </Grid>
+        <DataItem Name="coords" Dimensions="3 3" NumberType="Float" Format="XML" Precision="8">0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 0.0000000000000000e0 1.0000000000000000e0 0.0000000000000000e0</DataItem>
+        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="0.1.3"/>
+</Xdmf>"#;
+
+    let xdmf_file = xdmf_file_path.with_extension("xdmf2");
+    let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
+
+    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}

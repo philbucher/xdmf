@@ -10,114 +10,70 @@ use crate::{
     },
 };
 
-/// Wrapper around different types of data, used to provide a unified interface.
-///
-/// Backed by [`Cow`] rather than an owned `Vec`, so a caller that already holds the data in a
-/// slice can wrap it without copying and hand the same buffer to every time step.
-#[derive(Debug)]
-pub enum Values<'a> {
-    /// f64 values
-    F64(Cow<'a, [f64]>),
-    /// f32 values
-    F32(Cow<'a, [f32]>),
-    /// u64 values
-    U64(Cow<'a, [u64]>),
+macro_rules! define_values {
+    ($($variant:ident($ty:ty)),+ $(,)?) => {
+        /// Wrapper around different types of data, used to provide a unified interface.
+        ///
+        /// Backed by [`Cow`] rather than an owned `Vec`, so a caller that already holds the data
+        /// in a slice can wrap it without copying and hand the same buffer to every time step.
+        #[derive(Debug)]
+        pub enum Values<'a> {
+            $(
+                #[doc = concat!("`", stringify!($ty), "` values")]
+                $variant(Cow<'a, [$ty]>),
+            )+
+        }
+
+        $(
+            /// Moves `vec` into the value. If the same buffer is reused across multiple
+            /// `write_data` calls, borrow it instead (`buf.as_slice().into()`)
+            impl From<Vec<$ty>> for Values<'_> {
+                fn from(vec: Vec<$ty>) -> Self {
+                    Self::$variant(Cow::Owned(vec))
+                }
+            }
+
+            impl<'a> From<&'a [$ty]> for Values<'a> {
+                fn from(slice: &'a [$ty]) -> Self {
+                    Self::$variant(Cow::Borrowed(slice))
+                }
+            }
+
+            // The `&Vec<T>` and `&[T; N]` impls are not redundant with the `&[T]` one: the
+            // `impl Into<Values<'_>>` arguments of `TimeStep::point_data`/`cell_data` are resolved
+            // by trait matching, which does not deref-coerce, so passing a `&vec` or a
+            // `&[1.0, 2.0]` needs its own impl.
+            impl<'a> From<&'a Vec<$ty>> for Values<'a> {
+                fn from(vec: &'a Vec<$ty>) -> Self {
+                    Self::$variant(Cow::Borrowed(vec))
+                }
+            }
+
+            impl<'a, const N: usize> From<&'a [$ty; N]> for Values<'a> {
+                fn from(array: &'a [$ty; N]) -> Self {
+                    Self::$variant(Cow::Borrowed(array))
+                }
+            }
+        )+
+    };
 }
 
-/// Moves `vec` into the value. If the same buffer is reused across multiple `write_data` calls,
-/// borrow it instead (`buf.as_slice().into()`)
-impl From<Vec<f64>> for Values<'_> {
-    fn from(vec: Vec<f64>) -> Self {
-        Self::F64(Cow::Owned(vec))
-    }
-}
-
-/// Moves `vec` into the value; see the `f64` impl above for the buffer-reuse caveat.
-impl From<Vec<f32>> for Values<'_> {
-    fn from(vec: Vec<f32>) -> Self {
-        Self::F32(Cow::Owned(vec))
-    }
-}
-
-/// Moves `vec` into the value; see the `f64` impl above for the buffer-reuse caveat.
-impl From<Vec<u64>> for Values<'_> {
-    fn from(vec: Vec<u64>) -> Self {
-        Self::U64(Cow::Owned(vec))
-    }
-}
-
-impl<'a> From<&'a [f64]> for Values<'a> {
-    fn from(slice: &'a [f64]) -> Self {
-        Self::F64(Cow::Borrowed(slice))
-    }
-}
-
-impl<'a> From<&'a [f32]> for Values<'a> {
-    fn from(slice: &'a [f32]) -> Self {
-        Self::F32(Cow::Borrowed(slice))
-    }
-}
-
-impl<'a> From<&'a [u64]> for Values<'a> {
-    fn from(slice: &'a [u64]) -> Self {
-        Self::U64(Cow::Borrowed(slice))
-    }
-}
-
-// The `&Vec<T>` and `&[T; N]` impls below are not redundant with the `&[T]` ones above: the
-// `impl Into<Values<'_>>` arguments of `TimeStep::point_data`/`cell_data` are resolved by trait
-// matching, which does not deref-coerce, so passing a `&vec` or a `&[1.0, 2.0]` needs its own
-// impl.
-
-impl<'a> From<&'a Vec<f64>> for Values<'a> {
-    fn from(vec: &'a Vec<f64>) -> Self {
-        Self::F64(Cow::Borrowed(vec))
-    }
-}
-
-impl<'a> From<&'a Vec<f32>> for Values<'a> {
-    fn from(vec: &'a Vec<f32>) -> Self {
-        Self::F32(Cow::Borrowed(vec))
-    }
-}
-
-impl<'a> From<&'a Vec<u64>> for Values<'a> {
-    fn from(vec: &'a Vec<u64>) -> Self {
-        Self::U64(Cow::Borrowed(vec))
-    }
-}
-
-impl<'a, const N: usize> From<&'a [f64; N]> for Values<'a> {
-    fn from(array: &'a [f64; N]) -> Self {
-        Self::F64(Cow::Borrowed(array))
-    }
-}
-
-impl<'a, const N: usize> From<&'a [f32; N]> for Values<'a> {
-    fn from(array: &'a [f32; N]) -> Self {
-        Self::F32(Cow::Borrowed(array))
-    }
-}
-
-impl<'a, const N: usize> From<&'a [u64; N]> for Values<'a> {
-    fn from(array: &'a [u64; N]) -> Self {
-        Self::U64(Cow::Borrowed(array))
-    }
-}
+define_values!(F64(f64), F32(f32), I64(i64), I32(i32), U64(u64), U32(u32));
 
 impl Values<'_> {
     pub(crate) fn precision(&self, format: Format) -> u8 {
         match self {
             Self::F64(_) => 8,
-            Self::F32(_) => 4,
-            Self::U64(_) => format.uint_precision(),
+            Self::F32(_) | Self::I32(_) | Self::U32(_) => 4,
+            Self::I64(_) | Self::U64(_) => format.int_precision(),
         }
     }
 
     pub(crate) fn number_type(&self) -> NumberType {
         match self {
             Self::F64(_) | Self::F32(_) => NumberType::Float,
-            Self::U64(_) => NumberType::UInt,
+            Self::I64(_) | Self::I32(_) => NumberType::Int,
+            Self::U64(_) | Self::U32(_) => NumberType::UInt,
         }
     }
 
@@ -146,7 +102,10 @@ impl Values<'_> {
         match self {
             Self::F64(v) => v.len(),
             Self::F32(v) => v.len(),
+            Self::I64(v) => v.len(),
+            Self::I32(v) => v.len(),
             Self::U64(v) => v.len(),
+            Self::U32(v) => v.len(),
         }
     }
 }
@@ -258,6 +217,60 @@ mod tests {
         assert_eq!(values.number_type(), NumberType::UInt);
         assert_eq!(values.precision(Format::XML), 8);
         assert_eq!(values.precision(Format::HDF), 8);
+        // narrowed to 32 bits for binary, see `Format::int_precision`
+        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(
+            values.dimensions(DataAttribute::Scalar),
+            Dimensions(vec![6])
+        );
+        assert_eq!(values.len(), 6);
+    }
+
+    #[test]
+    fn vec_u32() {
+        let vec_u32 = vec![1_u32, 2, 3, 4, 5, 6];
+        let values = vec_u32.into();
+        std::assert_matches!(values, Values::U32(_));
+
+        // same NumberType as u64, and 32 bits wide in every format
+        assert_eq!(values.number_type(), NumberType::UInt);
+        assert_eq!(values.precision(Format::XML), 4);
+        assert_eq!(values.precision(Format::HDF), 4);
+        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(
+            values.dimensions(DataAttribute::Scalar),
+            Dimensions(vec![6])
+        );
+        assert_eq!(values.len(), 6);
+    }
+
+    #[test]
+    fn vec_i64() {
+        let vec_i64 = vec![-1_i64, 2, 3, 4, 5, 6];
+        let values = vec_i64.into();
+        std::assert_matches!(values, Values::I64(_));
+
+        assert_eq!(values.number_type(), NumberType::Int);
+        assert_eq!(values.precision(Format::XML), 8);
+        assert_eq!(values.precision(Format::HDF), 8);
+        // narrowed to 32 bits for binary, see `Format::int_precision`
+        assert_eq!(values.precision(Format::Binary), 4);
+        assert_eq!(
+            values.dimensions(DataAttribute::Vector),
+            Dimensions(vec![2, 3])
+        );
+        assert_eq!(values.len(), 6);
+    }
+
+    #[test]
+    fn vec_i32() {
+        let vec_i32 = vec![-1_i32, 2, 3, 4, 5, 6];
+        let values = vec_i32.into();
+        std::assert_matches!(values, Values::I32(_));
+
+        assert_eq!(values.number_type(), NumberType::Int);
+        assert_eq!(values.precision(Format::XML), 4);
+        assert_eq!(values.precision(Format::HDF), 4);
         assert_eq!(values.precision(Format::Binary), 4);
         assert_eq!(
             values.dimensions(DataAttribute::Scalar),
@@ -292,6 +305,37 @@ mod tests {
 
         assert_eq!(values.number_type(), NumberType::UInt);
         assert_eq!(values.len(), 3);
+
+        let vec_u32 = vec![1_u32, 2, 3];
+        let values = Values::from(vec_u32.as_slice());
+        std::assert_matches!(values, Values::U32(Cow::Borrowed(_)));
+
+        assert_eq!(values.number_type(), NumberType::UInt);
+        assert_eq!(values.len(), 3);
+
+        let vec_i64 = vec![1_i64, 2, 3];
+        let values = Values::from(vec_i64.as_slice());
+        std::assert_matches!(values, Values::I64(Cow::Borrowed(_)));
+
+        assert_eq!(values.number_type(), NumberType::Int);
+        assert_eq!(values.len(), 3);
+
+        let vec_i32 = vec![1_i32, 2, 3];
+        let values = Values::from(vec_i32.as_slice());
+        std::assert_matches!(values, Values::I32(Cow::Borrowed(_)));
+
+        assert_eq!(values.number_type(), NumberType::Int);
+        assert_eq!(values.len(), 3);
+    }
+
+    // the `&Vec<T>`/`&[T; N]` impls are generated for every element type, so a compile-time check
+    // that they resolve is the point here
+    #[test]
+    fn borrowed_vecs_and_arrays() {
+        let vec_i32 = vec![1_i32, 2, 3];
+        std::assert_matches!(Values::from(&vec_i32), Values::I32(Cow::Borrowed(_)));
+        std::assert_matches!(Values::from(&[1_u32, 2]), Values::U32(Cow::Borrowed(_)));
+        std::assert_matches!(Values::from(&[1_i64, 2]), Values::I64(Cow::Borrowed(_)));
     }
 
     #[test]
