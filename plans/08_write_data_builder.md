@@ -12,29 +12,45 @@ call shape makes impossible.
 It also removes `Values` from the signature a normal Rust caller has to type, which is the
 longer-standing complaint.
 
-> **Status: IMPLEMENTED 2026-08-15**, on `main` rather than on `reader` — deliberately, so the
-> shape could be explored before `reader` lands. Deviations from the design below, all decided
-> during implementation:
+> **Status: IMPLEMENTED 2026-08-15, revised 2026-08-16**, on `main` rather than on `reader` —
+> deliberately, so the shape could be explored before `reader` lands. Deviations from the design
+> below, all decided during implementation:
 >
-> - **The step-finishing method is `write()`, not `commit()` as designed below.** "Commit" implied
->   transactional semantics the crate does not provide: heavy data is already on disk by then, so
->   nothing rolls back — only the light data is deferred. `write` also matches the crate's existing
->   vocabulary (`write_mesh`, `point_data`).
+> - **The step is scoped to a closure, not returned as a value to be finished by hand.** The
+>   signature is `time_step(time, |step| -> Result<()>)`; there is no public `commit()`/`write()`.
+>   The design below assumed an explicit finishing call guarded by `#[must_use]`, but that lint
+>   only fires when the value is discarded as a statement — every real call site binds it with
+>   `let mut step = ...`, so forgetting to finish the step was silent. Scoping it to a closure
+>   makes that unrepresentable, and moves finalize/discard onto a path that can return `Result`
+>   instead of into `Drop`, which had to swallow errors. `TimeStep::finish`/`TimeStep::discard`
+>   are private; `TimeStep` stays `pub` only as the closure's parameter type.
 >   The private whole-document serializer `TimeSeriesDataWriter::write()` was renamed to
->   `write_xdmf_file()` to keep the two distinguishable.
+>   `write_xdmf_file()`, which reads better regardless.
+> - **Abandoned steps are rolled back**, via a new `DataWriter::write_data_discard` (defaulting to
+>   `write_data_finalize`, so backends that write nothing until the step completes need no
+>   override). Ascii/Binary track the per-attribute files they created since `write_data_initialize`
+>   and remove them; `Hdf5SingleFile` unlinks the `data/t_{time}` group (HDF5 does not reclaim the
+>   blocks without `h5repack`, but nothing dangles); `Hdf5MultipleFiles` closes the handle and
+>   removes the step's file. This fixes a leak that existed independently of the API shape: any
+>   mid-step `?` failure abandoned the step and left its heavy data on disk unreferenced.
+>   When cleanup itself fails, the caller's original error still wins — a "could not remove file"
+>   would otherwise hide why the step failed.
 > - **`Values` was NOT widened.** Built against `main`'s two-variant `Values` (`F64`/`U64`). The
 >   builder is agnostic to the variant count — `impl Into<Values<'a>>` is unchanged either way —
 >   so this stays `reader`'s work and is not duplicated here. See "Prerequisites".
 > - **`write_data_initialize` is deferred to the first attribute**, rather than running eagerly in
->   `time_step()`. This dissolves the `MultipleFilesHdf5Writer` orphan-file question instead of
->   answering it: a step that writes nothing never creates a per-step file, so there is nothing to
->   clean up. A step that writes at least one attribute and is then abandoned still leaves
->   unreferenced heavy data, which is the pre-existing behaviour for a mid-write failure.
+>   `time_step()`. A step that writes nothing never creates a per-step file, so there is nothing to
+>   clean up and nothing for `write_data_discard` to be called on.
 > - `From<&Vec<T>>` and `From<&[T; N]>` impls were appended to `values.rs` (see the gotcha below).
 >   Kept deliberately append-only, since `reader` rewrites that file into a macro — reconciling is
 >   "add two lines inside the macro".
 >
-> Verified: `cargo nextest run` (129 tests, and 116 with `--no-default-features`), `--release`,
+> Open for `reader`: the Python binding. A context manager (`with writer.time_step(t) as step:`)
+> whose `__exit__` drives finish-or-discard is the obvious mapping, but pyo3 cannot hold
+> `TimeStep<'a>` (it borrows the writer), so the binding needs its own owned handle either way —
+> this has not been checked against `reader`'s actual `python/src/writer.rs`.
+>
+> Verified: `cargo nextest run` (131 tests, and 116 with `--no-default-features`), `--release`,
 > `cargo test --doc`, clippy with `-D warnings` on both feature sets, `cargo doc` with
 > `-D warnings -D missing_docs`, `cargo +nightly fmt --check`. The `test_write_data_preserve_order`
 > golden XML is byte-identical. All five storage backends were regenerated through

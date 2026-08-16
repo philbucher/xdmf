@@ -6,6 +6,7 @@ use hdf5::{File as H5File, Group as H5Group};
 
 use crate::{
     DataStorage, DataWriter, Error, Result, Values,
+    error::io_ctx,
     xdmf_elements::{
         attribute,
         data_item::{DataContent, Format},
@@ -107,8 +108,8 @@ impl DataWriter for SingleFileHdf5Writer {
             .ok_or(Error::Internal("writing data was not initialized"))?;
 
         let group_name = &format!(
-            "{}/t_{time}/{}",
-            DATA,
+            "{}/{}",
+            time_group_name(time),
             attribute::center_to_data_tag(center)
         );
 
@@ -146,6 +147,26 @@ impl DataWriter for SingleFileHdf5Writer {
         }
 
         self.write_time = None;
+        Ok(())
+    }
+
+    fn write_data_discard(&mut self) -> Result<()> {
+        let time = self
+            .write_time
+            .take()
+            .ok_or(Error::Internal("writing data was not initialized"))?;
+
+        // Unlinking removes the names, so nothing dangles and the time can be written again --
+        // but HDF5 does not hand the freed blocks back, so the file keeps the space until it is
+        // repacked (`h5repack`). Discarding is the exceptional path, so that is an acceptable
+        // trade against rewriting the file.
+        let time_group = time_group_name(&time);
+        if self.h5_file.link_exists(&time_group) {
+            self.h5_file
+                .unlink(&time_group)
+                .map_err(hdf5_ctx("removing discarded data group"))?;
+        }
+
         Ok(())
     }
 
@@ -265,7 +286,24 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
         // TODO check if this flushes the file etc
         self.h5_data_file = None;
+
         Ok(())
+    }
+
+    fn write_data_discard(&mut self) -> Result<()> {
+        let data_file = self
+            .h5_data_file
+            .take()
+            .ok_or(Error::Internal("writing data was not initialized"))?;
+
+        // Read the path back off the handle, then close it before removing -- on Windows an open
+        // handle blocks the removal.
+        let file_name = PathBuf::from(data_file.filename());
+        drop(data_file);
+
+        // The whole step lives in this one file, so discarding it is just removing the file --
+        // no other step's data can be in there.
+        std::fs::remove_file(&file_name).map_err(io_ctx("removing discarded data file", &file_name))
     }
 }
 
@@ -328,6 +366,12 @@ fn write_values(
     Ok(data_set.name())
 }
 
+// Group holding everything written for one time step, in the single-file layout. Both writing a
+// step's data and discarding it again have to name this group, so the layout is spelled out here
+// only -- a rename must not leave the discard removing a group that no longer exists.
+fn time_group_name(time: &str) -> String {
+    format!("{DATA}/t_{time}")
+}
 // Built with an explicit `/` rather than `PathBuf::join`/`to_string_lossy`, so the path
 // embedded in the XDMF file is valid on every OS regardless of which OS wrote it (e.g. no
 // backslashes from a Windows `PathBuf` ending up in a file read back on Linux).
@@ -494,6 +538,94 @@ mod tests {
 
         writer.write_data_finalize().unwrap();
         assert!(writer.write_time.is_none());
+    }
+
+    #[test]
+    fn single_files_hdf5_writer_write_data_discard() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = SingleFileHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
+
+        std::assert_matches!(
+            writer.write_data_discard().unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
+
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data(
+                "discarded",
+                attribute::Center::Node,
+                &Values::F64(vec![1.0, 2.0].into()),
+            )
+            .unwrap();
+        assert!(writer.h5_file.link_exists("data/t_0.5"));
+
+        writer.write_data_discard().unwrap();
+
+        // the whole time group is gone, so nothing dangles for a `<Grid>` that was never written
+        assert!(!writer.h5_file.link_exists("data/t_0.5"));
+        assert!(writer.write_time.is_none());
+
+        // the time can be written again afterwards
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data(
+                "kept",
+                attribute::Center::Node,
+                &Values::F64(vec![3.0, 4.0].into()),
+            )
+            .unwrap();
+        writer.write_data_finalize().unwrap();
+
+        assert!(writer.h5_file.link_exists("data/t_0.5/point_data/kept"));
+        assert!(
+            !writer
+                .h5_file
+                .link_exists("data/t_0.5/point_data/discarded")
+        );
+    }
+
+    #[test]
+    fn multiple_files_hdf5_writer_write_data_discard() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+        let mut writer = MultipleFilesHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
+
+        std::assert_matches!(
+            writer.write_data_discard().unwrap_err(),
+            Error::Internal("writing data was not initialized")
+        );
+
+        let data_file = file_name.with_extension("h5").join("data_t_0.5.h5");
+
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data(
+                "discarded",
+                attribute::Center::Node,
+                &Values::F64(vec![1.0, 2.0].into()),
+            )
+            .unwrap();
+        assert!(data_file.exists());
+
+        writer.write_data_discard().unwrap();
+
+        // the step's whole file is removed, since no other step's data can be in it
+        assert!(!data_file.exists());
+        assert!(writer.h5_data_file.is_none());
+
+        // the time can be written again afterwards
+        writer.write_data_initialize("0.5").unwrap();
+        writer
+            .write_data(
+                "kept",
+                attribute::Center::Node,
+                &Values::F64(vec![3.0, 4.0].into()),
+            )
+            .unwrap();
+        writer.write_data_finalize().unwrap();
+        assert!(data_file.exists());
     }
 
     #[test]

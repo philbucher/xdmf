@@ -158,17 +158,14 @@ mod tests {
             let vec_data: Vec<f64> = (0..data.len() * 3).map(|j| (j % 3) as f64).collect();
             let start = Instant::now();
 
-            let mut step = self
-                .writer
+            self.writer
                 .as_mut()
                 .unwrap()
-                .time_step(format!("{time}").as_str())
+                .time_step(format!("{time}").as_str(), |step| {
+                    step.point_data("pressure", xdmf::DataAttribute::Scalar, data)?;
+                    step.point_data("velocity", xdmf::DataAttribute::Vector, &vec_data)
+                })
                 .unwrap();
-            step.point_data("pressure", xdmf::DataAttribute::Scalar, data)
-                .unwrap();
-            step.point_data("velocity", xdmf::DataAttribute::Vector, &vec_data)
-                .unwrap();
-            step.write().unwrap();
 
             // Implement step writing logic here
             self.time_write_steps += start.elapsed();

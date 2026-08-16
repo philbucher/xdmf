@@ -98,6 +98,17 @@ pub(crate) trait DataWriter {
         Ok(())
     }
 
+    /// End the current time step and remove the heavy data written for it.
+    ///
+    /// Called instead of [`write_data_finalize`](Self::write_data_finalize) when a time step is
+    /// abandoned rather than written -- an attribute was rejected, or the caller's closure
+    /// returned an error. Without it the step's heavy data would stay on disk with no `<Grid>`
+    /// in the XDMF file referencing it. Backends that write nothing until the step is complete
+    /// (e.g. `AsciiInline`) keep the default, which is just to finalize.
+    fn write_data_discard(&mut self) -> Result<()> {
+        self.write_data_finalize()
+    }
+
     // flush the writer, if applicable
     fn flush(&mut self) -> Result<()> {
         Ok(())

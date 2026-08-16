@@ -41,24 +41,23 @@ let cell_values = vec![0.0, 1.0];
 
 // write the data for 10 time steps
 for i in 0..10 {
-    let mut step = time_series_writer
-        .time_step(&i.to_string())
-        .expect("failed to start time step");
+    time_series_writer
+        .time_step(&i.to_string(), |step| {
+            step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)?;
 
-    step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)
-        .expect("failed to write point data");
+            point_values.fill(i as f64); // the same buffer, refilled for the next attribute
+            step.point_data("more_point_data", xdmf::DataAttribute::Vector, &point_values)?;
 
-    point_values.fill(i as f64); // the same buffer, refilled for the next attribute
-    step.point_data("more_point_data", xdmf::DataAttribute::Vector, &point_values)
-        .expect("failed to write point data");
-
-    step.cell_data("cell_data", xdmf::DataAttribute::Scalar, &cell_values)
-        .expect("failed to write cell data");
-
-    // nothing reaches the XDMF file until the step is written
-    step.write().expect("failed to write time step");
+            step.cell_data("cell_data", xdmf::DataAttribute::Scalar, &cell_values)
+        })
+        .expect("failed to write time step");
 }
 ~~~
+
+The step is scoped to the closure: when it returns `Ok`, the step is added to the XDMF file; when it
+returns an error, the step is discarded and the heavy data already written for it is removed again.
+So a step can neither be left half-written by forgetting to complete it, nor leave data behind that
+nothing references.
 
 ### Which data storage should be used for the heavy data?
 

@@ -103,26 +103,24 @@ fn main() -> IoResult<()> {
             stress: stress.clone(),
         });
 
-        let mut time_step = xdmf_writer.time_step(&step.to_string())?;
+        xdmf_writer.time_step(&step.to_string(), |time_step| {
+            // `as_flattened` reinterprets `&[[f64; N]]` as `&[f64]` without copying, so the
+            // natural per-point/per-cell layout needs no intermediate `Vec`
+            time_step.point_data("temperature", DataAttribute::Scalar, &temperature)?;
+            time_step.point_data(
+                "displacement",
+                DataAttribute::Vector,
+                displacement.as_flattened(),
+            )?;
+            time_step.point_data(
+                "velocity_gradient",
+                DataAttribute::Tensor,
+                velocity_gradient.as_flattened(),
+            )?;
 
-        // `as_flattened` reinterprets `&[[f64; N]]` as `&[f64]` without copying, so the natural
-        // per-point/per-cell layout needs no intermediate `Vec`
-        time_step.point_data("temperature", DataAttribute::Scalar, &temperature)?;
-        time_step.point_data(
-            "displacement",
-            DataAttribute::Vector,
-            displacement.as_flattened(),
-        )?;
-        time_step.point_data(
-            "velocity_gradient",
-            DataAttribute::Tensor,
-            velocity_gradient.as_flattened(),
-        )?;
-
-        time_step.cell_data("region_id", DataAttribute::Scalar, &REGION_ID)?;
-        time_step.cell_data("stress", DataAttribute::Tensor6, stress.as_flattened())?;
-
-        time_step.write()?;
+            time_step.cell_data("region_id", DataAttribute::Scalar, &REGION_ID)?;
+            time_step.cell_data("stress", DataAttribute::Tensor6, stress.as_flattened())
+        })?;
     }
 
     let xdmf_file_name = base_path
