@@ -12,13 +12,13 @@ use std::{
 };
 
 use crate::{
-    CellType, Coordinate, DataAttribute, DataStorage, DataWriter, Error, Result, Values,
-    create_writer,
+    CellType, ConnectivityIndex, Coordinate, DataAttribute, DataStorage, DataWriter, Error, Result,
+    Values, create_writer,
     error::io_ctx,
     mpi_safe_create_dir_all,
     xdmf_elements::{
         Information, Xdmf, attribute,
-        data_item::{DataItem, NumberType},
+        data_item::DataItem,
         dimensions::Dimensions,
         geometry::{Geometry, GeometryType},
         grid::{CollectionType, Grid, GridType, Time},
@@ -62,6 +62,13 @@ impl TimeSeriesWriter {
     /// The coordinates are taken as `f32` or `f64`, whichever the caller already holds, and are
     /// written at that precision.
     ///
+    /// The connectivity is likewise taken and written as the integer type it is passed in --
+    /// `u32`, `i32`, `u64` or `i64` -- which is what sets the largest mesh that can be written.
+    /// `u32` and `u64` are both capped at `u32::MAX` points, since `ParaView` decodes `UInt`
+    /// connectivity at 32 bits whatever precision is declared; `i64` is decoded at the full 64
+    /// bits, but only `Hdf5SingleFile`/`Hdf5MultipleFiles` can store it that wide (see
+    /// [`Error::IntegerOutOfRange`]).
+    ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_mesh", xdmf::DataStorage::AsciiInline)
@@ -69,7 +76,7 @@ impl TimeSeriesWriter {
     ///
     /// // define 3 points and 2 cells (a line and a triangle)
     /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    /// let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+    /// let connectivity = [0_u32, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
     /// let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
     ///
     /// // write the mesh
@@ -77,10 +84,22 @@ impl TimeSeriesWriter {
     /// # // hidden: doctests run in the crate root, so the example cleans up after itself
     /// # std::fs::remove_file("xdmf_write_mesh.xdmf2").expect("the example writes this file");
     /// ```
-    pub fn write_mesh<C: Coordinate>(
+    ///
+    /// A mesh of points only has no connectivity to infer the index type from, so it has to be
+    /// named:
+    ///
+    /// ```rust
+    /// # use xdmf::TimeSeriesWriter;
+    /// # let xdmf_writer = TimeSeriesWriter::new("xdmf_write_points", xdmf::DataStorage::AsciiInline)
+    /// #     .expect("failed to create XDMF writer");
+    /// let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    /// let mut ts_writer = xdmf_writer.write_mesh(&coords, &[] as &[u32], &[]);
+    /// # std::fs::remove_file("xdmf_write_points.xdmf2").expect("the example writes this file");
+    /// ```
+    pub fn write_mesh<C: Coordinate, I: ConnectivityIndex>(
         mut self,
         points: &[C],
-        connectivity: &[u64],
+        connectivity: &[I],
         cell_types: &[CellType],
     ) -> Result<TimeSeriesDataWriter> {
         validate_points_and_cells(points.len(), connectivity, cell_types)?;
@@ -93,9 +112,15 @@ impl TimeSeriesWriter {
             cell_types.len()
         };
 
-        let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points);
+        let (topo_type, prepared_cells) = prepare_cells(connectivity, cell_types, num_points)?;
+        let cells = I::as_values(&prepared_cells);
 
-        let (points_data, cells_data) = self.writer.write_mesh(&points, &prepared_cells)?;
+        // the connectivity goes through the same checks as any other integer data, so the index
+        // type and the storage together decide which meshes can be written
+        cells.validate_uint_range()?;
+        self.writer.validate_values(&cells)?;
+
+        let (points_data, cells_data) = self.writer.write_mesh(&points, &cells)?;
 
         let format = self.writer.format();
 
@@ -113,10 +138,10 @@ impl TimeSeriesWriter {
         let data_item_connectivity = DataItem {
             name: Some("connectivity".to_string()),
             dimensions: Some(Dimensions(vec![prepared_cells.len()])),
-            number_type: Some(NumberType::UInt),
+            number_type: Some(cells.number_type()),
             data: cells_data,
             format: Some(format),
-            precision: Some(format.int_precision()),
+            precision: Some(cells.precision(format)),
             endian: format.endian(),
             reference: None,
         };
@@ -154,9 +179,9 @@ impl TimeSeriesWriter {
 }
 
 // Validate that the points and cells are valid.
-fn validate_points_and_cells(
+fn validate_points_and_cells<I: ConnectivityIndex>(
     num_coordinates: usize,
-    connectivity: &[u64],
+    connectivity: &[I],
     cell_types: &[CellType],
 ) -> Result<()> {
     // at least one point is required
@@ -175,18 +200,40 @@ fn validate_points_and_cells(
         });
     }
 
-    // check cells connectivity indices
-    let max_connectivity_index = connectivity.iter().max();
-
-    if let Some(&max_index) = max_connectivity_index
-        && max_index as usize >= num_coordinates / 3
-    {
+    // Checked before anything is built, so a mesh too large for the index type it is written with
+    // is reported without first assembling its connectivity. The last point is the largest index
+    // that can occur -- the polyvertex fallback below numbers the points itself, so this holds
+    // even when no connectivity is passed at all.
+    let num_points = num_coordinates / 3;
+    if num_points as i128 - 1 > I::MAX_INDEX {
         return Err(Error::InvalidMesh {
             reason: format!(
-                "connectivity index {max_index} is out of bounds, the mesh only has {} points",
-                num_coordinates / 3
+                "the mesh has {num_points} points, but its connectivity can only index up to {}; \
+                 use i64 connectivity for a larger mesh, which the Hdf5SingleFile and \
+                 Hdf5MultipleFiles storages write at the full width (ParaView decodes UInt at 32 \
+                 bits whatever precision is declared, so u32 and u64 share the same limit)",
+                I::MAX_INDEX
             ),
         });
+    }
+
+    // check cells connectivity indices
+    for index in connectivity {
+        let index = index.as_i128();
+
+        if index < 0 {
+            return Err(Error::InvalidMesh {
+                reason: format!("connectivity index {index} is negative"),
+            });
+        }
+        if index >= num_points as i128 {
+            return Err(Error::InvalidMesh {
+                reason: format!(
+                    "connectivity index {index} is out of bounds, the mesh only has \
+                     {num_points} points"
+                ),
+            });
+        }
     }
 
     // check that the number of connectivities matches the expected number based on the cell types
@@ -204,7 +251,7 @@ fn validate_points_and_cells(
 }
 
 // Poly-cells need to additionally specify the number of points
-fn poly_cell_points(cell_type: CellType) -> Option<u64> {
+fn poly_cell_points(cell_type: CellType) -> Option<u8> {
     // For polyvertex and polyline, need to add the number of points
     match cell_type {
         CellType::Vertex => {
@@ -222,15 +269,23 @@ fn poly_cell_points(cell_type: CellType) -> Option<u64> {
 /// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
 /// and for poly-cells, the number of points is also added.
 /// TODO if all cells are the same, then the type information can be stored as `TopologyType`
-fn prepare_cells(
-    connectivity: &[u64],
+fn prepare_cells<I: ConnectivityIndex>(
+    connectivity: &[I],
     cell_types: &[CellType],
     num_points: usize,
-) -> (TopologyType, Vec<u64>) {
+) -> Result<(TopologyType, Vec<I>)> {
+    // every index fits by the time this runs, `validate_points_and_cells` checked the point count
+    // against `I::MAX_INDEX` first
+    let index_fits = || Error::Internal("a point index does not fit the connectivity type");
+
     if cell_types.is_empty() {
         // if there are no cells, use polyvertex on nodes
         // this is required by paraview to visualize only points
-        return (TopologyType::Polyvertex, (0..num_points as u64).collect());
+        let indices = (0..num_points)
+            .map(|index| I::from_index(index).ok_or_else(index_fits))
+            .collect::<Result<Vec<_>>>()?;
+
+        return Ok((TopologyType::Polyvertex, indices));
     }
 
     let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
@@ -238,11 +293,11 @@ fn prepare_cells(
 
     for cell_type in cell_types {
         let num_points = cell_type.num_points();
-        cells_with_types.push(*cell_type as u64);
+        cells_with_types.push(I::from_u8(*cell_type as u8));
 
         if let Some(n_points_poly) = poly_cell_points(*cell_type) {
             // poly-cells need to specify the number of points
-            cells_with_types.push(n_points_poly);
+            cells_with_types.push(I::from_u8(n_points_poly));
         }
 
         cells_with_types.extend_from_slice(&connectivity[index..index + num_points]);
@@ -250,7 +305,7 @@ fn prepare_cells(
         index += num_points; // move index to the next cell
     }
 
-    (TopologyType::Mixed, cells_with_types)
+    Ok((TopologyType::Mixed, cells_with_types))
 }
 
 /// Writer for time series data in XDMF format. Can be used after writing the mesh with `TimeSeriesWriter::write_mesh`.
@@ -547,8 +602,11 @@ impl TimeStep<'_> {
             });
         }
 
-        // reject values the backend's format cannot represent (e.g. binary's u64->u32 range)
-        // before anything is written, so a caller mistake leaves no partial output behind
+        // reject values that cannot be read back correctly before anything is written, so a caller
+        // mistake leaves no partial output behind. The u64 range is capped for every storage,
+        // while `validate_values` adds whatever the backend's own format cannot represent on top
+        // (e.g. binary's narrowing of i64 to i32).
+        values.validate_uint_range()?;
         self.writer.writer.validate_values(&values)?;
 
         if !self.initialized {
@@ -696,7 +754,7 @@ mod tests {
     use crate::{
         DataAttribute,
         xdmf_elements::{
-            data_item::{DataContent, Format},
+            data_item::{DataContent, Format, NumberType},
             grid::Grid,
         },
     };
@@ -727,7 +785,7 @@ mod tests {
     #[test]
     fn test_prepare_cells() {
         let (topo_type, cells_prep) = prepare_cells(
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            &[0_u64, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             &[
                 CellType::Vertex,
                 CellType::Edge,
@@ -735,7 +793,8 @@ mod tests {
                 CellType::Quadrilateral,
             ],
             0,
-        );
+        )
+        .unwrap();
 
         assert_eq!(topo_type, TopologyType::Mixed);
         assert_eq!(
@@ -746,45 +805,60 @@ mod tests {
 
     #[test]
     fn prepare_cells_by_celltype() {
-        assert_eq!(prepare_cells(&[5], &[CellType::Vertex], 0).1, vec![1, 1, 5]);
+        assert_eq!(
+            prepare_cells(&[5], &[CellType::Vertex], 0).unwrap().1,
+            vec![1, 1, 5]
+        );
 
         assert_eq!(
-            prepare_cells(&[5, 6], &[CellType::Edge], 0).1,
+            prepare_cells(&[5, 6], &[CellType::Edge], 0).unwrap().1,
             vec![2, 2, 5, 6]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7], &[CellType::Triangle], 0).1,
+            prepare_cells(&[5, 6, 7], &[CellType::Triangle], 0)
+                .unwrap()
+                .1,
             vec![4, 5, 6, 7]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8], &[CellType::Quadrilateral], 0).1,
+            prepare_cells(&[5, 6, 7, 8], &[CellType::Quadrilateral], 0)
+                .unwrap()
+                .1,
             vec![5, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8], &[CellType::Tetrahedron], 0).1,
+            prepare_cells(&[5, 6, 7, 8], &[CellType::Tetrahedron], 0)
+                .unwrap()
+                .1,
             vec![6, 5, 6, 7, 8]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9], &[CellType::Pyramid], 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9], &[CellType::Pyramid], 0)
+                .unwrap()
+                .1,
             vec![7, 5, 6, 7, 8, 9]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Wedge], 0)
+                .unwrap()
+                .1,
             vec![8, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0)
+                .unwrap()
+                .1,
             vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7], &[CellType::Edge3], 0).1,
+            prepare_cells(&[5, 6, 7], &[CellType::Edge3], 0).unwrap().1,
             vec![34, 5, 6, 7]
         );
 
@@ -794,17 +868,22 @@ mod tests {
                 &[CellType::Quadrilateral9],
                 0
             )
+            .unwrap()
             .1,
             vec![35, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0)
+                .unwrap()
+                .1,
             vec![36, 5, 6, 7, 8, 9, 10]
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8], 0).1,
+            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8], 0)
+                .unwrap()
+                .1,
             vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
@@ -814,6 +893,7 @@ mod tests {
                 &[CellType::Tetrahedron10],
                 0
             )
+            .unwrap()
             .1,
             vec![38, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         );
@@ -824,6 +904,7 @@ mod tests {
                 &[CellType::Pyramid13],
                 0
             )
+            .unwrap()
             .1,
             vec![39, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
@@ -834,6 +915,7 @@ mod tests {
                 &[CellType::Wedge15],
                 0
             )
+            .unwrap()
             .1,
             vec![40, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
         );
@@ -846,6 +928,7 @@ mod tests {
                 &[CellType::Wedge18],
                 0
             )
+            .unwrap()
             .1,
             vec![
                 41, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
@@ -860,6 +943,7 @@ mod tests {
                 &[CellType::Hexahedron20],
                 0
             )
+            .unwrap()
             .1,
             vec![
                 48, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
@@ -875,6 +959,7 @@ mod tests {
                 &[CellType::Hexahedron24],
                 0
             )
+            .unwrap()
             .1,
             vec![
                 49, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -891,6 +976,7 @@ mod tests {
                 &[CellType::Hexahedron27],
                 0
             )
+            .unwrap()
             .1,
             vec![
                 50, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -901,7 +987,7 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_no_cells() {
-        let (topo_type, cells_prep) = prepare_cells(&[], &[], 5);
+        let (topo_type, cells_prep) = prepare_cells(&[] as &[u64], &[], 5).unwrap();
 
         assert_eq!(topo_type, TopologyType::Polyvertex);
         assert_eq!(cells_prep, vec![0, 1, 2, 3, 4]);
@@ -922,10 +1008,50 @@ mod tests {
         .unwrap();
     }
 
+    // A mesh whose points cannot all be indexed by the connectivity type is rejected. Exercised
+    // through the validation helper rather than `write_mesh`, since it only needs the coordinate
+    // *count* -- a mesh this big cannot be allocated in a test.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn validate_points_and_cells_too_many_points() {
+        // one point more than the type can index, since the last point is index `num_points - 1`
+        let too_many_u32 = usize::try_from(u32::MAX).unwrap() + 2;
+        let too_many_i32 = usize::try_from(i32::MAX).unwrap() + 2;
+
+        // `u64` is capped where `u32` is: the limit is what ParaView decodes, not what fits
+        std::assert_matches!(
+            validate_points_and_cells(3 * too_many_u32, &[] as &[u64], &[]).unwrap_err(),
+            Error::InvalidMesh { reason } if reason.contains("can only index up to 4294967295")
+        );
+        std::assert_matches!(
+            validate_points_and_cells(3 * too_many_u32, &[] as &[u32], &[]).unwrap_err(),
+            Error::InvalidMesh { reason } if reason.contains("can only index up to 4294967295")
+        );
+        std::assert_matches!(
+            validate_points_and_cells(3 * too_many_i32, &[] as &[i32], &[]).unwrap_err(),
+            Error::InvalidMesh { reason } if reason.contains("can only index up to 2147483647")
+        );
+
+        // one point less is exactly what each type reaches, and is still addressable
+        validate_points_and_cells(3 * (too_many_u32 - 1), &[] as &[u64], &[]).unwrap();
+        validate_points_and_cells(3 * (too_many_i32 - 1), &[] as &[i32], &[]).unwrap();
+
+        // `i64` lifts the limit past anything a mesh can reach
+        validate_points_and_cells(3 * too_many_u32, &[] as &[i64], &[]).unwrap();
+    }
+
+    #[test]
+    fn validate_points_and_cells_negative_index() {
+        std::assert_matches!(
+            validate_points_and_cells(9, &[0_i32, -1, 2], &[CellType::Triangle]).unwrap_err(),
+            Error::InvalidMesh { reason } if reason == "connectivity index -1 is negative"
+        );
+    }
+
     #[test]
     fn validate_points_and_cells_only_points() {
         // valid input, must not return an error
-        validate_points_and_cells(33, &[], &[]).unwrap();
+        validate_points_and_cells(33, &[] as &[u64], &[]).unwrap();
     }
 
     #[test]
@@ -1316,8 +1442,8 @@ mod tests {
             .unwrap();
 
         let xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
-        let one = "1.0000000000000000e0";
-        let two = "2.0000000000000000e0";
+        let one = "1e0";
+        let two = "2e0";
         assert!(xdmf.contains(&format!(">{one} {one} {one}<")));
         assert!(xdmf.contains(&format!(">{two} {two} {two}<")));
     }
@@ -1636,7 +1762,7 @@ mod tests {
             fn write_mesh(
                 &mut self,
                 _points: &Values<'_>,
-                _cells: &[u64],
+                _cells: &Values<'_>,
             ) -> Result<(DataContent, DataContent)> {
                 Ok((
                     DataContent::Raw("points".to_string()),
@@ -1770,7 +1896,7 @@ mod tests {
         fn write_mesh(
             &mut self,
             _points: &Values<'_>,
-            _cells: &[u64],
+            _cells: &Values<'_>,
         ) -> Result<(DataContent, DataContent)> {
             Ok((
                 DataContent::Raw("points".to_string()),

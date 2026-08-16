@@ -6,8 +6,16 @@
 //! Tensor, Tensor6) so the verification script can also confirm `ParaView` reads back the correct
 //! number of components per field, not just the right numeric values.
 //!
-//! Two fixtures are written per run, one with f64 coordinates and float attributes and one with
-//! f32 ones, since the two produce different bytes *and* a different `Precision` in the light data.
+//! The cell data covers every integer element type the writer supports (`u64`, `i64`, `u32`,
+//! `i32`) at the edges of its range, which is what pins down the 64-bit handling: for
+//! `DataStorage::Binary` the writer narrows `i64`/`u64` to 32 bits, and dropping that narrowing
+//! makes `ParaView` fail to read the file at all.
+//!
+//! One fixture is written per (coordinate precision, connectivity index type) pair: f64 and f32
+//! coordinates produce different bytes *and* a different `Precision` in the light data, and each
+//! of the four index types (`u32`, `u64`, `i32`, `i64`) gives the connectivity a different
+//! `NumberType`/`Precision` pair, which is what decides how large a mesh can be written. The
+//! verification script checks the cells come back with the right type and point ids for each.
 //!
 //! Usage: `cargo run --example paraview_smoke -- <output_dir> <storage>`
 //! `<storage>` is any string accepted by `xdmf::DataStorage::from_str` (e.g. `Hdf5SingleFile`).
@@ -19,7 +27,10 @@ use std::{
 };
 
 use serde::Serialize;
-use xdmf::{CellType, DataAttribute, DataStorage, TimeSeriesWriter, Values};
+use xdmf::{
+    CellType, Coordinate, DataAttribute, DataStorage, TimeSeriesDataWriter, TimeSeriesWriter,
+    Values,
+};
 
 const NUM_POINTS: usize = 5;
 const NUM_CELLS: usize = 2;
@@ -30,7 +41,50 @@ const COORDS: [f64; NUM_POINTS * 3] = [
 ];
 const CONNECTIVITY: [u64; 7] = [0, 1, 2, 3, 1, 4, 2];
 const CELL_TYPES: [CellType; NUM_CELLS] = [CellType::Quadrilateral, CellType::Triangle];
+
+// What the connectivity above has to come back as, named the way VTK names the cell classes. The
+// connectivity is the one array whose element type the caller picks, so a fixture that got its
+// `NumberType`/`Precision` wrong shows up here as a mangled or missing cell rather than as a
+// slightly-off number.
+const EXPECTED_CELLS: [(&str, &[u64]); NUM_CELLS] =
+    [("vtkQuad", &[0, 1, 2, 3]), ("vtkTriangle", &[1, 4, 2])];
+
 const REGION_ID: [u64; NUM_CELLS] = [100, 200];
+// the 32-bit fields cover both ends of their range, so a reader that gets the signedness wrong
+// (u32 read as i32, or the sign bit of a negative i32 dropped) cannot pass
+const LEVEL_I32: [i32; NUM_CELLS] = [i32::MIN, i32::MAX];
+const FLAG_U32: [u32; NUM_CELLS] = [0, u32::MAX];
+// the 64-bit fields stay inside the 32-bit range, since `DataStorage::Binary` narrows them on the
+// way out (ParaView's legacy Xdmf2 reader misreads 64-bit integers in `Format="Binary"`)
+const LEVEL_I64: [i64; NUM_CELLS] = [i32::MIN as i64, i32::MAX as i64];
+// ...while this one deliberately does not, so the storages that keep the full width are checked on
+// values that cannot survive unless they really are read back as 64-bit integers. Skipped for
+// `Binary`, which rejects anything out of 32-bit range outright.
+//
+// +/-(2^53 - 1) rather than something wider, because that is the largest magnitude that reads back
+// exactly from *every* storage: ParaView parses the ascii formats' integers through a double, so
+// 2^53 + 1 comes back off by one there (HDF5 and Binary are exact). Signed because it has to be --
+// ParaView's Xdmf2 reader builds a 32-bit array for `NumberType="UInt"` whatever `Precision` says,
+// so the writer refuses a `u64` beyond `u32::MAX` outright, for every storage. See the README.
+const LEVEL_I64_WIDE: [i64; NUM_CELLS] = [-9_007_199_254_740_991, 9_007_199_254_740_991];
+
+/// One integer cell-data field, as `ParaView` must read it back. Every element type the writer
+/// supports gets one, since the light data's `NumberType`/`Precision` pair -- and, for
+/// `DataStorage::Binary`, the narrowing to 32 bits -- is what a reader has to agree with.
+#[derive(Serialize)]
+struct ExpectedIntegerField {
+    name: String,
+    values: Vec<i128>,
+}
+
+impl ExpectedIntegerField {
+    fn new(name: &str, values: impl IntoIterator<Item = impl Into<i128>>) -> Self {
+        Self {
+            name: name.to_string(),
+            values: values.into_iter().map(Into::into).collect(),
+        }
+    }
+}
 
 #[derive(Serialize)]
 struct ExpectedTimestep {
@@ -38,14 +92,22 @@ struct ExpectedTimestep {
     temperature: Vec<f64>,
     displacement: Vec<[f64; 3]>,
     velocity_gradient: Vec<[f64; 9]>,
-    region_id: Vec<u64>,
+    integers: Vec<ExpectedIntegerField>,
     stress: Vec<[f64; 6]>,
+}
+
+/// One cell as `ParaView` must read it back: the VTK class it becomes, and the point ids it spans.
+#[derive(Serialize)]
+struct ExpectedCell {
+    r#type: String,
+    points: Vec<u64>,
 }
 
 #[derive(Serialize)]
 struct ExpectedFixture {
     xdmf_file: String,
     points: Vec<Vec<f64>>,
+    cells: Vec<ExpectedCell>,
     timesteps: Vec<ExpectedTimestep>,
 }
 
@@ -97,6 +159,50 @@ impl Precision {
     }
 }
 
+/// Which integer type the connectivity of a fixture is written as.
+///
+/// The caller picks this, and it is what caps the mesh size: `UInt` (`u32`/`u64`) connectivity is
+/// decoded at 32 bits by `ParaView` whatever precision is declared, while `Int` keeps its width.
+#[derive(Clone, Copy)]
+enum IndexType {
+    U32,
+    U64,
+    I32,
+    I64,
+}
+
+impl IndexType {
+    const ALL: [Self; 4] = [Self::U32, Self::U64, Self::I32, Self::I64];
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+        }
+    }
+
+    /// Writes the mesh with the connectivity converted to this type.
+    ///
+    /// A method rather than a value, since the index type is a type parameter of `write_mesh` and
+    /// so cannot be passed through as data.
+    fn write_mesh<C: Coordinate>(
+        self,
+        writer: TimeSeriesWriter,
+        coords: &[C],
+    ) -> IoResult<TimeSeriesDataWriter> {
+        let mesh = match self {
+            Self::U32 => writer.write_mesh(coords, &CONNECTIVITY.map(|i| i as u32), &CELL_TYPES),
+            Self::U64 => writer.write_mesh(coords, &CONNECTIVITY, &CELL_TYPES),
+            Self::I32 => writer.write_mesh(coords, &CONNECTIVITY.map(|i| i as i32), &CELL_TYPES),
+            Self::I64 => writer.write_mesh(coords, &CONNECTIVITY.map(|i| i as i64), &CELL_TYPES),
+        };
+
+        Ok(mesh?)
+    }
+}
+
 fn main() -> IoResult<()> {
     let args: Vec<String> = env::args().collect();
     let [_, output_dir, storage_arg] = args.as_slice() else {
@@ -112,12 +218,20 @@ fn main() -> IoResult<()> {
 
     let output_dir = Path::new(output_dir);
 
-    let expected = Expected {
-        fixtures: vec![
-            write_fixture(output_dir, storage_arg, storage, Precision::F64)?,
-            write_fixture(output_dir, storage_arg, storage, Precision::F32)?,
-        ],
-    };
+    let mut fixtures = Vec::new();
+    for precision in [Precision::F64, Precision::F32] {
+        for index_type in IndexType::ALL {
+            fixtures.push(write_fixture(
+                output_dir,
+                storage_arg,
+                storage,
+                precision,
+                index_type,
+            )?);
+        }
+    }
+
+    let expected = Expected { fixtures };
 
     let expected_json =
         serde_json::to_string(&expected).map_err(|e| IoError::new(InvalidInput, e.to_string()))?;
@@ -144,22 +258,31 @@ fn write_fixture(
     storage_arg: &str,
     storage: DataStorage,
     precision: Precision,
+    index_type: IndexType,
 ) -> IoResult<ExpectedFixture> {
     let suffix = match precision {
-        Precision::F64 => "",
-        Precision::F32 => "_f32",
+        Precision::F64 => "f64",
+        Precision::F32 => "f32",
     };
-    let base_path = output_dir.join(format!("fixture_{}{suffix}", storage_arg.to_lowercase()));
+    let base_path = output_dir.join(format!(
+        "fixture_{}_{suffix}_{}",
+        storage_arg.to_lowercase(),
+        index_type.suffix()
+    ));
+
+    // `Binary` narrows 64-bit integers to 32 bits and refuses anything that does not fit, so the
+    // out-of-32-bit-range field is written for every other storage only
+    let writes_wide_integers = !matches!(storage, DataStorage::Binary);
 
     let mut coords = COORDS;
     precision.narrow_expected(&mut coords);
 
     let xdmf_writer = TimeSeriesWriter::new(&base_path, storage)?;
     let mut xdmf_writer = match precision {
-        Precision::F64 => xdmf_writer.write_mesh(&coords, &CONNECTIVITY, &CELL_TYPES)?,
+        Precision::F64 => index_type.write_mesh(xdmf_writer, &coords)?,
         Precision::F32 => {
             let coords_f32: Vec<f32> = coords.iter().map(|&v| v as f32).collect();
-            xdmf_writer.write_mesh(&coords_f32, &CONNECTIVITY, &CELL_TYPES)?
+            index_type.write_mesh(xdmf_writer, &coords_f32)?
         }
     };
 
@@ -197,12 +320,22 @@ fn write_fixture(
         precision.narrow_expected(velocity_gradient.as_flattened_mut());
         precision.narrow_expected(stress.as_flattened_mut());
 
+        let mut integers = vec![
+            ExpectedIntegerField::new("region_id", REGION_ID),
+            ExpectedIntegerField::new("level_i64", LEVEL_I64),
+            ExpectedIntegerField::new("level_i32", LEVEL_I32),
+            ExpectedIntegerField::new("flag_u32", FLAG_U32),
+        ];
+        if writes_wide_integers {
+            integers.push(ExpectedIntegerField::new("level_i64_wide", LEVEL_I64_WIDE));
+        }
+
         timesteps.push(ExpectedTimestep {
             time: step as f64,
             temperature: temperature.clone(),
             displacement: displacement.clone(),
             velocity_gradient: velocity_gradient.clone(),
-            region_id: REGION_ID.to_vec(),
+            integers,
             stress: stress.clone(),
         });
 
@@ -227,6 +360,13 @@ fn write_fixture(
 
             // integer data is unaffected by the fixture's float precision
             time_step.cell_data("region_id", DataAttribute::Scalar, &REGION_ID)?;
+            time_step.cell_data("level_i64", DataAttribute::Scalar, &LEVEL_I64)?;
+            time_step.cell_data("level_i32", DataAttribute::Scalar, &LEVEL_I32)?;
+            time_step.cell_data("flag_u32", DataAttribute::Scalar, &FLAG_U32)?;
+            if writes_wide_integers {
+                time_step.cell_data("level_i64_wide", DataAttribute::Scalar, &LEVEL_I64_WIDE)?;
+            }
+
             time_step.cell_data(
                 "stress",
                 DataAttribute::Tensor6,
@@ -245,6 +385,13 @@ fn write_fixture(
     Ok(ExpectedFixture {
         xdmf_file,
         points: coords.chunks_exact(3).map(<[f64]>::to_vec).collect(),
+        cells: EXPECTED_CELLS
+            .iter()
+            .map(|(class_name, points)| ExpectedCell {
+                r#type: (*class_name).to_string(),
+                points: points.to_vec(),
+            })
+            .collect(),
         timesteps,
     })
 }

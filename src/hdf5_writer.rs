@@ -7,6 +7,7 @@ use hdf5::{File as H5File, Group as H5Group, H5Type};
 use crate::{
     DataStorage, DataWriter, Error, Result, Values,
     error::io_ctx,
+    values::checked_uint,
     xdmf_elements::{
         attribute,
         data_item::{DataContent, Format},
@@ -77,7 +78,7 @@ impl DataWriter for SingleFileHdf5Writer {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
             return Err(Error::InvalidMesh {
@@ -219,7 +220,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
@@ -320,11 +321,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
 fn write_mesh(
     group: &H5Group,
     points: &Values<'_>,
-    cells: &[u64],
+    cells: &Values<'_>,
     deflate_level: u8,
 ) -> Result<(String, String)> {
     let data_name_points = write_values(group, POINTS, points, deflate_level)?;
-    let data_name_cells = write_values(group, CELLS, &Values::from(cells), deflate_level)?;
+    let data_name_cells = write_values(group, CELLS, cells, deflate_level)?;
 
     Ok((data_name_points, data_name_cells))
 }
@@ -342,8 +343,18 @@ fn write_values(
         Values::F32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
         Values::I64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
         Values::I32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
-        Values::U64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
         Values::U32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+        // stored narrowed, to match the `UINT_PRECISION` the light data declares. The copy is
+        // unavoidable -- HDF5 writes from a contiguous slice of the dataset's own type -- but it
+        // is half the size of the input, and every value is known to fit by the time it gets here.
+        Values::U64(v) => {
+            let narrowed = v
+                .iter()
+                .copied()
+                .map(checked_uint)
+                .collect::<Result<Vec<_>>>()?;
+            create_and_write(group, dataset_name, &narrowed, shape, deflate_level)
+        }
     }
 }
 
@@ -433,10 +444,15 @@ mod tests {
         let group = h5_file.create_group("test_group").unwrap();
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
 
-        let (data_name_points, data_name_cells) =
-            write_mesh(&group, &points.as_slice().into(), &cells, 6).unwrap();
+        let (data_name_points, data_name_cells) = write_mesh(
+            &group,
+            &points.as_slice().into(),
+            &cells.as_slice().into(),
+            6,
+        )
+        .unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -474,7 +490,13 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
 
-        write_mesh(&group, &points.as_slice().into(), &cells, 6).unwrap();
+        write_mesh(
+            &group,
+            &points.as_slice().into(),
+            &cells.as_slice().into(),
+            6,
+        )
+        .unwrap();
 
         let h5_file_read = H5File::open(&file_name).unwrap();
         let dataset = h5_file_read
@@ -581,6 +603,24 @@ mod tests {
         let dataset_u32 = group_read.dataset("test_u32").unwrap();
         assert_eq!(dataset_u32.dtype().unwrap().size(), 4);
         assert_eq!(dataset_u32.read::<u32, _>().unwrap().to_vec(), vec_u32);
+
+        // u64 is the exception: stored narrowed to 32 bits, matching the `UINT_PRECISION` the
+        // light data declares, since ParaView decodes UInt at 32 bits either way
+        let vec_u64 = vec![1_u64, 2, u64::from(u32::MAX)];
+        write_values(&group, "test_u64", &vec_u64.clone().into(), 6).unwrap();
+
+        let dataset_u64 = H5File::open(&file_name)
+            .unwrap()
+            .group("test_group")
+            .unwrap()
+            .dataset("test_u64")
+            .unwrap();
+        assert_eq!(dataset_u64.dtype().unwrap().size(), 4);
+        assert_eq!(
+            dataset_u64.read::<u64, _>().unwrap().to_vec(),
+            vec_u64,
+            "the narrowed values must still read back as the u64s that went in"
+        );
 
         let dataset_i64 = group_read.dataset("test_i64").unwrap();
         assert_eq!(dataset_i64.dtype().unwrap().size(), 8);
@@ -857,9 +897,9 @@ mod tests {
         let h5_file = file_name.with_extension("h5");
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
         let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
 
         assert_eq!(points_path, ("test.h5:mesh/points").into());
@@ -897,9 +937,9 @@ mod tests {
         assert!(!mesh_file.exists());
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
         let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         assert!(mesh_file.exists());
 

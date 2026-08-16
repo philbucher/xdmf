@@ -9,7 +9,7 @@ use std::{
 use crate::{
     DataStorage, DataWriter, Error, Result,
     error::io_ctx,
-    values::Values,
+    values::{Values, checked_uint},
     xdmf_elements::{
         attribute,
         data_item::{DataContent, Format},
@@ -65,7 +65,7 @@ impl DataWriter for BinaryWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         let points_file_name = "points.bin";
         let cells_file_name = "cells.bin";
@@ -80,7 +80,7 @@ impl DataWriter for BinaryWriter {
         );
 
         values_to_writer(points, &mut file_points, &points_path)?;
-        write_narrowed_le(cells, &mut file_cells, &cells_path)?;
+        values_to_writer(cells, &mut file_cells, &cells_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
         file_points
@@ -165,10 +165,13 @@ impl DataWriter for BinaryWriter {
     fn validate_values(&self, data: &Values<'_>) -> Result<()> {
         match data {
             Values::I64(v) => validate_narrowable(v),
-            Values::U64(v) => validate_narrowable(v),
-            // spelled out rather than a wildcard, so a further element type has to decide whether
-            // it needs narrowing instead of silently skipping the check
-            Values::F64(_) | Values::F32(_) | Values::I32(_) | Values::U32(_) => Ok(()),
+            // `u64` is capped at `u32::MAX` for every storage by `Values::validate_uint_range`, so
+            // narrowing it here can no longer fail and needs no check of its own. The rest is
+            // spelled out rather than left to a wildcard, so a further element type has to decide
+            // whether it needs narrowing instead of silently skipping the check.
+            Values::F64(_) | Values::F32(_) | Values::I32(_) | Values::U32(_) | Values::U64(_) => {
+                Ok(())
+            }
         }
     }
 }
@@ -210,6 +213,10 @@ fn write_le<T: LeBytes>(vec: &[T], writer: &mut impl Write, path: &Path) -> Resu
 // connectivity comes back empty and attribute data comes back with corrupted values.
 // Narrowing to 4 bytes (and matching `Format::int_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
 // Values that don't fit in 32 bits are rejected rather than silently truncated.
+const NARROWING_REASON: &str = "Binary storage narrows 64-bit integers to 32 bits, since \
+                                ParaView's legacy Xdmf2 reader misreads them; another DataStorage \
+                                keeps the full width";
+
 trait Narrow32: Copy {
     type Narrowed: LeBytes;
 
@@ -223,8 +230,9 @@ macro_rules! impl_narrow32 {
                 type Narrowed = $narrow;
 
                 fn checked_narrow(self) -> Result<$narrow> {
-                    <$narrow>::try_from(self).map_err(|_err| Error::IntegerTooLargeForBinary {
+                    <$narrow>::try_from(self).map_err(|_err| Error::IntegerOutOfRange {
                         value: i128::from(self),
+                        reason: NARROWING_REASON.to_string(),
                     })
                 }
             }
@@ -232,7 +240,9 @@ macro_rules! impl_narrow32 {
     };
 }
 
-impl_narrow32!(i64 => i32, u64 => u32);
+// `u64` is deliberately not narrowed through this trait: it is written at 32 bits by every format,
+// not just this one, so it goes through `values::checked_uint` and reports that limit instead.
+impl_narrow32!(i64 => i32);
 
 fn validate_narrowable<T: Narrow32>(vec: &[T]) -> Result<()> {
     for &v in vec {
@@ -250,6 +260,17 @@ fn write_narrowed_le<T: Narrow32>(vec: &[T], writer: &mut impl Write, path: &Pat
     Ok(())
 }
 
+// Narrowed one value at a time straight into the writer, so the connectivity -- by far the largest
+// array here -- needs no intermediate `Vec<u32>`.
+fn write_uint_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Result<()> {
+    for &v in vec {
+        writer
+            .write_all(&checked_uint(v)?.to_le_bytes())
+            .map_err(io_ctx("writing binary data", path))?;
+    }
+    Ok(())
+}
+
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
         Values::F64(v) => write_le(v, writer, path),
@@ -257,7 +278,7 @@ fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> 
         Values::I32(v) => write_le(v, writer, path),
         Values::U32(v) => write_le(v, writer, path),
         Values::I64(v) => write_narrowed_le(v, writer, path),
-        Values::U64(v) => write_narrowed_le(v, writer, path),
+        Values::U64(v) => write_uint_le(v, writer, path),
     }
 }
 
@@ -299,15 +320,18 @@ mod tests {
     }
 
     #[test]
-    fn write_narrowed_le_multiple_values() {
+    fn write_uint_le_multiple_values() {
         let vec_u64 = vec![1_u64, 2];
         let mut buffer = Vec::new();
-        write_narrowed_le(&vec_u64, &mut buffer, Path::new("test.bin")).unwrap();
+        write_uint_le(&vec_u64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1_u32.to_le_bytes());
         expected.extend_from_slice(&2_u32.to_le_bytes());
         assert_eq!(buffer, expected);
+    }
 
+    #[test]
+    fn write_narrowed_le_multiple_values() {
         let vec_i64 = vec![1_i64, -2];
         let mut buffer = Vec::new();
         write_narrowed_le(&vec_i64, &mut buffer, Path::new("test.bin")).unwrap();
@@ -321,11 +345,12 @@ mod tests {
     fn write_narrowed_le_rejects_values_out_of_32_bit_range() {
         let vec_u64 = vec![1_u64, u64::from(u32::MAX) + 1];
         let mut buffer = Vec::new();
-        let res = write_narrowed_le(&vec_u64, &mut buffer, Path::new("test.bin"));
+        let res = write_uint_le(&vec_u64, &mut buffer, Path::new("test.bin"));
         std::assert_matches!(
             res.unwrap_err(),
-            Error::IntegerTooLargeForBinary {
-                value: 4_294_967_296
+            Error::IntegerOutOfRange {
+                value: 4_294_967_296,
+                ..
             }
         );
 
@@ -335,8 +360,9 @@ mod tests {
         let res = write_narrowed_le(&vec_i64, &mut buffer, Path::new("test.bin"));
         std::assert_matches!(
             res.unwrap_err(),
-            Error::IntegerTooLargeForBinary {
-                value: -2_147_483_649
+            Error::IntegerOutOfRange {
+                value: -2_147_483_649,
+                ..
             }
         );
     }
@@ -416,7 +442,7 @@ mod tests {
         let points = vec![0.0_f64, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
         let (points_content, cells_content) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
@@ -483,7 +509,7 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.5];
         let cells = vec![0_u64, 1, 2];
         writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
 
         writer.write_data_initialize("0.1").unwrap();

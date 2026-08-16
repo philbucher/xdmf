@@ -82,8 +82,10 @@ fn write_and_verify_binary() {
 }
 
 #[test]
-fn binary_write_data_rejects_u64_too_large_for_u32() {
-    // binary format is only using 32-bit integers, due to a bug in the paraview reader that misreads 64-bit integers
+fn binary_write_data_rejects_i64_too_large_for_i32() {
+    // binary format is only using 32-bit integers, due to a bug in the paraview reader that
+    // misreads 64-bit integers. Unlike the u64 cap, which applies to every storage, this one is
+    // the Binary backend's own, so the error says another DataStorage would take the value.
     let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
     let connectivity = [0_u64, 1, 2];
     let cell_types = [xdmf::CellType::Triangle];
@@ -101,13 +103,13 @@ fn binary_write_data_rejects_u64_too_large_for_u32() {
         step.cell_data(
             "region_id",
             xdmf::DataAttribute::Scalar,
-            vec![u64::from(u32::MAX) + 1],
+            vec![i64::from(i32::MAX) + 1],
         )
     });
     std::assert_matches!(
         res.unwrap_err(),
-        xdmf::Error::IntegerTooLargeForBinary { value }
-            if value == i128::from(u32::MAX) + 1
+        xdmf::Error::IntegerOutOfRange { value, reason }
+            if value == i128::from(i32::MAX) + 1 && reason.contains("another DataStorage")
     );
 
     // the rejected value is caught before any file for this step is opened, so nothing is left
@@ -172,7 +174,7 @@ fn write_and_verify_binary_signed_integers() {
         vec![-2, 0, 2]
     );
 
-    // an i64 below i32's range is rejected the same way an oversized u64 is
+    // an i64 below i32's range does not survive the narrowing and is rejected
     let res = xdmf_writer.write_time_step("1", |step| {
         step.point_data(
             "level_i64",
@@ -182,7 +184,7 @@ fn write_and_verify_binary_signed_integers() {
     });
     std::assert_matches!(
         res.unwrap_err(),
-        xdmf::Error::IntegerTooLargeForBinary { value }
+        xdmf::Error::IntegerOutOfRange { value, .. }
             if value == i128::from(i32::MIN) - 1
     );
 }

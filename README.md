@@ -28,7 +28,7 @@ let xdmf_writer = TimeSeriesWriter::new(
 
 // define 3 points and 2 cells (a line and a triangle)
 let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+let connectivity = [0_u32, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
 let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
 
 // write the mesh
@@ -82,6 +82,60 @@ The one exception is `DataStorage::Binary`: ParaView's legacy Xdmf2 reader misre
 there, so `i64`/`u64` data is narrowed to 32 bits on the way out, and a value that does not fit is
 reported as an error rather than silently truncated. The other storage methods write 64-bit
 integers as they are.
+
+Beyond that, the reader on ParaView's side puts two limits on how wide an integer actually survives.
+Both were measured against ParaView 5.13 and 6.1 (see `examples/paraview_smoke.rs` and
+`tests/paraview_smoke/`):
+
+- **`u64` above `u32::MAX` is rejected, by every storage method.** ParaView builds a 32-bit array
+  for `NumberType="UInt"` no matter what `Precision` the light data declares, so a larger value
+  would come back truncated (ascii) or clamped to `u32::MAX` (HDF5) — silently, without a reader
+  error. Since no storage method avoids that, such a value is refused up front rather than written.
+  Use `i64` for integer data that has to exceed 32 bits; `NumberType="Int"` really is decoded at
+  64 bits. The same cap applies to `u32`/`u64` connectivity, and so to the mesh size -- see the
+  connectivity section below.
+
+  Because the values are capped anyway, `u64` data is also *stored* at 32 bits everywhere, rather
+  than writing four bytes of zeros the reader would ignore. On a 205k-hexahedron mesh that halves
+  the connectivity dataset (14.8 MB → 7.4 MB before compression) and shrinks the whole
+  `Hdf5SingleFile` output by 8%; the compressed gain is smaller than the halving because
+  `shuffle`+`deflate` already squeezes the zero bytes well. Ascii and Binary output is byte-for-byte
+  unchanged — Binary already narrowed, and ascii writes the same digits either way.
+- **In the ascii storage methods, `i64` is limited to ±2^53.** ParaView parses their integers
+  through a `double`, so a larger value comes back rounded — and `i64::MAX` comes back as
+  `i64::MIN`, sign flipped. Values past that are rejected rather than written, so nothing lands in
+  the output that ParaView would display as a different number. `Hdf5SingleFile`/`Hdf5MultipleFiles`
+  have no such limit and read `i64` exactly at both extremes, which is what the error points at.
+
+Floating point data is not affected by any of this: the ascii storage methods write each value with
+the fewest digits that read back as the exact same `f32`/`f64`, so nothing is lost there and round
+values stay short (`1.05e1`, not `1.05000000e1`).
+
+### Which integer type should the connectivity be?
+
+`u32`, `u64`, `i32` and `i64` are all accepted, and the connectivity is written as the type it is
+passed in. That choice is what sets the largest mesh that can be written, since it decides the
+`NumberType`/`Precision` pair in the light data:
+
+| connectivity type | light data | largest mesh | storages |
+| --- | --- | --- | --- |
+| `u32`, `u64` | `NumberType="UInt" Precision="4"` | 2^32 points | all |
+| `i32` | `NumberType="Int" Precision="4"` | 2^31 points | all |
+| `i64` | `NumberType="Int" Precision="8"` | beyond any mesh | `Hdf5SingleFile`, `Hdf5MultipleFiles` |
+
+`u32` is the compact default for anything that fits, and `u64` writes the exact same bytes -- it is
+narrowed on the way out, for the reader reason described above, so passing `u64` costs nothing but
+also buys nothing over `u32`.
+
+`i64` is the one type that lifts the 2^32 cap, because `NumberType="Int"` is the one ParaView
+decodes at the declared width. What that means in practice is only partly measured: the reader
+handles `Int`/8 connectivity correctly (verified on ParaView 5.13 and 6.1, whose `vtkIdType` is
+64 bits in both builds), but a mesh with an index actually beyond 2^32 needs over 100 GB of
+coordinates and has not been tested here. The other two storages cannot carry such a mesh anyway:
+`Binary` narrows 64-bit integers to 32 bits, and the ascii storages cap `i64` at 2^53.
+
+A mesh too large for the type it is written with is rejected up front, rather than silently wrapping
+around.
 
 ### Which data storage should be used for the heavy data?
 
