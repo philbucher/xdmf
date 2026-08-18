@@ -107,6 +107,44 @@ jobs:
       shell: bash
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
 
+  python-bindings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    name: "Building and testing the python bindings"
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: clippy
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "python-bindings"
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.x"
+
+    - name: Install HDF5 (apt) # the wheel links against it, the bindings enable the feature
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get remove -y man-db || true # to speed up
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libhdf5-dev
+
+    - name: Run clippy # not covered by the job above, which builds the core crate only
+      run: cargo clippy -p xdmf-python --all-targets -- -D warnings
+
+    - name: Install the bindings
+      run: pip install './python[test]'
+
+    - name: Run tests
+      run: pytest python/tests
+
   formatting:
     runs-on: ubuntu-latest
     timeout-minutes: 10

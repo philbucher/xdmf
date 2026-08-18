@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "xdmf"
+dynamic = ["version"]
+description = "Python bindings for the xdmf crate: write XDMF files for ParaView"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.21"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "h5py"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "xdmf"
+features = ["pyo3/extension-module"]

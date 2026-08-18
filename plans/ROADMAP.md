@@ -44,6 +44,20 @@ them. Revisit deliberately, not by drift.
   storage backends. Part 2 (`with_reduced_precision`) and its measurement gate remain open — see
   `03_values_and_f32.md`.
 
+- **2026-08-18, M6 Part 1 (writer only), branch `python-interface`.** The Python bindings, rebuilt
+  against the current API rather than cherry-picked — both reference implementations
+  (`origin/multiple-features`, `origin/reader`) predate the `TimeStep` builder and `paraview.rs`.
+  `python/` is now a workspace member: numpy arrays are borrowed with no copy for points,
+  connectivity and attribute data, at whichever of the six dtypes they are passed in; `DataWriter`
+  gained a `Send + Sync` supertrait so writes release the GIL (measured 2.6× on 4 threads); the data
+  writer is a context manager; errors map per `Error` variant, with `IntegerOutOfRange` →
+  `OverflowError`; `xdmf.pyi` stubs ship with the wheel and a test fails if the module outgrows them.
+  46 pytest tests, plus a CI job (`cargo clippy -p xdmf-python` + `pip install ./python[test]` +
+  `pytest`), and the strict clippy list moved to `[workspace.lints]` so it covers the new crate.
+  **Open:** the reader bindings (M5 first), the wheels (Part 2), the pyvista re-run (Part 3) — and
+  M2/M4/M5 will each move the Rust API this layer wraps. Details in `06_python_bindings.md`'s
+  top-of-file status note.
+
 ## Sub-plans
 
 | Plan | Milestone | Covers |

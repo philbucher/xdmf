@@ -1,0 +1,120 @@
+"""Type stubs for the `xdmf` extension module (pyo3/maturin), hand-written since the API surface
+is small. Keep in sync with `src/{enums,writer}.rs`.
+"""
+
+from collections.abc import Sequence
+
+import numpy as np
+import numpy.typing as npt
+
+CellTypes = (
+    Sequence["CellType"] | npt.NDArray[np.uint8] | npt.NDArray[np.uint64] | npt.NDArray[np.int64]
+)
+PointArray = npt.NDArray[np.float64] | npt.NDArray[np.float32]
+IndexArray = (
+    npt.NDArray[np.uint64] | npt.NDArray[np.uint32] | npt.NDArray[np.int64] | npt.NDArray[np.int32]
+)
+ValueArray = PointArray | IndexArray
+NamedData = Sequence[tuple[str, "DataAttribute", ValueArray]]
+
+def is_hdf5_enabled() -> bool:
+    """Whether this build can write the HDF5 storages."""
+
+class DataStorage:
+    """Heavy-data storage format."""
+
+    Ascii: "DataStorage"
+    AsciiInline: "DataStorage"
+    Hdf5SingleFile: "DataStorage"
+    Hdf5MultipleFiles: "DataStorage"
+    Binary: "DataStorage"
+
+    @staticmethod
+    def hdf5_single_file(deflate_level: int) -> "DataStorage":
+        """HDF5, all data in a single file, at the given deflate level (0-9)."""
+
+    @staticmethod
+    def hdf5_multiple_files(deflate_level: int) -> "DataStorage":
+        """HDF5, one file per time step, at the given deflate level (0-9)."""
+
+class CellType:
+    """Cell types as defined in the VTK file format. The values are the raw VTK codes."""
+
+    Vertex: "CellType"
+    Edge: "CellType"
+    Triangle: "CellType"
+    Quadrilateral: "CellType"
+    Tetrahedron: "CellType"
+    Pyramid: "CellType"
+    Wedge: "CellType"
+    Hexahedron: "CellType"
+    Edge3: "CellType"
+    Quadrilateral9: "CellType"
+    Triangle6: "CellType"
+    Quadrilateral8: "CellType"
+    Tetrahedron10: "CellType"
+    Pyramid13: "CellType"
+    Wedge15: "CellType"
+    Wedge18: "CellType"
+    Hexahedron20: "CellType"
+    Hexahedron24: "CellType"
+    Hexahedron27: "CellType"
+
+class DataAttribute:
+    """Type of the data (scalar, vector, tensor, etc.)."""
+
+    SCALAR: "DataAttribute"
+    VECTOR: "DataAttribute"
+    TENSOR: "DataAttribute"
+    TENSOR6: "DataAttribute"
+
+    @staticmethod
+    def matrix(rows: int, cols: int) -> "DataAttribute":
+        """Matrix with the given number of rows and columns."""
+
+    @staticmethod
+    def generic(size: int) -> "DataAttribute":
+        """Generic data with the given size."""
+
+class TimeSeriesDataWriter:
+    """Writer for the per-step data, obtained from `TimeSeriesWriter.write_mesh`.
+
+    Supports the context manager protocol; `close()`/`__exit__` release any open file handles
+    (relevant for the HDF5 backends, whose file otherwise stays open until this object is
+    garbage-collected).
+    """
+
+    def write_time_step(
+        self,
+        time: str,
+        point_data: NamedData | None = None,
+        cell_data: NamedData | None = None,
+    ) -> None:
+        """Write the point and cell data of one time step.
+
+        Raises `ValueError` for a time or an attribute the mesh cannot take (a duplicated time, a
+        wrong array length, a step with no data at all), `OverflowError` for an integer the chosen
+        storage cannot represent, and `OSError` for a failing write.
+
+        The arrays are borrowed rather than copied and the write releases the GIL, so another thread
+        must not modify an array while a write of it is running.
+        """
+
+    def close(self) -> None: ...
+    def __enter__(self) -> "TimeSeriesDataWriter": ...
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
+
+class TimeSeriesWriter:
+    """Writer for time series data in XDMF format."""
+
+    def __init__(self, file_name: str, data_storage: DataStorage) -> None: ...
+    def write_mesh(
+        self,
+        points: PointArray,
+        connectivity: IndexArray,
+        cell_types: CellTypes,
+    ) -> TimeSeriesDataWriter:
+        """Write the mesh, returning the writer for the time step data.
+
+        Consumes this writer; calling it a second time raises `RuntimeError`.
+        """
