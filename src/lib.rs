@@ -79,7 +79,12 @@ impl FromStr for DataStorage {
 }
 
 /// this trait defines the interface used to write the heavy data
-pub(crate) trait DataWriter {
+///
+/// `Send + Sync` so that a `Box<dyn DataWriter>`, and with it every writer holding one, can cross
+/// a thread boundary and be held by a shared type -- which is what lets the Python bindings
+/// (`python/`) hand a writer to Python (whose objects are shared by definition) and release the GIL
+/// for the duration of a write, instead of blocking every other Python thread.
+pub(crate) trait DataWriter: Send + Sync {
     fn format(&self) -> Format;
 
     fn data_storage(&self) -> DataStorage;

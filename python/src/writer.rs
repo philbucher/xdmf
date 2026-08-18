@@ -1,0 +1,203 @@
+//! `TimeSeriesWriter`/`TimeSeriesDataWriter` pyclasses wrapping the core crate's writer API.
+//!
+//! Both classes are ordinary (non-`unsendable`) pyclasses: the core crate's `DataWriter` trait is
+//! `Send + Sync` (see the crate's `src/lib.rs`), so `xdmf::TimeSeriesWriter`/`TimeSeriesDataWriter`
+//! are too, which is what lets the writes here release the GIL (`Python::detach`) -- otherwise
+//! every other Python thread would block for the duration of a large write, defeating the point of
+//! a library whose selling point is large-data throughput.
+//!
+//! The Rust `write_time_step` hands a `TimeStep` to a closure so that each attribute is written the
+//! moment it is passed and one buffer can serve them all. A `TimeStep` borrows its writer, which a
+//! pyclass cannot hold, and reusing one numpy array for several fields is not how numpy is used
+//! anyway -- so the Python method takes all attributes of a step at once and runs the closure
+//! itself, over arrays it borrows without copying.
+
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
+
+use crate::{
+    arrays::{IndexArray, PointArray, ValueArray, contiguous_slice},
+    enums::{PyDataAttribute, PyDataStorage, extract_cell_types},
+    error::to_py_err,
+};
+
+const ALREADY_CONSUMED: &str = "write_mesh was already called on this TimeSeriesWriter";
+const ALREADY_CLOSED: &str = "this TimeSeriesDataWriter has already been closed";
+
+/// One attribute of a time step: its name, what it describes, and the numpy array holding it.
+type NamedData<'py> = (String, PyDataAttribute, Bound<'py, PyAny>);
+
+/// Borrows a numpy array as the concrete slice type its dtype names, and evaluates `$body` with it.
+///
+/// One arm per dtype, so `$body` is compiled once per element type and the generic parameters of
+/// `xdmf::TimeSeriesWriter::write_mesh` (`Coordinate`/`ConnectivityIndex`) are resolved statically.
+/// Nesting two invocations covers the cross product of point and index dtypes.
+macro_rules! dispatch_dtype {
+    ($array:expr, $enum:ident, [$($variant:ident),+], |$slice:ident| $body:expr) => {
+        match $array {
+            $($enum::$variant(array) => {
+                let $slice = contiguous_slice(&array)?;
+                $body
+            })+
+        }
+    };
+}
+
+/// Writer for time series data in XDMF format.
+#[pyclass(name = "TimeSeriesWriter")]
+pub struct PyTimeSeriesWriter {
+    inner: Option<xdmf::TimeSeriesWriter>,
+}
+
+#[pymethods]
+impl PyTimeSeriesWriter {
+    #[new]
+    fn new(file_name: &str, data_storage: PyDataStorage) -> PyResult<Self> {
+        let inner =
+            xdmf::TimeSeriesWriter::new(file_name, data_storage.into()).map_err(to_py_err)?;
+        Ok(Self { inner: Some(inner) })
+    }
+
+    /// Write the mesh, returning the writer for the time step data.
+    ///
+    /// `points` is a numpy `float64`/`float32` array of x/y/z coordinates, `connectivity` a numpy
+    /// `uint64`/`uint32`/`int64`/`int32` array of point indices, and `cell_types` either a sequence
+    /// of `xdmf.CellType` or a numpy array of raw VTK cell type codes.
+    ///
+    /// Both arrays are stored at the dtype they are passed in, so the connectivity dtype is what
+    /// caps the mesh size. Their shape only has to be C-contiguous -- the natural `(N, 3)` layout
+    /// for points is the same memory as the flat one, so it needs no reshape.
+    ///
+    /// Consumes this writer, matching the Rust API where `write_mesh` takes `self` by value;
+    /// calling it a second time raises `RuntimeError`.
+    fn write_mesh(
+        &mut self,
+        py: Python<'_>,
+        points: &Bound<'_, PyAny>,
+        connectivity: &Bound<'_, PyAny>,
+        cell_types: &Bound<'_, PyAny>,
+    ) -> PyResult<PyTimeSeriesDataWriter> {
+        let writer = self
+            .inner
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err(ALREADY_CONSUMED))?;
+
+        let points = PointArray::extract(points, "points")?;
+        let connectivity = IndexArray::extract(connectivity, "connectivity")?;
+        let cell_types = extract_cell_types(cell_types)?;
+
+        let inner = dispatch_dtype!(points, PointArray, [F64, F32], |point_slice| {
+            dispatch_dtype!(
+                connectivity,
+                IndexArray,
+                [U64, U32, I64, I32],
+                |index_slice| py
+                    .detach(|| writer.write_mesh(point_slice, index_slice, &cell_types))
+                    .map_err(to_py_err)
+            )
+        })?;
+
+        Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
+    }
+}
+
+/// Writer for the per-step data, obtained from `TimeSeriesWriter.write_mesh`.
+#[pyclass(name = "TimeSeriesDataWriter")]
+pub struct PyTimeSeriesDataWriter {
+    inner: Option<xdmf::TimeSeriesDataWriter>,
+}
+
+#[pymethods]
+impl PyTimeSeriesDataWriter {
+    /// Write the point and cell data of one time step.
+    ///
+    /// `time` is the time as a string, leaving its formatting to the caller. `point_data` and
+    /// `cell_data` are sequences of `(name, DataAttribute, array)`, `array` being a C-contiguous
+    /// numpy array of dtype `float64`, `float32`, `uint64`, `uint32`, `int64` or `int32`, borrowed
+    /// without a copy (see `arrays.rs`).
+    ///
+    /// The step is all-or-nothing: if any attribute is rejected, nothing is written for this time
+    /// and the time stays available. A step needs at least one attribute.
+    ///
+    /// Since the arrays are borrowed rather than copied and the write releases the GIL, another
+    /// thread must not modify an array while a write of it is running. Single-threaded code cannot
+    /// hit this: this method returns before the next statement runs.
+    #[pyo3(signature = (time, point_data=None, cell_data=None))]
+    fn write_time_step(
+        &mut self,
+        py: Python<'_>,
+        time: &str,
+        point_data: Option<Vec<NamedData<'_>>>,
+        cell_data: Option<Vec<NamedData<'_>>>,
+    ) -> PyResult<()> {
+        let writer = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| PyRuntimeError::new_err(ALREADY_CLOSED))?;
+
+        // The arrays are borrowed, and the borrows checked for contiguity, before the GIL is
+        // released -- both need Python, and neither is allowed to fail once the write is under way.
+        let point_arrays = borrow_arrays(point_data.unwrap_or_default())?;
+        let cell_arrays = borrow_arrays(cell_data.unwrap_or_default())?;
+        let point_values = to_values(&point_arrays)?;
+        let cell_values = to_values(&cell_arrays)?;
+
+        py.detach(|| {
+            writer.write_time_step(time, |step| {
+                for (name, attribute, values) in point_values {
+                    step.point_data(name, attribute, values)?;
+                }
+                for (name, attribute, values) in cell_values {
+                    step.cell_data(name, attribute, values)?;
+                }
+                Ok(())
+            })
+        })
+        .map_err(to_py_err)
+    }
+
+    /// Close the writer, releasing any open file handles -- most relevant for the HDF5 backends,
+    /// whose file otherwise stays open, and thus locked, until this object is garbage-collected.
+    ///
+    /// Safe to call more than once; writing after it raises `RuntimeError`.
+    fn close(&mut self) {
+        self.inner = None;
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    #[pyo3(signature = (exc_type=None, exc_value=None, traceback=None))]
+    fn __exit__(
+        &mut self,
+        exc_type: Option<Bound<'_, PyAny>>,
+        exc_value: Option<Bound<'_, PyAny>>,
+        traceback: Option<Bound<'_, PyAny>>,
+    ) {
+        let _unused = (exc_type, exc_value, traceback);
+        self.close();
+    }
+}
+
+/// Borrows every array of one category, keeping the borrows alive for the whole step.
+fn borrow_arrays<'py>(
+    data: Vec<NamedData<'py>>,
+) -> PyResult<Vec<(String, PyDataAttribute, ValueArray<'py>)>> {
+    data.into_iter()
+        .map(|(name, attribute, array)| {
+            let array = ValueArray::extract(&array, &format!("data of '{name}'"))?;
+            Ok((name, attribute, array))
+        })
+        .collect()
+}
+
+/// Views the borrowed arrays as `xdmf::Values`, in the shape the `TimeStep` methods take them.
+fn to_values<'a>(
+    data: &'a [(String, PyDataAttribute, ValueArray<'_>)],
+) -> PyResult<Vec<(&'a str, xdmf::DataAttribute, xdmf::Values<'a>)>> {
+    data.iter()
+        .map(|(name, attribute, array)| {
+            Ok((name.as_str(), (*attribute).into(), array.to_values()?))
+        })
+        .collect()
+}

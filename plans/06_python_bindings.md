@@ -1,5 +1,15 @@
 # M6 — Python bindings and PyPI wheels
 
+> **Status (2026-08-18): Part 1 landed on `python-interface`, for the writer only.** The bindings
+> were re-implemented against the current `main` API (not cherry-picked: the reference
+> implementations on `origin/multiple-features` and `origin/reader` both predate the `TimeStep`
+> builder of M7 and the `paraview.rs` value validation), and every review finding below that still
+> applies is addressed — see the "Review findings" list, each of which now carries its resolution.
+> **Part 2 (wheels on PyPI) and the reader bindings are untouched**, as is Part 3 (the pyvista
+> re-run). This landed ahead of its place in the milestone order, so the ordering note below still
+> holds in reverse: M2/M4/M5 will each change the Rust API this layer wraps, and this layer then has
+> to follow.
+
 `README.md`: *"Python interface, already exists in the 'multiple-features' branch. => this was
 vibe-coded, needs to be double checked. Data must ideally not be copied when going from Rust <=>
 Python"*, and *"Publishing wheels to pypi"*.
@@ -26,6 +36,10 @@ The branch has `python/src/{lib,arrays,enums,error,writer}.rs` (~470 lines) plus
 ### Review findings to fix on the way in
 
 These come from reading the branch code; each is a concrete change, not a general "review it".
+
+**All of them are done** as of 2026-08-18, except 6 (blocks do not exist outside
+`origin/multiple-features` yet — they are M4). 1 turned out to be obsolete rather than fixed, and 11
+needed no change. What each resolution was is listed after the findings.
 
 1. **`unsafe` in `arrays.rs`.** `UintArray::as_u64_slice` reinterprets `&[i64]` as `&[u64]` via
    `slice::from_raw_parts` after a sign check. The reasoning is correct, but the core crate has zero
@@ -67,6 +81,53 @@ These come from reading the branch code; each is a concrete change, not a genera
     does not have.
 11. **pyo3/numpy 0.29** on the branch — re-check for the current release at implementation time; pyo3
     moves fast and the `allow_threads` → `detach` rename is exactly the kind of churn to expect.
+
+**How each was resolved (2026-08-18).**
+
+1. There is no `unsafe` and no `bytemuck`: `Values` has a variant per element type since M3, so an
+   `int64` array is borrowed as `Values::I64` rather than reinterpreted as `u64`. The sign check the
+   old code needed is the core crate's own connectivity validation.
+2/3. One `describe()` helper names what the object actually is (`"a numpy array with dtype int16"`,
+   `"list"`), and the accepted dtypes are listed per *position*: points (`float64`/`float32`),
+   connectivity (the four index types), attribute data (all six). A dtype valid in one position and
+   not in another therefore says which position it was wrong in.
+4. `DataWriter` gained a `Send + Sync` supertrait (also required by pyo3, which asserts pyclass
+   payloads are both), `hdf5::File` satisfies it, and `write_mesh`/`write_time_step` wrap the write
+   in `Python::detach`. Measured: 4 threads writing 3 steps of 2M values each take 1.75 s against
+   4.51 s sequentially (2.6×), so the GIL is genuinely released.
+5. `cell_types` accepts a sequence of `CellType` *or* a numpy `uint8`/`uint64`/`int64` array of raw
+   VTK codes. The code→`CellType` mapping is generated in `python/src/enums.rs` off the same variant
+   list as the pyclass, so `xdmf::CellType::from_code` (a `05_reader.md` item) is not needed for it,
+   and a `const` block pins the discriminants to the core enum's.
+8. Per variant, onto the current `Error`: the five `Invalid*` variants → `ValueError`,
+   `IntegerOutOfRange` → **`OverflowError`** (deliberately not `ValueError`: it is the one failure a
+   caller may want to catch to react, e.g. by choosing another `DataStorage`), `Internal` →
+   `RuntimeError`, `Io`/`Hdf5` → `OSError` (Python's `IOError` is an alias of it, so the
+   reference implementation's distinction between the two was cosmetic).
+10. `python/Cargo.toml` takes `version.workspace = true` and `pyproject.toml` declares
+    `dynamic = ["version"]`, so the wheel version *is* the crate version and cannot skew.
+
+**Deviations from this plan, and why.**
+
+- **`write_data` became `write_time_step(time, point_data=None, cell_data=None)`**, taking all
+  attributes of a step at once. The Rust API (M7, `08_write_data_builder.md`) hands a `TimeStep` to a
+  closure so each attribute is written immediately and one buffer serves them all; `TimeStep` borrows
+  its writer, which a pyclass cannot hold, and refilling one array for several fields is not how
+  numpy is used anyway. The binding runs the closure itself over the arrays it borrowed, so a step is
+  still all-or-nothing and the GIL is released for the whole step. A `TimeStep` pyclass would need a
+  self-referential struct (i.e. the `unsafe` that finding 1 removed) to gain nothing.
+- **The strict `[lints.clippy]` list moved to `[workspace.lints]`**, so it applies to the bindings
+  crate too, and CI gained a `python-bindings` job (`cargo clippy -p xdmf-python`,
+  `pip install ./python[test]`, `pytest`) — the other jobs build the root package only, so without it
+  nothing would have checked this crate.
+- **`is_hdf5_enabled()` is exposed**, since a Python caller picking a `DataStorage` has no
+  `#[cfg]` to consult, and the fallback story in Part 2 depends on it.
+
+**Tests:** `python/tests/test_writer.py`, 46 tests — all five storages, several time steps, dtype
+round-trips for points/connectivity/data (including the `Precision` that ends up in the XML),
+`(N, 3)` shapes, cell types as codes, the context manager releasing the HDF5 file, four threads
+writing concurrently, every error mapping (including the three `paraview.rs` limits), and a stub test
+that fails if the module grows a name `xdmf.pyi` does not declare.
 
 ### New surface to add
 

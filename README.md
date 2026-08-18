@@ -148,6 +148,12 @@ The xdmf format allows to separate the storing of light and heavy data. Differen
 - `XdmfH5Single`: The heavy data is stored in a single hdf5 file. This is the **recommended format** unless special requirements exist.
 - `XdmfH5Multiple`: The heavy data is stored in a multiple hdf5 files, one for each time step (and mesh). This creates more files and usually only makes sense when the data is accessed concurrently while its being written.
 
+## Python interface
+
+The [`python/`](./python) directory holds bindings that expose the same `TimeSeriesWriter` interface
+to Python, with the mesh and the data passed as numpy arrays that are borrowed rather than copied.
+See [`python/README.md`](./python/README.md) for how to build them and what they look like.
+
 ## Comparison with vtk/vtu
 
 Initial comparisons show smaller storage sizes as well as faster write times. The conclusions still have to be summarized here. In the meantime check [this file](./tests/vtk_comparison.rs) for a comparison.
