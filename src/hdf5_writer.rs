@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hdf5::{File as H5File, Group as H5Group};
+use hdf5::{File as H5File, Group as H5Group, H5Type};
 
 use crate::{
     DataStorage, DataWriter, Error, Result, Values,
@@ -77,7 +77,7 @@ impl DataWriter for SingleFileHdf5Writer {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         if self.h5_file.link_exists(MESH) {
             return Err(Error::InvalidMesh {
@@ -219,7 +219,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
         let h5_file = H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
@@ -316,15 +316,15 @@ impl DataWriter for MultipleFilesHdf5Writer {
 }
 
 // Points and cells go through `write_values` like any other data, so the dataset type follows the
-// `Values` variant (f32 or f64 coordinates) and the filter pipeline is defined in one place.
+// `Values` variant (f32 or f64 coordinates) and the filter pipeline is shared with everything else.
 fn write_mesh(
     group: &H5Group,
     points: &Values<'_>,
-    cells: &[u64],
+    cells: &Values<'_>,
     deflate_level: u8,
 ) -> Result<(String, String)> {
     let data_name_points = write_values(group, POINTS, points, deflate_level)?;
-    let data_name_cells = write_values(group, CELLS, &Values::from(cells), deflate_level)?;
+    let data_name_cells = write_values(group, CELLS, cells, deflate_level)?;
 
     Ok((data_name_points, data_name_cells))
 }
@@ -335,24 +335,34 @@ fn write_values(
     vals: &Values<'_>,
     deflate_level: u8,
 ) -> Result<String> {
-    let data_set = match vals {
-        Values::F64(_) => group.new_dataset::<f64>(),
-        Values::F32(_) => group.new_dataset::<f32>(),
-        Values::U64(_) => group.new_dataset::<u64>(),
-    };
+    let shape = vals.dimensions(crate::DataAttribute::Scalar).0;
 
-    let data_set = data_set
-        .shape(vals.dimensions(crate::DataAttribute::Scalar).0)
+    match vals {
+        Values::F64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+        Values::F32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+        Values::I64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+        Values::I32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+        Values::U32(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+        Values::U64(v) => create_and_write(group, dataset_name, v, shape, deflate_level),
+    }
+}
+
+fn create_and_write<T: H5Type>(
+    group: &H5Group,
+    dataset_name: &str,
+    data: &[T],
+    shape: Vec<usize>,
+    deflate_level: u8,
+) -> Result<String> {
+    let data_set = group
+        .new_dataset::<T>()
+        .shape(shape)
         .shuffle()
         .deflate(deflate_level)
         .create(dataset_name)
         .map_err(hdf5_ctx("creating dataset"))?;
 
-    match vals {
-        Values::F64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
-        Values::F32(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
-        Values::U64(v) => data_set.write(v).map_err(hdf5_ctx("writing dataset"))?,
-    };
+    data_set.write(data).map_err(hdf5_ctx("writing dataset"))?;
 
     Ok(data_set.name())
 }
@@ -423,10 +433,15 @@ mod tests {
         let group = h5_file.create_group("test_group").unwrap();
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
 
-        let (data_name_points, data_name_cells) =
-            write_mesh(&group, &points.as_slice().into(), &cells, 6).unwrap();
+        let (data_name_points, data_name_cells) = write_mesh(
+            &group,
+            &points.as_slice().into(),
+            &cells.as_slice().into(),
+            6,
+        )
+        .unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -464,7 +479,13 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
 
-        write_mesh(&group, &points.as_slice().into(), &cells, 6).unwrap();
+        write_mesh(
+            &group,
+            &points.as_slice().into(),
+            &cells.as_slice().into(),
+            6,
+        )
+        .unwrap();
 
         let h5_file_read = H5File::open(&file_name).unwrap();
         let dataset = h5_file_read
@@ -546,6 +567,54 @@ mod tests {
 
         let data_f32: Vec<f32> = dataset.read().unwrap().to_vec();
         assert_approx_eq!(&[f32], &vec_f32, &data_f32);
+    }
+
+    #[test]
+    fn write_values_integer_types() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.h5");
+
+        let h5_file = H5File::create(&file_name).unwrap();
+        let group = h5_file.create_group("test_group").unwrap();
+
+        let vec_u32 = vec![1_u32, 2, 3];
+        let vec_i64 = vec![-1_i64, 0, 1];
+        let vec_i32 = vec![-2_i32, 0, 2];
+
+        write_values(&group, "test_u32", &vec_u32.clone().into(), 6).unwrap();
+        write_values(&group, "test_i64", &vec_i64.clone().into(), 6).unwrap();
+        write_values(&group, "test_i32", &vec_i32.clone().into(), 6).unwrap();
+
+        // each type keeps its own width and signedness in the file, no widening to u64/i64
+        let h5_file_read = H5File::open(&file_name).unwrap();
+        let group_read = h5_file_read.group("test_group").unwrap();
+
+        let dataset_u32 = group_read.dataset("test_u32").unwrap();
+        assert_eq!(dataset_u32.dtype().unwrap().size(), 4);
+        assert_eq!(dataset_u32.read::<u32, _>().unwrap().to_vec(), vec_u32);
+
+        // u64 too: stored as the 8-byte type it is, like every other one. ParaView reads that
+        // back correctly (measured on 5.13 and 6.1) as long as the values fit in 32 bits, which
+        // `crate::paraview` is what enforces -- this backend just writes what it is given.
+        let vec_u64 = vec![1_u64, 2, u64::from(u32::MAX)];
+        write_values(&group, "test_u64", &vec_u64.clone().into(), 6).unwrap();
+
+        let dataset_u64 = H5File::open(&file_name)
+            .unwrap()
+            .group("test_group")
+            .unwrap()
+            .dataset("test_u64")
+            .unwrap();
+        assert_eq!(dataset_u64.dtype().unwrap().size(), 8);
+        assert_eq!(dataset_u64.read::<u64, _>().unwrap().to_vec(), vec_u64);
+
+        let dataset_i64 = group_read.dataset("test_i64").unwrap();
+        assert_eq!(dataset_i64.dtype().unwrap().size(), 8);
+        assert_eq!(dataset_i64.read::<i64, _>().unwrap().to_vec(), vec_i64);
+
+        let dataset_i32 = group_read.dataset("test_i32").unwrap();
+        assert_eq!(dataset_i32.dtype().unwrap().size(), 4);
+        assert_eq!(dataset_i32.read::<i32, _>().unwrap().to_vec(), vec_i32);
     }
 
     #[test]
@@ -814,9 +883,9 @@ mod tests {
         let h5_file = file_name.with_extension("h5");
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
         let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
 
         assert_eq!(points_path, ("test.h5:mesh/points").into());
@@ -854,9 +923,9 @@ mod tests {
         assert!(!mesh_file.exists());
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
         let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         assert!(mesh_file.exists());
 

@@ -76,13 +76,20 @@ pub enum Error {
         /// What is wrong with the data.
         reason: String,
     },
-    /// A value does not fit the numeric range the `Binary` backend can represent.
-    #[error(
-        "value {value} does not fit in 32 bits: uncompressed Binary output only supports integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
-    )]
-    IntegerTooLargeForBinary {
-        /// The out-of-range value.
-        value: u64,
+    /// An integer value is outside the range that can be written and read back correctly.
+    ///
+    /// The `reason` says which limit was hit, and with it whether another [`DataStorage`] would
+    /// accept the value: the `Binary` backend's 32-bit narrowing is storage-specific, while the
+    /// cap on `u64` data applies to every backend.
+    ///
+    /// [`DataStorage`]: crate::DataStorage
+    #[error("integer value {value} is out of range: {reason}")]
+    IntegerOutOfRange {
+        /// The out-of-range value, widened to `i128` so that both `u64` and `i64` inputs are
+        /// reported as written.
+        value: i128,
+        /// Which limit was hit, and whether a different `DataStorage` would avoid it.
+        reason: String,
     },
     /// An internal invariant was violated. Not reachable through the public API; guards against
     /// a future regression in the state-machine pairing between a backend's
@@ -214,14 +221,23 @@ mod error_messages {
     }
 
     #[test]
-    fn integer_too_large_for_binary() {
+    fn integer_out_of_range() {
         assert_eq!(
-            Error::IntegerTooLargeForBinary {
-                value: 4_294_967_296
+            Error::IntegerOutOfRange {
+                value: -2_147_483_649,
+                reason: "Binary storage narrows 64-bit integers to 32 bits".to_string(),
             }
             .to_string(),
-            "value 4294967296 does not fit in 32 bits: uncompressed Binary output only supports \
-             integer data up to u32 (ParaView's legacy Xdmf2 reader misreads 64-bit integers)"
+            "integer value -2147483649 is out of range: Binary storage narrows 64-bit integers \
+             to 32 bits"
+        );
+        assert_eq!(
+            Error::IntegerOutOfRange {
+                value: 4_294_967_296,
+                reason: "u64 data must fit in 32 bits".to_string(),
+            }
+            .to_string(),
+            "integer value 4294967296 is out of range: u64 data must fit in 32 bits"
         );
     }
 

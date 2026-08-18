@@ -65,7 +65,7 @@ impl DataWriter for BinaryWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         let points_file_name = "points.bin";
         let cells_file_name = "cells.bin";
@@ -80,7 +80,7 @@ impl DataWriter for BinaryWriter {
         );
 
         values_to_writer(points, &mut file_points, &points_path)?;
-        write_u64_as_u32_le(cells, &mut file_cells, &cells_path)?;
+        values_to_writer(cells, &mut file_cells, &cells_path)?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
         file_points
@@ -161,18 +161,9 @@ impl DataWriter for BinaryWriter {
 
         crate::remove_step_files(&mut self.step_files)
     }
-
-    fn validate_values(&self, data: &Values<'_>) -> Result<()> {
-        if let Values::U64(v) = data {
-            for &value in v.iter() {
-                checked_u32(value)?;
-            }
-        }
-        Ok(())
-    }
 }
 
-// `to_le_bytes` is an inherent method on each float type, not a trait method, so writing both
+// `to_le_bytes` is an inherent method on each numeric type, not a trait method, so writing all
 // widths through one generic function takes this small trait
 trait LeBytes {
     type Bytes: AsRef<[u8]>;
@@ -180,23 +171,23 @@ trait LeBytes {
     fn le_bytes(&self) -> Self::Bytes;
 }
 
-impl LeBytes for f64 {
-    type Bytes = [u8; 8];
+macro_rules! impl_le_bytes {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl LeBytes for $ty {
+                type Bytes = [u8; size_of::<$ty>()];
 
-    fn le_bytes(&self) -> Self::Bytes {
-        self.to_le_bytes()
-    }
+                fn le_bytes(&self) -> Self::Bytes {
+                    self.to_le_bytes()
+                }
+            }
+        )+
+    };
 }
 
-impl LeBytes for f32 {
-    type Bytes = [u8; 4];
+impl_le_bytes!(f64, f32, i64, i32, u64, u32);
 
-    fn le_bytes(&self) -> Self::Bytes {
-        self.to_le_bytes()
-    }
-}
-
-fn write_floats_le<T: LeBytes>(vec: &[T], writer: &mut impl Write, path: &Path) -> Result<()> {
+fn write_le<T: LeBytes>(vec: &[T], writer: &mut impl Write, path: &Path) -> Result<()> {
     for v in vec {
         writer
             .write_all(v.le_bytes().as_ref())
@@ -205,29 +196,14 @@ fn write_floats_le<T: LeBytes>(vec: &[T], writer: &mut impl Write, path: &Path) 
     Ok(())
 }
 
-// Paraview's legacy Xdmf reader silently misreads 64-bit integers in `Format="Binary"` `DataItem`s:
-// connectivity comes back empty and attribute data comes back with corrupted values.
-// Narrowing to 4 bytes (and matching `Format::uint_precision()` in the `DataItem`) is what actually loads correctly in Paraview.
-// Values that don't fit in 32 bits are rejected rather than silently truncated.
-fn checked_u32(v: u64) -> Result<u32> {
-    u32::try_from(v).map_err(|_err| Error::IntegerTooLargeForBinary { value: v })
-}
-
-fn write_u64_as_u32_le(vec: &[u64], writer: &mut impl Write, path: &Path) -> Result<()> {
-    for &v in vec {
-        let v32 = checked_u32(v)?;
-        writer
-            .write_all(&v32.to_le_bytes())
-            .map_err(io_ctx("writing binary data", path))?;
-    }
-    Ok(())
-}
-
 fn values_to_writer(data: &Values<'_>, writer: &mut impl Write, path: &Path) -> Result<()> {
     match data {
-        Values::F64(v) => write_floats_le(v, writer, path),
-        Values::F32(v) => write_floats_le(v, writer, path),
-        Values::U64(v) => write_u64_as_u32_le(v, writer, path),
+        Values::F64(v) => write_le(v, writer, path),
+        Values::F32(v) => write_le(v, writer, path),
+        Values::I32(v) => write_le(v, writer, path),
+        Values::U32(v) => write_le(v, writer, path),
+        Values::I64(v) => write_le(v, writer, path),
+        Values::U64(v) => write_le(v, writer, path),
     }
 }
 
@@ -236,10 +212,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_floats_le_f64() {
+    fn write_le_f64() {
         let vec_f64 = vec![1.0_f64, -2.5];
         let mut buffer = Vec::new();
-        write_floats_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
+        write_le(&vec_f64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f64.to_le_bytes());
         expected.extend_from_slice(&(-2.5_f64).to_le_bytes());
@@ -247,10 +223,10 @@ mod tests {
     }
 
     #[test]
-    fn write_floats_le_f32() {
+    fn write_le_f32() {
         let vec_f32 = vec![1.0_f32, -2.5];
         let mut buffer = Vec::new();
-        write_floats_le(&vec_f32, &mut buffer, Path::new("test.bin")).unwrap();
+        write_le(&vec_f32, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
         expected.extend_from_slice(&1.0_f32.to_le_bytes());
         expected.extend_from_slice(&(-2.5_f32).to_le_bytes());
@@ -258,27 +234,34 @@ mod tests {
     }
 
     #[test]
-    fn write_u64_as_u32_le_multiple_values() {
-        let vec_u64 = vec![1_u64, 2];
+    fn write_le_i32() {
+        let vec_i32 = vec![1_i32, -2];
         let mut buffer = Vec::new();
-        write_u64_as_u32_le(&vec_u64, &mut buffer, Path::new("test.bin")).unwrap();
+        write_le(&vec_i32, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
-        expected.extend_from_slice(&1_u32.to_le_bytes());
-        expected.extend_from_slice(&2_u32.to_le_bytes());
+        expected.extend_from_slice(&1_i32.to_le_bytes());
+        expected.extend_from_slice(&(-2_i32).to_le_bytes());
         assert_eq!(buffer, expected);
     }
 
+    // the 64-bit types are written at their own width like every other one: this backend narrows
+    // nothing, it is `crate::paraview` that refuses them for a ParaView-bound file
     #[test]
-    fn write_u64_as_u32_le_rejects_values_too_large_for_u32() {
-        let vec_u64 = vec![1_u64, u64::from(u32::MAX) + 1];
+    fn write_le_64_bit_integers() {
         let mut buffer = Vec::new();
-        let res = write_u64_as_u32_le(&vec_u64, &mut buffer, Path::new("test.bin"));
-        std::assert_matches!(
-            res.unwrap_err(),
-            Error::IntegerTooLargeForBinary {
-                value: 4_294_967_296
-            }
-        );
+        write_le(&[1_u64, 2], &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_u64.to_le_bytes());
+        expected.extend_from_slice(&2_u64.to_le_bytes());
+        assert_eq!(buffer, expected);
+        assert_eq!(buffer.len(), 16);
+
+        let mut buffer = Vec::new();
+        write_le(&[1_i64, -2], &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1_i64.to_le_bytes());
+        expected.extend_from_slice(&(-2_i64).to_le_bytes());
+        assert_eq!(buffer, expected);
     }
 
     #[test]
@@ -303,8 +286,34 @@ mod tests {
         let mut buffer = Vec::new();
         values_to_writer(&data_u64, &mut buffer, Path::new("test.bin")).unwrap();
         let mut expected = Vec::new();
+        expected.extend_from_slice(&1_u64.to_le_bytes());
+        expected.extend_from_slice(&2_u64.to_le_bytes());
+        assert_eq!(buffer, expected);
+
+        let data_u32: Values = vec![1_u32, 2].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_u32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
         expected.extend_from_slice(&1_u32.to_le_bytes());
         expected.extend_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(buffer, expected);
+
+        // each width goes out as itself -- this backend never narrows, so a 64-bit type takes
+        // twice the bytes of its 32-bit counterpart rather than the same
+        let data_i64: Values = vec![-1_i64, 2].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_i64, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&(-1_i64).to_le_bytes());
+        expected.extend_from_slice(&2_i64.to_le_bytes());
+        assert_eq!(buffer, expected);
+
+        let data_i32: Values = vec![-1_i32, 2].into();
+        let mut buffer = Vec::new();
+        values_to_writer(&data_i32, &mut buffer, Path::new("test.bin")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&(-1_i32).to_le_bytes());
+        expected.extend_from_slice(&2_i32.to_le_bytes());
         assert_eq!(buffer, expected);
     }
 
@@ -334,7 +343,7 @@ mod tests {
         let points = vec![0.0_f64, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
         let (points_content, cells_content) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
@@ -352,7 +361,7 @@ mod tests {
         }
         let mut expected_cells = Vec::new();
         for &c in &cells {
-            expected_cells.extend_from_slice(&(c as u32).to_le_bytes());
+            expected_cells.extend_from_slice(&c.to_le_bytes());
         }
 
         assert_eq!(points_bytes, expected_points);
@@ -401,7 +410,7 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.5];
         let cells = vec![0_u64, 1, 2];
         writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
 
         writer.write_data_initialize("0.1").unwrap();

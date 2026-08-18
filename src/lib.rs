@@ -17,7 +17,7 @@ mod binary_writer;
 mod error;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
-
+mod paraview;
 mod time_series_writer;
 mod values;
 pub mod xdmf_elements;
@@ -25,7 +25,7 @@ pub mod xdmf_elements;
 // Re-export types used in the public API
 pub use error::{Error, Result};
 pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
-pub use values::{Coordinate, Values};
+pub use values::{ConnectivityIndex, Coordinate, Values};
 pub use xdmf_elements::CellType;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
@@ -87,7 +87,7 @@ pub(crate) trait DataWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)>;
 
     fn write_data(
@@ -118,14 +118,6 @@ pub(crate) trait DataWriter {
 
     // flush the writer, if applicable
     fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Validate that `data` can be represented by this backend's format, without mutating state
-    /// or touching disk. Called for each attribute before it is written, so a value out of the
-    /// backend's representable range is reported as a caller error that leaves no partial output
-    /// behind, rather than as a mid-write failure.
-    fn validate_values(&self, _data: &Values<'_>) -> Result<()> {
         Ok(())
     }
 }

@@ -36,11 +36,11 @@ impl DataWriter for AsciiInlineWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         Ok((
             values_to_string(points).into(),
-            array_to_string_fmt(cells).into(),
+            values_to_string(cells).into(),
         ))
     }
 
@@ -103,7 +103,7 @@ impl DataWriter for AsciiWriter {
     fn write_mesh(
         &mut self,
         points: &Values<'_>,
-        cells: &[u64],
+        cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)> {
         // create files for points and cells
         let points_file_name = "points.txt";
@@ -120,7 +120,7 @@ impl DataWriter for AsciiWriter {
 
         values_to_writer(points, &mut file_points)
             .map_err(io_ctx("writing points data", &points_path))?;
-        array_to_writer_fmt(cells, &mut file_cells)
+        values_to_writer(cells, &mut file_cells)
             .map_err(io_ctx("writing cells data", &cells_path))?;
 
         // explicitly flush the buffers to ensure all data is written and errors are caught
@@ -218,10 +218,15 @@ macro_rules! impl_format_number {
     };
 }
 
-// Implement FormatNumber for various types
-// taken from meshio
-impl_format_number!(f32, "{:.7e}");
-impl_format_number!(f64, "{:.16e}");
+// `{:e}` rather than a fixed digit count: Rust's exponential formatting without a precision emits
+// the *shortest* digit string that parses back to the same value, which is both exact and short.
+// A fixed count has to be picked for the worst case -- 9 significant digits for f32, 17 for f64
+// (`FLT_DECIMAL_DIG`/`DBL_DECIMAL_DIG`) -- and then pays it on every value, spelling 10.5 as
+// "1.05000000e1" and 1.23456789 as "1.2345678899999999e0". Too few digits is worse than verbose
+// though: 8 for f32 flips the last mantissa bit on roughly one value in a hundred, which is what
+// `float_round_trip` guards, since the shortest-representation behaviour is what this relies on.
+impl_format_number!(f32, "{:e}");
+impl_format_number!(f64, "{:e}");
 impl_format_number!(i8, "{}");
 impl_format_number!(i16, "{}");
 impl_format_number!(i32, "{}");
@@ -267,7 +272,10 @@ fn values_to_string(data: &Values<'_>) -> String {
     match data {
         Values::F64(v) => array_to_string_fmt(v),
         Values::F32(v) => array_to_string_fmt(v),
+        Values::I64(v) => array_to_string_fmt(v),
+        Values::I32(v) => array_to_string_fmt(v),
         Values::U64(v) => array_to_string_fmt(v),
+        Values::U32(v) => array_to_string_fmt(v),
     }
 }
 
@@ -275,7 +283,10 @@ fn values_to_writer(data: &Values<'_>, writer: &mut impl Write) -> std::io::Resu
     match data {
         Values::F64(v) => array_to_writer_fmt(v, writer),
         Values::F32(v) => array_to_writer_fmt(v, writer),
+        Values::I64(v) => array_to_writer_fmt(v, writer),
+        Values::I32(v) => array_to_writer_fmt(v, writer),
         Values::U64(v) => array_to_writer_fmt(v, writer),
+        Values::U32(v) => array_to_writer_fmt(v, writer),
     }
 }
 
@@ -286,11 +297,16 @@ mod tests {
 
     #[test]
     fn format_number_all_types() {
-        // floating point numbers
+        // floating point numbers: only as many digits as it takes to read the value back, so one
+        // that is round in decimal stays short instead of carrying trailing zeros or roundoff
         let num: f32 = 3.141_590_4;
         assert_eq!(num.format_number(), "3.1415904e0");
         let num: f64 = 1.234_567_89;
-        assert_eq!(num.format_number(), "1.2345678899999999e0");
+        assert_eq!(num.format_number(), "1.23456789e0");
+        let num: f64 = 10.5;
+        assert_eq!(num.format_number(), "1.05e1");
+        let num: f32 = 0.0;
+        assert_eq!(num.format_number(), "0e0");
 
         // signed integer types
         let num: i8 = -5;
@@ -317,14 +333,95 @@ mod tests {
         assert_eq!(num.format_number(), "123456789");
     }
 
+    // Deterministic bit patterns rather than a `rand` dependency, so a failure is reproducible.
+    // Drawing the *bits* and reinterpreting is what makes this a real test: sweeping values by
+    // arithmetic (`value *= 1.1`) walks a thin, well-behaved path through the space and lets a
+    // digit count that is one too low pass, while random mantissas hit the awkward cases at the
+    // rate they actually occur -- about one f32 in a hundred.
+    fn pseudo_random_bits(seed: u64) -> impl Iterator<Item = u64> {
+        let mut state = seed;
+        std::iter::repeat_with(move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state
+        })
+    }
+
+    // The point of the digit counts above is that a reader gets the value that was written back,
+    // bit for bit. Asserting the formatted text alone would not catch a count that is one too low:
+    // the output still looks like a plausible float, it is just no longer the same one.
+    #[test]
+    fn float_round_trip() {
+        let mut checked_f32 = 0;
+        for bits in pseudo_random_bits(1).take(200_000) {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the low 32 bits are the sample; this is a bit pattern, not a number"
+            )]
+            let value = f32::from_bits(bits as u32);
+            if !value.is_finite() {
+                continue;
+            }
+            let parsed: f32 = value.format_number().parse().unwrap();
+            assert_eq!(
+                parsed.to_bits(),
+                value.to_bits(),
+                "f32 {value:e} did not survive '{}'",
+                value.format_number()
+            );
+            checked_f32 += 1;
+        }
+
+        let mut checked_f64 = 0;
+        for bits in pseudo_random_bits(2).take(200_000) {
+            let value = f64::from_bits(bits);
+            if !value.is_finite() {
+                continue;
+            }
+            let parsed: f64 = value.format_number().parse().unwrap();
+            assert_eq!(
+                parsed.to_bits(),
+                value.to_bits(),
+                "f64 {value:e} did not survive '{}'",
+                value.format_number()
+            );
+            checked_f64 += 1;
+        }
+
+        // most bit patterns are finite, so a filter that started rejecting everything would show up
+        assert!(checked_f32 > 100_000 && checked_f64 > 100_000);
+
+        // and the extremes of each type, where the exponent is widest
+        for value in [
+            f32::MIN,
+            f32::MAX,
+            f32::MIN_POSITIVE,
+            f32::EPSILON,
+            0.0,
+            -0.0,
+        ] {
+            let parsed: f32 = value.format_number().parse().unwrap();
+            assert_eq!(parsed.to_bits(), value.to_bits());
+        }
+        for value in [
+            f64::MIN,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            f64::EPSILON,
+            0.0,
+            -0.0,
+        ] {
+            let parsed: f64 = value.format_number().parse().unwrap();
+            assert_eq!(parsed.to_bits(), value.to_bits());
+        }
+    }
+
     #[test]
     fn array_to_string_fmt_multiple_types() {
         let vec_f64 = vec![1.0, 2.0, 3.0];
         let result_f64 = array_to_string_fmt(&vec_f64);
-        assert_eq!(
-            result_f64,
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
-        );
+        assert_eq!(result_f64, "1e0 2e0 3e0");
 
         let vec_u64 = vec![1_u64, 2, 3];
         let result_u64 = array_to_string_fmt(&vec_u64);
@@ -336,10 +433,7 @@ mod tests {
         let vec_f64 = vec![1.0, 2.0, 3.0];
         let mut buffer = Vec::new();
         array_to_writer_fmt(&vec_f64, &mut buffer).unwrap();
-        assert_eq!(
-            String::from_utf8(buffer).unwrap(),
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0\n"
-        );
+        assert_eq!(String::from_utf8(buffer).unwrap(), "1e0 2e0 3e0\n");
 
         let vec_u64 = vec![1_u64, 2, 3];
         let mut buffer = Vec::new();
@@ -351,14 +445,11 @@ mod tests {
     fn values_to_string_multiple_types() {
         let data_f64: Values = vec![1.0, 2.0, 3.0].into();
         let result_f64 = values_to_string(&data_f64);
-        assert_eq!(
-            result_f64,
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0"
-        );
+        assert_eq!(result_f64, "1e0 2e0 3e0");
 
         let data_f32: Values = vec![1.0_f32, 2.0, 3.0].into();
         let result_f32 = values_to_string(&data_f32);
-        assert_eq!(result_f32, "1.0000000e0 2.0000000e0 3.0000000e0");
+        assert_eq!(result_f32, "1e0 2e0 3e0");
 
         let data_u64: Values = vec![1_u64, 2, 3].into();
         let result_u64 = values_to_string(&data_u64);
@@ -370,18 +461,12 @@ mod tests {
         let data_f64: Values = vec![1.0, 2.0, 3.0].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_f64, &mut buffer).unwrap();
-        assert_eq!(
-            String::from_utf8(buffer).unwrap(),
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0\n"
-        );
+        assert_eq!(String::from_utf8(buffer).unwrap(), "1e0 2e0 3e0\n");
 
         let data_f32: Values = vec![1.0_f32, 2.0, 3.0].into();
         let mut buffer = Vec::new();
         values_to_writer(&data_f32, &mut buffer).unwrap();
-        assert_eq!(
-            String::from_utf8(buffer).unwrap(),
-            "1.0000000e0 2.0000000e0 3.0000000e0\n"
-        );
+        assert_eq!(String::from_utf8(buffer).unwrap(), "1e0 2e0 3e0\n");
 
         let data_u64: Values = vec![1_u64, 2, 3].into();
         let mut buffer = Vec::new();
@@ -396,14 +481,11 @@ mod tests {
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
         let result = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         pretty_assertions::assert_eq!(
             result,
-            (
-                "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0 4.0000000000000000e0 5.0000000000000000e0 6.0000000000000000e0".into(),
-                "0 1 2 0 2 3".into()
-            )
+            ("1e0 2e0 3e0 4e0 5e0 6e0".into(), "0 1 2 0 2 3".into())
         );
     }
 
@@ -416,10 +498,7 @@ mod tests {
         let result = writer
             .write_data("dummy", attribute::Center::Node, &data)
             .unwrap();
-        pretty_assertions::assert_eq!(
-            result,
-            "1.0000000000000000e0 2.0000000000000000e0 3.0000000000000000e0".into()
-        );
+        pretty_assertions::assert_eq!(result, "1e0 2e0 3e0".into());
     }
 
     #[test]
@@ -611,9 +690,9 @@ mod tests {
         assert!(!cells_file.exists());
 
         let points = vec![0.0, 1.0, 2.0];
-        let cells = vec![0, 1, 2];
+        let cells = vec![0_u64, 1, 2];
         let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
@@ -628,10 +707,7 @@ mod tests {
         let points_data = std::fs::read_to_string(&points_file).unwrap();
         let cells_data = std::fs::read_to_string(&cells_file).unwrap();
 
-        assert_eq!(
-            points_data,
-            "0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0\n"
-        );
+        assert_eq!(points_data, "0e0 1e0 2e0\n");
         assert_eq!(cells_data, "0 1 2\n");
     }
 
@@ -645,13 +721,13 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.5];
         let cells = vec![0_u64, 1, 2];
         writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
 
         // f32 coordinates are written with f32's digit count, not f64's
         assert_eq!(
             std::fs::read_to_string(&points_file).unwrap(),
-            "0.0000000e0 1.0000000e0 2.5000000e0\n"
+            "0e0 1e0 2.5e0\n"
         );
     }
 
@@ -678,7 +754,7 @@ mod tests {
                     .join("data_t_0.1_point_data_temperature.txt")
             )
             .unwrap(),
-            "1.0000000e0 2.0000000e0 3.0000000e0\n"
+            "1e0 2e0 3e0\n"
         );
     }
 
@@ -689,14 +765,11 @@ mod tests {
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
         let result = writer
-            .write_mesh(&points.as_slice().into(), &cells)
+            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
             .unwrap();
         pretty_assertions::assert_eq!(
             result,
-            (
-                "1.0000000e0 2.0000000e0 3.0000000e0 4.0000000e0 5.0000000e0 6.0000000e0".into(),
-                "0 1 2 0 2 3".into()
-            )
+            ("1e0 2e0 3e0 4e0 5e0 6e0".into(), "0 1 2 0 2 3".into())
         );
     }
 
@@ -709,7 +782,7 @@ mod tests {
         let result = writer
             .write_data("dummy", attribute::Center::Node, &data)
             .unwrap();
-        pretty_assertions::assert_eq!(result, "1.0000000e0 2.0000000e0 3.0000000e0".into());
+        pretty_assertions::assert_eq!(result, "1e0 2e0 3e0".into());
     }
 
     #[test]
@@ -777,13 +850,7 @@ mod tests {
         let points_data = std::fs::read_to_string(&data_file_points).unwrap();
         let cells_data = std::fs::read_to_string(&data_file_cells).unwrap();
 
-        assert_eq!(
-            points_data,
-            "0.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0\n"
-        );
-        assert_eq!(
-            cells_data,
-            "-9.0000000000000000e0 1.0000000000000000e0 2.0000000000000000e0 5.5869999999999997e1\n"
-        );
+        assert_eq!(points_data, "0e0 1e0 2e0\n");
+        assert_eq!(cells_data, "-9e0 1e0 2e0 5.587e1\n");
     }
 }

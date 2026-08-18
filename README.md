@@ -28,7 +28,7 @@ let xdmf_writer = TimeSeriesWriter::new(
 
 // define 3 points and 2 cells (a line and a triangle)
 let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-let connectivity = [0, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
+let connectivity = [0_u32, 1, 0, 2, 1]; // line (0,1) and triangle (0,2,1)
 let cell_types = [xdmf::CellType::Edge, xdmf::CellType::Triangle];
 
 // write the mesh
@@ -71,6 +71,73 @@ conversion happens in either direction.
 but for the mesh coordinates it comes with a caveat: on a domain far away from the origin, `f32`
 coordinates produce visible geometric jitter in ParaView, because the absolute coordinate eats up
 the mantissa.
+
+### Can integer data be written?
+
+Yes — point and cell data also accept `i32`, `i64`, `u32` and `u64` (for example a partition rank,
+a material id or a flag). Mesh coordinates stay floating point.
+
+Every type is written at its own width: the file holds the type that was passed in, and nothing is
+narrowed, widened or cast on the way out. Where ParaView cannot read a type back as it was written,
+the write is refused instead. There are three such cases, all measured against ParaView 5.13 and
+6.1 (see `examples/paraview_smoke.rs` and `tests/paraview_smoke/`):
+
+- **`DataStorage::Binary` does not accept `i64` or `u64` at all.** ParaView's legacy Xdmf2 reader
+  walks 64-bit integers in `Format="Binary"` at the wrong stride: attribute values come back with
+  every second one replaced by zero, and 64-bit connectivity makes the reader give up outright
+  (`vtkXdmfReader: Failed to read data`). The damage does not depend on how large the numbers are,
+  so the *type* is rejected rather than a range — pass `i32`/`u32`, or use another storage. Earlier
+  versions narrowed to 32 bits instead; that produced a loadable file, but one holding a different
+  type than the caller handed over.
+- **`u64` above `u32::MAX` is rejected, by every storage method.** ParaView builds a 32-bit array
+  for `NumberType="UInt"` no matter what `Precision` the light data declares, so a larger value
+  comes back truncated (ascii) or clamped to `u32::MAX` (HDF5) — silently, without a reader error.
+  Values *within* that range read back exactly at the full 8 bytes, so this caps the value and not
+  the width. Use `i64` for integer data that has to exceed 32 bits; `NumberType="Int"` really is
+  decoded at 64 bits. The same cap applies to `u32`/`u64` connectivity, and so to the mesh size —
+  see the connectivity section below.
+- **In the ascii storage methods, `i64` is limited to ±2^53.** ParaView parses their integers
+  through a `double`, so a larger value comes back rounded — and `i64::MAX` comes back as
+  `i64::MIN`, sign flipped. Values past that are rejected rather than written, so nothing lands in
+  the output that ParaView would display as a different number. `Hdf5SingleFile`/`Hdf5MultipleFiles`
+  have no such limit and read `i64` exactly at both extremes, which is what the error points at.
+
+If file size matters more than keeping the caller's type, pass the narrow type in the first place:
+`u32` data is half the bytes of `u64` data, and on a 205k-hexahedron mesh choosing `u32` over `u64`
+for the connectivity halves that dataset (14.8 MB → 7.4 MB before compression) and shrinks the whole
+`Hdf5SingleFile` output by 8%. That is the caller's trade-off to make, and it is visible in the
+light data either way.
+
+Floating point data is not affected by any of this: the ascii storage methods write each value with
+the fewest digits that read back as the exact same `f32`/`f64`, so nothing is lost there and round
+values stay short (`1.05e1`, not `1.05000000e1`).
+
+### Which integer type should the connectivity be?
+
+`u32`, `u64`, `i32` and `i64` are all accepted, and the connectivity is written as the type it is
+passed in. That choice is what sets the largest mesh that can be written, since it decides the
+`NumberType`/`Precision` pair in the light data:
+
+| connectivity type | light data | largest mesh | storages |
+| --- | --- | --- | --- |
+| `u32` | `NumberType="UInt" Precision="4"` | 2^32 points | all |
+| `i32` | `NumberType="Int" Precision="4"` | 2^31 points | all |
+| `u64` | `NumberType="UInt" Precision="8"` | 2^32 points | all but `Binary` |
+| `i64` | `NumberType="Int" Precision="8"` | beyond any mesh | `Hdf5SingleFile`, `Hdf5MultipleFiles` |
+
+`u32` is the one to reach for: it indexes any mesh that ParaView can read the connectivity of, in
+half the bytes of `u64`. `u64` writes the same indices at twice the width without raising the cap,
+since that cap is the reader's and not the type's.
+
+`i64` is the one type that lifts the 2^32 cap, because `NumberType="Int"` is the one ParaView
+decodes at the declared width. What that means in practice is only partly measured: the reader
+handles `Int`/8 connectivity correctly (verified on ParaView 5.13 and 6.1, whose `vtkIdType` is
+64 bits in both builds), but a mesh with an index actually beyond 2^32 needs over 100 GB of
+coordinates and has not been tested here. Only the HDF5 storages could carry such a mesh anyway:
+`Binary` refuses 64-bit integers, and the ascii storages cap `i64` at 2^53.
+
+A mesh too large for the type it is written with is rejected up front, rather than silently wrapping
+around.
 
 ### Which data storage should be used for the heavy data?
 

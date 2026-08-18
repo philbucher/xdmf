@@ -44,10 +44,12 @@ jobs:
 
     - name: Install HDF5 (apt)
       if: ${{ matrix.os == 'ubuntu-latest' && matrix.hdf5 == 'YES' }}
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get remove -y man-db || true # to speed up
         sudo apt-get update
-        sudo apt-get install libhdf5-dev --no-install-recommends
+        sudo apt-get install -y --no-install-recommends libhdf5-dev
 
     - name: Install HDF5 (Homebrew)
       if: ${{ matrix.os == 'macos-latest' && matrix.hdf5 == 'YES' }}
