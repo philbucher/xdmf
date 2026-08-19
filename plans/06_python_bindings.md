@@ -3,8 +3,13 @@
 > **Status (2026-08-18): Part 1 landed on `python-interface`, for the writer only.** The bindings
 > were re-implemented against the current `main` API (not cherry-picked: the reference
 > implementations on `origin/multiple-features` and `origin/reader` both predate the `TimeStep`
-> builder of M7 and the `paraview.rs` value validation), and every review finding below that still
-> applies is addressed — see the "Review findings" list, each of which now carries its resolution.
+> builder of M7 and the `paraview.rs` value validation), and every *pre-merge* review finding below
+> that still applies is addressed — see the "Review findings to fix on the way in" list, each of
+> which now carries its resolution. **A post-merge review of the landed commit (`5166dce`) then
+> found nine more; seven are fixed as of 2026-08-19 and two (5 and 6, both message polish) are
+> deliberately left alone — see "Post-merge review findings", each of which carries its resolution.
+> Six of the fixes landed with the M4 work; 7 (the unchecked multiply in the core crate) was
+> deferred behind it and done on this branch afterwards, where 5 and 6 were also reconsidered.**
 > **Part 2 (wheels on PyPI) and the reader bindings are untouched**, as is Part 3 (the pyvista
 > re-run). This landed ahead of its place in the milestone order, so the ordering note below still
 > holds in reverse: M2/M4/M5 will each change the Rust API this layer wraps, and this layer then has
@@ -128,6 +133,221 @@ round-trips for points/connectivity/data (including the `Precision` that ends up
 `(N, 3)` shapes, cell types as codes, the context manager releasing the HDF5 file, four threads
 writing concurrently, every error mapping (including the three `paraview.rs` limits), and a stub test
 that fails if the module grows a name `xdmf.pyi` does not declare.
+
+### Post-merge review findings (2026-08-18) — resolved 2026-08-19
+
+A review of the merged commit (`5166dce`, the one that added the bindings, #26), done in two independent
+passes that were then reconciled. Both read the bindings against the core crate and then **built a
+release wheel locally and reproduced each item against the installed module**, so every finding
+below is a transcript, not a reading. The recorded output is from
+`maturin build --release --compatibility linux` on CPython 3.12.
+
+**All resolved on 2026-08-19**, seven by a fix and 5 and 6 by deciding against one — see the
+resolutions after the list. Two items (1 and 7) are
+silent-corruption bugs — output that is accepted, opens fine, and holds something other than what
+the caller passed, which is the one failure mode `paraview.rs` exists to prevent. Ranked by what
+will actually bite.
+
+1. **A `(3, N)` point array is silently written as a wrong mesh.** `arrays.rs`'s module doc states
+   that any dimensionality is accepted and only C-contiguity is checked. That is what makes the
+   natural `(N, 3)` layout free — but the transposed "x-row / y-row / z-row" layout is *also*
+   C-contiguous, so it is accepted and reinterpreted as interleaved xyz:
+
+   ~~~text
+   pts = [[0,1,1,0],[0,0,1,1],[0,0,0,0]]   # shape (3, 4), C-contiguous
+   -> points.txt: 0 1 1 0  0 0 1 1  0 0 0 0
+   -> points (0,1,1) (0,0,0) (1,1,0) (0,0,0)   # garbage geometry, no error
+   ~~~
+
+   Valid XDMF, opens in ParaView, wrong mesh. Fix: for `points`, require `ndim == 1 || shape[-1] == 3`
+   — cheap, and it cannot reject anything the flat layout allows. Worth deciding at the same time
+   whether `Vector`/`Tensor` attributes get the same check; points are the unambiguous case (always
+   3 components) and the one a caller is most likely to have in column layout.
+
+2. **`cell_types` rejects `int32`/`uint32` code arrays** (`python/src/enums.rs:145`). Only `uint8`,
+   `uint64` and `int64` have arms; `np.array([4, 4], dtype=np.int32)` raises
+   *"cell_types must be a sequence of xdmf.CellType values, or a numpy array of dtype uint8, uint64,
+   or int64"* (verified). Two reasons this matters beyond taste: `meshio` hands back `int32`/`uint32`
+   cell arrays, and `requires-python >= 3.9` + `numpy >= 1.21` allow NumPy 1.x on Windows, where the
+   default integer dtype is `int32` — so the documented `write_mesh(pts, conn, np.array([4, 4]))`
+   works on Linux and fails on Windows from identical source. The CI job builds the bindings on
+   Linux only, so this cannot be caught there. It is also inconsistent with `IndexArray`, which takes
+   all four 32/64-bit index types. Two extra arms (plus `u16`/`i16` if we want to be generous).
+
+3. **A validation error in `write_mesh` permanently consumes the writer, then misreports why**
+   (`python/src/writer.rs:79-84`). `self.inner.take()` runs *before* the arguments are extracted, so
+   every binding-level rejection — wrong dtype, non-contiguous array, unknown or negative cell-type
+   code — burns the writer:
+
+   ~~~text
+   w.write_mesh(coords.astype(np.uint64), conn, cts)
+     -> ValueError: expected points as a numpy array with dtype float64 or float32, got ... uint64
+   w.write_mesh(coords, conn, cts)              # the corrected retry
+     -> RuntimeError: write_mesh was already called on this TimeSeriesWriter
+   ~~~
+
+   The second message is false, and in Python — unlike Rust, where `write_mesh(self)` makes the move
+   visible at the call site — a caller reasonably expects a rejected call to leave the object usable.
+   Fix: extract and validate first, `take()` only immediately before `writer.write_mesh(...)`. The
+   core `write_mesh(self)` consuming the writer on *its own* errors is unavoidable; these checks are
+   not.
+
+   **This is `write_mesh` only — `write_time_step` is not affected** and needs no change.
+   `PyTimeSeriesDataWriter` takes `self.inner.as_mut()` (`python/src/writer.rs:133`) rather than
+   `take()`, so a rejected step leaves the writer usable and the time free. Verified against all six
+   rejection classes (bad dtype, non-contiguous, not an array, numpy scalar, wrong length, second
+   attribute bad) on one writer: after six consecutive failures it accepted `"0.0"` and `"1.0"`
+   normally, no attribute leaked into the XML, and the case that failed *after* its first attribute
+   had been written left no orphan heavy-data file — the core's `step.discard()` rollback reaches
+   through the binding intact.
+
+4. **`DataStorage` and `DataAttribute` are unhashable, uncopyable and unpicklable, and every pyclass
+   reports `__module__ == "builtins"`** (`python/src/enums.rs:8`, `:181`, and the other pyclass
+   attributes). `#[pyclass(eq)]` without `hash` leaves `tp_hash` NULL — CPython only inherits
+   `tp_hash` when `tp_richcompare` is NULL too. Verified: `CellType` is hashable (it has `hash`), the
+   other two raise `TypeError: unhashable type: 'builtins.DataStorage'`, and `copy.copy` /
+   `pickle.dumps` fail with `cannot pickle 'builtins.DataStorage' object`. So `{DataStorage.Ascii:
+   ".txt"}`, a `set` of storages, `functools.lru_cache` over one, and handing one to a
+   `multiprocessing` worker all break — all natural things to do with what is otherwise an immutable
+   value type. Fix: `hash` + `derive(Hash)` on both (needs `Hash` on the core `DataStorage`/
+   `DataAttribute`), `module = "xdmf"` on every pyclass, and `__reduce__` if pickling is wanted.
+
+5. **The contiguity rejection does not say which array was wrong** (`python/src/arrays.rs:16`,
+   `:33-38`). `NOT_CONTIGUOUS` is a bare const, while every dtype message carries a `role`. With
+   points, connectivity and N attributes in one call, *"array must be C-contiguous; call
+   `numpy.ascontiguousarray()` on it first"* does not identify the offender — verified on a
+   two-attribute step. `contiguous_slice` already has the call sites to thread `role` through, and
+   the module doc's own goal is that a rejection names the real problem.
+
+6. **`deflate_level: u8` splits one user mistake across two exception types**
+   (`python/src/enums.rs:51`, `:59`). Verified: `hdf5_single_file(10)` raises
+   `ValueError: invalid configuration: deflate level 10 is out of range, must be between 0 and 9` at
+   writer construction, but `hdf5_single_file(-1)` and `hdf5_single_file(300)` raise
+   `OverflowError: out of range integral type conversion attempted` from pyo3's `u8` conversion. The
+   boundary between a good message and an opaque one sits at 255, not at 9. Fix: take an `i64` here
+   and let the core's `validate_deflate_level` produce the one `ValueError`.
+
+7. **Unchecked `num_entities * data_attribute.size()` — core crate** (`src/time_series_writer.rs:592`,
+   reachable from `python/src/enums.rs`'s unvalidated `matrix(rows, cols)` / `generic(size)`). In a
+   debug build this panics as `pyo3_runtime.PanicException`, which derives from `BaseException` and
+   so escapes `except Exception`. In the **release wheel — what users actually get — it wraps**, and
+   a size that wraps onto the real array length is accepted:
+
+   ~~~text
+   DataAttribute.generic(2**62)     on a 4-point mesh -> ValueError "size ... must be 0, but is 4"
+   DataAttribute.generic(2**62 + 1) on a 4-point mesh -> ACCEPTED
+     -> Dimensions="0 4611686018427387905 1" in the .xdmf2
+   ~~~
+
+   Only reachable with an absurd size, so low practical severity — but it is an unchecked multiply
+   producing a corrupt file rather than an error, in the core crate. Fix: `checked_mul` there (which
+   also covers the Rust API), optionally a bound on the two constructors.
+
+8. **`describe()` calls a numpy *scalar* "a numpy array"** (`python/src/arrays.rs:21`). It branches
+   on `.dtype` existing, which scalars also have, producing a self-contradictory message:
+
+   ~~~text
+   np.float64(1.0) -> ValueError: expected data of 'x' as a numpy array with dtype float64,
+                      float32, uint64, uint32, int64, or int32, got a numpy array with dtype float64
+   ~~~
+
+   `arr[0]` yields exactly such a scalar, so this is an easy mistake to make and the message gives
+   the user nothing to act on. Fix: only call it an array when it is an `ndarray`, otherwise report
+   the Python type alongside the dtype.
+
+9. **`cell_types!` does not actually enforce parity with `xdmf::CellType`** (`python/src/enums.rs:73-76`,
+   `:115`). The comment claims "a cell type added to `xdmf::CellType` is a single edit here", but the
+   `const` assert block and `From<PyCellType>` both iterate the *Python* variant list only — the
+   `const` block pins the discriminants of the variants that are listed, not the completeness of the
+   list. Add a variant to the core enum and Python silently cannot use it
+   (`ValueError: unknown cell type code N`) with every CI job green. This is the one place the file
+   departs from the core crate's own convention, where exhaustive matches over `Values` and in the
+   `*_writer.rs` backends make the compiler point at each missing decision. Fix: generate a `match`
+   over `xdmf::CellType` in the lookup direction.
+
+**Smaller notes**, not worth a numbered item each:
+
+- `__repr__` returns Rust `Debug`: `Hdf5SingleFile { deflate_level: None }`, `Matrix(2, 3)`.
+  Informative, but not Python syntax and not round-trippable.
+- `is_hdf5_enabled()`'s `false` branch, and the `else` in
+  `test_is_hdf5_enabled_matches_the_hdf5_storages_working`, are unreachable: `python/Cargo.toml`
+  hardcodes `features = ["hdf5"]` with no cargo feature to turn it off, so no wheel can be built
+  without it. Either add the passthrough feature (Part 2's fallback story needs it anyway) or drop
+  the branch.
+- The `docs` CI job builds the root package only, so `-D warnings -D missing_docs` never covers
+  `python/src/`.
+- `test_type_stubs_cover_the_module_surface` reads the *source* `xdmf.pyi`, so it would not catch the
+  stubs failing to ship. They do ship — the built wheel contains `xdmf/__init__.pyi` and
+  `xdmf/py.typed` alongside `xdmf/__init__.py` and the `.so`, confirmed by inspecting it.
+
+**What the review confirmed working**, so it does not need re-checking: all 46 pytest tests pass
+against a locally built wheel; the wheel ships the stubs and `py.typed`; concurrent writers with the
+GIL released produce correct files (verified with both 4 and 6 threads); `deflate_level` in `0..=9`
+is validated at writer construction; the five `paraview.rs` limits surface as the documented
+`OverflowError`/`ValueError`.
+
+**How each was resolved (2026-08-19).** Verified the way they were found: rebuilt the wheel and
+re-ran the reproduction for every item. The suite is 60 tests (from 46), each fix carrying its own
+— 6's covers what it does instead; 7's test is a Rust one, in `tests/time_series_writer.rs`, since
+the bug is in the core crate.
+
+1. `PointArray::validate_shape` (`python/src/arrays.rs`) rejects a trailing dimension that is not 3.
+   Flat arrays are exempt — a 1-D array's only dimension is a count, not a component width — so
+   `(12,)`, `(4, 3)` and `(2, 2, 3)` all still pass and `(3, 4)` names the fix
+   (`numpy.ascontiguousarray(points.T)`). Points only: they are the unambiguous case at always 3
+   components, whereas `Generic`/`Matrix` attributes have arbitrary ones.
+2. `code_dtypes!` (`python/src/enums.rs`) generates the extraction over **every** integer dtype
+   (`u8`/`u16`/`u32`/`u64`/`i8`/`i16`/`i32`/`i64`) off one list that also produces the message
+   naming them, so the two cannot drift. "Any integer dtype" is a rule a caller can predict; the
+   previous three-dtype list was not.
+3. `write_mesh` (`python/src/writer.rs`) checks `self.inner.is_none()` up front — so a genuine
+   second call is still reported as one — and `take()`s only inside the innermost dispatch arm,
+   after every dtype, shape, contiguity and cell-type check has passed. A rejected call now leaves
+   the writer usable.
+4. `hash` + `derive(Hash)` and `module = "xdmf"` on all three pyclasses, which needed `Eq + Hash` on
+   the core `DataStorage`/`DataAttribute` (`src/lib.rs`) — the only core change the bindings
+   themselves needed (7 changes the core too, for a bug that is the core's own). **Pickling is
+   deliberately not added:** a `__reduce__` needs a public reconstructor, which is API design rather
+   than a fix, so `copy.copy`/`pickle.dumps` still raise. Worth revisiting if a caller wants to hand
+   a `DataStorage` to a `multiprocessing` worker.
+5. **Not fixed, deliberately.** Threading a `role` through `contiguous_slice` touches the
+   dtype-dispatch macro, every call site and `to_values`, to turn one word of a message into
+   another word -- and a caller who gets it has one `numpy.ascontiguousarray()` to place among a
+   handful of arrays. Not worth carrying that plumbing for; the message stays the bare
+   `NOT_CONTIGUOUS` const.
+6. **Not fixed, deliberately.** The fix was written (an `i64` parameter range-checked in the
+   bindings) and then reverted: it made the bindings restate the core crate's own limit and its
+   message, which `validate_deflate_level` (`src/lib.rs`) owns, and the only way to have Rust
+   produce the error for -1/300 instead is to widen `DataStorage`'s `deflate_level` past the `u8`
+   it should be. One duplicated bound and message is the worse trade for the two exception types.
+   So `hdf5_single_file`/`hdf5_multiple_files` take a `u8` and pass it through: 10-255 reaches the
+   core and comes back as its `ValueError` naming 0-9 (at `TimeSeriesWriter` construction, where
+   the core validates), and -1/300 do not survive pyo3's argument conversion and are its
+   `OverflowError`. Worth revisiting only if the core's field itself ever widens.
+7. Deferred at the time — the fix lands in `src/time_series_writer.rs`, which the M4 submesh work
+   was rewriting wholesale in the same tree — and done afterwards, on the branch that carries the
+   other eight without M4. `DataAttribute::size()` returns `Option<usize>` (`Matrix`'s own `n * m`
+   is a caller-supplied product too, so it is `checked_mul`), and `write_attribute` rejects a
+   component count that is zero or does not fit, and a `num_entities * size` that does not fit,
+   with one `InvalidData` — before anything is written, like every other check there. Fixing it in
+   the core crate covers the Rust API as well as `matrix(rows, cols)`/`generic(size)`.
+   The zero case was found while fixing this one and is the same expression: `Generic(0)` made
+   `exp_size` 0, which empty data matches, and `Values::dimensions`'s `len / size` then panicked
+   with a division by zero — reachable from safe public API in *both* debug and release, unlike the
+   wrap. Verified in release, the way the wrap was found: `generic(2**62 + 1)` on a 4-point mesh now
+   raises `ValueError` instead of writing `Dimensions="0 4611686018427387905 1"`, and `generic(0)`
+   raises instead of panicking.
+8. `describe()` tells an array apart by casting to `PyUntypedArray` rather than by having a `dtype`,
+   and reports anything else by its fully qualified type name — so a numpy scalar reads
+   `got numpy.float64`, and a `list` still reads `got list`.
+9. The `cell_types!` macro emits a second `const` block matching exhaustively over `xdmf::CellType`,
+   bound as a `const fn` pointer so it is neither dead code nor callable. Verified by deleting a
+   variant from the list: `error[E0004]: non-exhaustive patterns`. This is the property the core
+   crate gets from its exhaustive matches over `Values`.
+
+Of the smaller notes: `__repr__` still returns Rust `Debug`, the `is_hdf5_enabled()` false branch is
+still unreachable, the `docs` job still skips `python/`, and the stub test still reads the source
+`.pyi` — all left as recorded, none of them affecting what lands in a file.
 
 ### New surface to add
 

@@ -213,7 +213,9 @@ def test_accepts_2d_point_and_vector_shapes(tmp_path):
     assert 'AttributeType="Vector"' in file_path.with_suffix(".xdmf2").read_text()
 
 
-@pytest.mark.parametrize("dtype", [np.uint8, np.uint64, np.int64])
+@pytest.mark.parametrize(
+    "dtype", [np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64]
+)
 def test_cell_types_as_numpy_codes(tmp_path, dtype):
     # the CellType values are the raw VTK codes (Triangle == 4), so an array of codes is an
     # equivalent, cheaper-to-produce alternative to a list of CellType
@@ -247,7 +249,7 @@ def test_cell_types_of_wrong_type_are_rejected(tmp_path):
         writer.write_mesh(SQUARE_COORDS, SQUARE_CONNECTIVITY, ["Triangle", "Triangle"])
     assert str(exc_info.value) == (
         "cell_types must be a sequence of xdmf.CellType values, or a numpy array of dtype "
-        "uint8, uint64, or int64"
+        "uint8, uint16, uint32, uint64, int8, int16, int32, or int64"
     )
 
 
@@ -313,6 +315,7 @@ def test_non_contiguous_arrays_are_rejected(tmp_path):
     # a strided view is rejected rather than silently copied into a contiguous one
     non_contiguous = np.arange(24, dtype=np.float64)[::2]
     assert not non_contiguous.flags["C_CONTIGUOUS"]
+    assert non_contiguous.ndim == 1  # so it is the contiguity that is rejected, not the shape
 
     writer = xdmf.TimeSeriesWriter(str(tmp_path / "non_contiguous"), xdmf.DataStorage.Ascii)
     with pytest.raises(ValueError) as exc_info:
@@ -320,6 +323,89 @@ def test_non_contiguous_arrays_are_rejected(tmp_path):
     assert str(exc_info.value) == (
         "array must be C-contiguous; call `numpy.ascontiguousarray()` on it first"
     )
+
+
+def test_transposed_points_are_rejected(tmp_path):
+    # a (3, N) array of separate x/y/z rows is C-contiguous, so without a shape check it would be
+    # accepted and read as interleaved xyz -- a valid file holding a mesh that was never passed
+    rows = np.array([[0.0, 1.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]])
+    assert rows.flags["C_CONTIGUOUS"] and rows.size == SQUARE_COORDS.size
+
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "transposed"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh(rows, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+    assert "whose last dimension is 4" in str(exc_info.value)
+
+    # and the documented fix works
+    writer.write_mesh(np.ascontiguousarray(rows.T), SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+
+
+@pytest.mark.parametrize("shape", [(12,), (4, 3), (2, 2, 3)])
+def test_point_shapes_with_three_trailing_components_are_accepted(tmp_path, shape):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / f"shape_{len(shape)}"), xdmf.DataStorage.Ascii)
+    writer.write_mesh(SQUARE_COORDS.reshape(shape), SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+
+
+def test_a_rejected_write_mesh_leaves_the_writer_usable(tmp_path):
+    # only the core crate's `write_mesh(self)` consumes the writer; a dtype/shape/cell-type the
+    # caller can fix must not also cost them the writer, or the RuntimeError they get on the retry
+    # would claim a call succeeded that never happened
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "retry"), xdmf.DataStorage.Ascii)
+    rejected = [
+        (SQUARE_COORDS.astype(np.uint64), SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES),
+        (SQUARE_COORDS.reshape(3, 4), SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES),
+        (np.arange(24, dtype=np.float64)[::2], SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES),
+        (SQUARE_COORDS, SQUARE_CONNECTIVITY.astype(np.float64), SQUARE_CELL_TYPES),
+        (SQUARE_COORDS, SQUARE_CONNECTIVITY, np.array([99, 99], dtype=np.uint8)),
+    ]
+    for points, connectivity, cell_types in rejected:
+        with pytest.raises(ValueError):
+            writer.write_mesh(points, connectivity, cell_types)
+
+    writer.write_mesh(SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+
+
+def test_a_numpy_scalar_is_not_described_as_an_array(tmp_path):
+    # `arr[0]` yields one of these, and calling it "a numpy array with dtype float64" in a message
+    # that expects exactly that dtype leaves the caller nothing to act on
+    _file_path, data_writer = write_square(tmp_path, xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        data_writer.write_time_step(
+            "0.0", [("temperature", xdmf.DataAttribute.SCALAR, np.float64(1.0))]
+        )
+    assert str(exc_info.value).endswith("got numpy.float64")
+
+
+def test_a_deflate_level_outside_the_range_is_rejected(tmp_path):
+    # the range is the core crate's (`validate_deflate_level`), and is deliberately not restated
+    # here: the level is handed over as passed, so the message naming 0-9 comes from Rust, when the
+    # storage is used to build a writer. A level outside a u8 does not survive the argument
+    # conversion to get there, and is pyo3's own OverflowError.
+    for factory in (xdmf.DataStorage.hdf5_single_file, xdmf.DataStorage.hdf5_multiple_files):
+        with pytest.raises(ValueError) as exc_info:
+            xdmf.TimeSeriesWriter(str(tmp_path / "out"), factory(10))
+        assert str(exc_info.value) == (
+            "invalid configuration: deflate level 10 is out of range, must be between 0 and 9"
+        )
+
+        for level in (-1, 300):
+            with pytest.raises(OverflowError):
+                factory(level)
+
+
+def test_storages_and_attributes_are_usable_as_dict_keys(tmp_path):
+    # they are frozen value types; a Python caller naturally puts one in a dict or a set
+    suffixes = {xdmf.DataStorage.Ascii: ".txt", xdmf.DataStorage.Hdf5SingleFile: ".h5"}
+    assert suffixes[xdmf.DataStorage.Ascii] == ".txt"
+    assert len({xdmf.DataAttribute.SCALAR, xdmf.DataAttribute.VECTOR, xdmf.DataAttribute.SCALAR}) == 2
+    assert len({xdmf.CellType.Triangle, xdmf.CellType.Triangle}) == 1
+    assert xdmf.DataStorage.hdf5_single_file(4) != xdmf.DataStorage.hdf5_single_file(5)
+
+
+def test_classes_report_their_module(tmp_path):
+    # without `module = "xdmf"` every repr and TypeError says "builtins.DataStorage"
+    for cls in (xdmf.DataStorage, xdmf.CellType, xdmf.DataAttribute):
+        assert cls.__module__ == "xdmf"
 
 
 def test_write_mesh_twice_raises(tmp_path):

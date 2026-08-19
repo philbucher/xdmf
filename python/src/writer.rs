@@ -68,7 +68,10 @@ impl PyTimeSeriesWriter {
     /// for points is the same memory as the flat one, so it needs no reshape.
     ///
     /// Consumes this writer, matching the Rust API where `write_mesh` takes `self` by value;
-    /// calling it a second time raises `RuntimeError`.
+    /// calling it a second time raises `RuntimeError`. A call *rejected* here leaves the writer
+    /// usable, so a dtype or shape the caller can fix does not also cost them the writer -- the
+    /// arguments are all checked before `self.inner` is taken, and only the core crate's own
+    /// `write_mesh(self)` consumes it.
     fn write_mesh(
         &mut self,
         py: Python<'_>,
@@ -76,12 +79,14 @@ impl PyTimeSeriesWriter {
         connectivity: &Bound<'_, PyAny>,
         cell_types: &Bound<'_, PyAny>,
     ) -> PyResult<PyTimeSeriesDataWriter> {
-        let writer = self
-            .inner
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err(ALREADY_CONSUMED))?;
+        // checked up front too, so a genuine second call is reported as such rather than as
+        // whatever its arguments happen to be
+        if self.inner.is_none() {
+            return Err(PyRuntimeError::new_err(ALREADY_CONSUMED));
+        }
 
         let points = PointArray::extract(points, "points")?;
+        points.validate_shape()?;
         let connectivity = IndexArray::extract(connectivity, "connectivity")?;
         let cell_types = extract_cell_types(cell_types)?;
 
@@ -90,9 +95,14 @@ impl PyTimeSeriesWriter {
                 connectivity,
                 IndexArray,
                 [U64, U32, I64, I32],
-                |index_slice| py
-                    .detach(|| writer.write_mesh(point_slice, index_slice, &cell_types))
-                    .map_err(to_py_err)
+                |index_slice| {
+                    let writer = self
+                        .inner
+                        .take()
+                        .ok_or_else(|| PyRuntimeError::new_err(ALREADY_CONSUMED))?;
+                    py.detach(|| writer.write_mesh(point_slice, index_slice, &cell_types))
+                        .map_err(to_py_err)
+                }
             )
         })?;
 

@@ -54,6 +54,13 @@ them. Revisit deliberately, not by drift.
   `OverflowError`; `xdmf.pyi` stubs ship with the wheel and a test fails if the module outgrows them.
   46 pytest tests, plus a CI job (`cargo clippy -p xdmf-python` + `pip install ./python[test]` +
   `pytest`), and the strict clippy list moved to `[workspace.lints]` so it covers the new crate.
+  A post-merge review then found nine issues, seven fixed on 2026-08-19 (transposed point arrays
+  silently written as a wrong mesh, `int32` cell codes rejected, a rejected `write_mesh` burning the
+  writer, unhashable value types, and three smaller ones — 60 pytest tests now); the other two were
+  message polish not worth their plumbing, so the `deflate_level` range stays the core's alone. One
+  fix is a core-crate bug: `num_entities * DataAttribute::size()` was multiplied out unchecked, so
+  in a release build an absurd `Generic`/`Matrix` size could wrap back onto the real array length
+  and be written as a corrupt shape, and a zero one divided by zero — both now one `InvalidData`.
   **Open:** the reader bindings (M5 first), the wheels (Part 2), the pyvista re-run (Part 3) — and
   M2/M4/M5 will each move the Rust API this layer wraps. Details in `06_python_bindings.md`'s
   top-of-file status note.

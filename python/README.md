@@ -43,8 +43,11 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
 ## Good to know
 
 - Points and vector data may also be shaped `(N, 3)`, the natural numpy layout — a C-contiguous
-  `(N, 3)` array is the same memory as the flat one, so no `reshape` is needed. `cell_types` may be a
-  numpy array of the raw VTK cell type codes instead of a list.
+  `(N, 3)` array is the same memory as the flat one, so no `reshape` is needed. Points are the one
+  array whose shape is checked: a last dimension that is not 3 is rejected, so the transposed
+  `(3, N)` layout (separate x/y/z rows, which is C-contiguous too) raises instead of being read as
+  interleaved coordinates. `cell_types` may be a numpy array of the raw VTK cell type codes, in any
+  integer dtype, instead of a list.
 - A time step is all-or-nothing, as in Rust: it is written when every attribute of it was accepted,
   and discarded — leaving no heavy data behind and the time still available — as soon as one is not.
 - The data writer is a context manager, so the HDF5 file is closed at the end of the `with` block
@@ -54,6 +57,10 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
   copied, is that another thread must not modify an array while a write of it is running.
   Single-threaded code cannot hit this, since `write_mesh`/`write_time_step` return before the next
   statement runs.
+- A rejected `write_mesh` leaves the writer usable, so a dtype or shape you can fix can simply be
+  retried; only a *successful* call consumes it, matching the Rust API.
+- `DataStorage`, `DataAttribute` and `CellType` are frozen, comparable and hashable, so they work as
+  `dict` keys and in sets.
 - Failures are the Python exception matching what went wrong: `ValueError` for anything the mesh or
   the step does not accept, `OverflowError` for an integer the chosen storage cannot represent (see
   the [integer data](https://github.com/philbucher/xdmf#can-integer-data-be-written) section,

@@ -6,11 +6,13 @@
 //! instead of further down; [`ValueArray`] covers all six element types attribute data can have
 //! and maps each straight onto the matching `xdmf::Values` variant.
 //!
-//! Any dimensionality is accepted -- a C-contiguous `(N, 3)` array has exactly the flat memory
-//! layout the Rust API wants, so the natural numpy layout for points and vector fields needs no
-//! `reshape(-1)`. Arrays that are not C-contiguous are rejected rather than silently copied.
+//! Shape is otherwise free -- a C-contiguous `(N, 3)` array has exactly the flat memory layout the
+//! Rust API wants, so the natural numpy layout for points and vector fields needs no `reshape(-1)`.
+//! The one exception is [`PointArray::validate_shape`]: points are always 3 components, so a
+//! trailing dimension that is not 3 is rejected rather than read as interleaved xyz. Arrays that
+//! are not C-contiguous are rejected rather than silently copied.
 
-use numpy::{Element, PyReadonlyArrayDyn};
+use numpy::{Element, PyReadonlyArrayDyn, PyUntypedArray, PyUntypedArrayMethods};
 use pyo3::{exceptions::PyValueError, prelude::*};
 
 const NOT_CONTIGUOUS: &str =
@@ -18,14 +20,23 @@ const NOT_CONTIGUOUS: &str =
 
 /// Describes what `obj` actually is, so a rejection names the real problem ("dtype int16", "a
 /// list") instead of only restating what was expected.
+///
+/// The array case is told apart by the type, not by having a `dtype`: a numpy *scalar* -- what
+/// indexing an array yields, and an easy thing to pass by accident -- has a `dtype` too, and
+/// calling it "a numpy array with dtype float64" would contradict the sentence it lands in.
 fn describe(obj: &Bound<'_, PyAny>) -> String {
-    match obj.getattr("dtype") {
-        Ok(dtype) => format!("a numpy array with dtype {dtype}"),
-        Err(_) => obj.get_type().name().map_or_else(
-            |_no_name| "an unknown type".to_string(),
-            |name| name.to_string(),
-        ),
+    if obj.cast::<PyUntypedArray>().is_ok()
+        && let Ok(dtype) = obj.getattr("dtype")
+    {
+        return format!("a numpy array with dtype {dtype}");
     }
+
+    // qualified, so a numpy scalar reads "numpy.float64" rather than a bare "float64" that could
+    // be mistaken for the dtype the sentence just asked for (builtins keep their short name)
+    obj.get_type().fully_qualified_name().map_or_else(
+        |_no_name| "an unknown type".to_string(),
+        |name| name.to_string(),
+    )
 }
 
 /// Borrows the array's buffer, rejecting a strided view instead of copying it into one.
@@ -35,6 +46,25 @@ pub(crate) fn contiguous_slice<'a, T: Element>(
     array
         .as_slice()
         .map_err(|_not_contiguous| PyValueError::new_err(NOT_CONTIGUOUS))
+}
+
+/// Rejects a point array whose trailing dimension is not 3.
+///
+/// Shape is otherwise ignored -- a C-contiguous `(N, 3)` array is the same memory as the flat one,
+/// which is what makes the natural numpy layout free. The transposed `(3, N)` layout (an x row, a
+/// y row, a z row) is C-contiguous too, though, so without this it would be accepted and silently
+/// read as interleaved xyz: a valid file holding a mesh the caller never passed.
+fn validate_point_shape(shape: &[usize]) -> PyResult<()> {
+    match shape {
+        // a flat array is the layout the Rust API takes, so its length is a count, not a
+        // component width -- only a multi-dimensional array names components in its last axis
+        [] | [_] | [.., 3] => Ok(()),
+        [.., other] => Err(PyValueError::new_err(format!(
+            "expected points as a flat array of x/y/z coordinates or one shaped (..., 3), got \
+             shape {shape:?} whose last dimension is {other}; if this is a (3, N) array of \
+             separate x/y/z rows, transpose it with `numpy.ascontiguousarray(points.T)`"
+        ))),
+    }
 }
 
 // Declares one borrowed-array enum per group of dtypes the API accepts, off a single variant list
@@ -97,6 +127,16 @@ numpy_arrays! {
         U32(u32),
         I64(i64),
         I32(i32),
+    }
+}
+
+impl PointArray<'_> {
+    /// Checks the shape, which only points constrain (they are always 3 components).
+    pub(crate) fn validate_shape(&self) -> PyResult<()> {
+        match self {
+            Self::F64(array) => validate_point_shape(array.shape()),
+            Self::F32(array) => validate_point_shape(array.shape()),
+        }
     }
 }
 
