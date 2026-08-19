@@ -83,18 +83,24 @@ impl Values<'_> {
     pub(crate) fn dimensions(&self, attribute: DataAttribute) -> Dimensions {
         let len = self.len();
 
-        match attribute {
-            DataAttribute::Scalar => Dimensions(vec![len]),
+        // zero here means a component count of zero or one that does not fit a `usize`;
+        // `write_attribute` rejects both before any values get here, so the flat shape below is
+        // what data that never reaches a file gets, rather than a division by zero
+        let size = attribute.size().filter(|size| *size != 0);
+
+        match (attribute, size) {
+            (DataAttribute::Scalar, _) | (_, None) => Dimensions(vec![len]),
             // written as a rank-3 shape ("<count> <size> 1") rather than "<count> <size>": VTK's
             // XDMF2 reader (vtkXdmfHeavyData, since https://github.com/Kitware/VTK/commit/7199be5854,
             // shipped in VTK 9.6 / ParaView 6.1) computes an AttributeType="Matrix" attribute's
             // component count as the product of its *last two* Dimensions entries, so a 2D
             // "<count> <size>" shape gets misread as one giant tuple. Appending a trailing 1 keeps
             // that product equal to `size` while `count` is used for the tuple count.
-            DataAttribute::Tensor6 | DataAttribute::Matrix(_, _) | DataAttribute::Generic(_) => {
-                Dimensions(vec![len / attribute.size(), attribute.size(), 1])
-            }
-            _ => Dimensions(vec![len / attribute.size(), attribute.size()]),
+            (
+                DataAttribute::Tensor6 | DataAttribute::Matrix(_, _) | DataAttribute::Generic(_),
+                Some(size),
+            ) => Dimensions(vec![len / size, size, 1]),
+            (_, Some(size)) => Dimensions(vec![len / size, size]),
         }
     }
 

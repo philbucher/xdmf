@@ -7,9 +7,7 @@ from collections.abc import Sequence
 import numpy as np
 import numpy.typing as npt
 
-CellTypes = (
-    Sequence["CellType"] | npt.NDArray[np.uint8] | npt.NDArray[np.uint64] | npt.NDArray[np.int64]
-)
+CellTypes = Sequence["CellType"] | npt.NDArray[np.integer]
 PointArray = npt.NDArray[np.float64] | npt.NDArray[np.float32]
 IndexArray = (
     npt.NDArray[np.uint64] | npt.NDArray[np.uint32] | npt.NDArray[np.int64] | npt.NDArray[np.int32]
@@ -116,5 +114,10 @@ class TimeSeriesWriter:
     ) -> TimeSeriesDataWriter:
         """Write the mesh, returning the writer for the time step data.
 
-        Consumes this writer; calling it a second time raises `RuntimeError`.
+        `points` is flat x/y/z coordinates or shaped `(..., 3)`; a last dimension that is not 3 is
+        rejected, so a `(3, N)` array of separate x/y/z rows raises `ValueError` instead of being
+        read as interleaved coordinates.
+
+        Consumes this writer; calling it a second time raises `RuntimeError`. A *rejected* call
+        leaves the writer usable, so a dtype or shape that can be fixed can simply be retried.
         """

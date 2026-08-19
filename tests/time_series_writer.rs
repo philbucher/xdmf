@@ -785,3 +785,46 @@ fn write_mesh_rejects_a_negative_connectivity_index() {
         xdmf::Error::InvalidMesh { reason } if reason == "connectivity index -2 is negative"
     );
 }
+
+// A component count or a total number of values that does not fit a `usize`: in release builds
+// both multiplications used to wrap, and a total that wraps back onto the real array length was
+// accepted -- writing `Dimensions="0 4611686018427387905 1"` for four values.
+#[test]
+fn write_data_rejects_an_attribute_whose_size_is_zero_or_does_not_fit() {
+    let coords = [
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0_f64,
+    ];
+    let cell_types = [xdmf::CellType::Quadrilateral];
+
+    let write = |attribute, data: &[f64]| {
+        let tmp_dir = TempDir::new().unwrap();
+        let mut data_writer = TimeSeriesWriter::new(
+            tmp_dir.path().join("test_output"),
+            xdmf::DataStorage::AsciiInline,
+        )
+        .unwrap()
+        .write_mesh(&coords, &[0_u64, 1, 2, 3], &cell_types)
+        .unwrap();
+
+        data_writer
+            .write_time_step("0.0", |step| step.point_data("x", attribute, data))
+            .unwrap_err()
+    };
+
+    // 4 points * (2^62 + 1) wraps to 4, exactly the number of values passed
+    std::assert_matches!(
+        write(xdmf::DataAttribute::Generic(usize::MAX / 4 + 2), &[1.0, 2.0, 3.0, 4.0]),
+        xdmf::Error::InvalidData { reason } if reason.contains("has no usable size")
+    );
+    // the component count itself does not fit
+    std::assert_matches!(
+        write(xdmf::DataAttribute::Matrix(usize::MAX, 2), &[1.0, 2.0, 3.0, 4.0]),
+        xdmf::Error::InvalidData { reason } if reason.contains("has no usable size")
+    );
+    // zero components: an expected size of 0 that only empty data matches, and that divided by
+    // zero when the shape was written
+    std::assert_matches!(
+        write(xdmf::DataAttribute::Generic(0), &[]),
+        xdmf::Error::InvalidData { reason } if reason.contains("has no usable size")
+    );
+}

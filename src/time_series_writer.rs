@@ -589,7 +589,20 @@ impl TimeStep<'_> {
             });
         }
 
-        let exp_size = num_entities * data_attribute.size();
+        // the component count and the total are both products of caller-supplied numbers, so
+        // neither is multiplied out unchecked: a wrapping total that lands back on the real array
+        // length would be accepted and written as a mesh-sized lie about the data's shape
+        let exp_size = data_attribute
+            .size()
+            .filter(|size| *size != 0)
+            .and_then(|size| num_entities.checked_mul(size))
+            .ok_or_else(|| Error::InvalidData {
+                reason: format!(
+                    "attribute type {data_attribute:?} of {label} '{name}' has no usable size: \
+                     its number of components must be non-zero, and the total number of values \
+                     must fit a usize"
+                ),
+            })?;
         if values.len() != exp_size {
             return Err(Error::InvalidData {
                 reason: format!(

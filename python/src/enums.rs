@@ -1,13 +1,22 @@
 //! Python-facing enums mirroring the core crate's `DataStorage`, `CellType`, `DataAttribute`.
 
-use numpy::PyReadonlyArrayDyn;
+use std::fmt::Display;
+
+use numpy::{Element, PyReadonlyArrayDyn};
 use pyo3::{exceptions::PyValueError, prelude::*};
 
 /// Heavy-data storage format. `Hdf5SingleFile`/`Hdf5MultipleFiles` are plain attributes for the
 /// default (library-chosen) deflate compression level; use `hdf5_single_file(level)`/
 /// `hdf5_multiple_files(level)` to pick a specific level (0-9) instead.
-#[pyclass(name = "DataStorage", eq, frozen, from_py_object)]
-#[derive(Clone, Copy, PartialEq)]
+#[pyclass(
+    name = "DataStorage",
+    module = "xdmf",
+    eq,
+    frozen,
+    hash,
+    from_py_object
+)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct PyDataStorage(xdmf::DataStorage);
 
 #[pymethods]
@@ -74,16 +83,18 @@ impl From<PyDataStorage> for xdmf::DataStorage {
 }
 
 // Declares `PyCellType`, its `From` impl and the code lookup off one variant list, so a cell type
-// added to `xdmf::CellType` is a single edit here. The `const` block additionally pins the
-// discriminants to the core enum's: `eq_int` exposes them to Python as the raw VTK codes, and they
-// are otherwise restated here with nothing tying the two lists together.
+// added to `xdmf::CellType` is a single edit here -- and the two `const` blocks make it a required
+// one: the first pins the discriminants to the core enum's (`eq_int` exposes them to Python as the
+// raw VTK codes, and they are otherwise restated here with nothing tying the two lists together),
+// the second matches exhaustively over the core enum so a variant missing from the list is a
+// compile error rather than a silent gap.
 macro_rules! cell_types {
     ($($variant:ident = $code:literal,)+) => {
         /// Cell types as defined in the VTK file format, mirroring `xdmf::CellType`. Values match
         /// the VTK/XDMF discriminants exactly, so a raw numpy array of codes (see
         /// `extract_cell_types`) is an equivalent, cheaper-to-produce alternative to a list of
         /// these.
-        #[pyclass(name = "CellType", eq, eq_int, frozen, hash, from_py_object)]
+        #[pyclass(name = "CellType", module = "xdmf", eq, eq_int, frozen, hash, from_py_object)]
         #[derive(Clone, Copy, PartialEq, Eq, Hash)]
         #[repr(u8)]
         pub enum PyCellType {
@@ -92,6 +103,12 @@ macro_rules! cell_types {
 
         const _: () = {
             $(assert!(PyCellType::$variant as u8 == xdmf::CellType::$variant as u8);)+
+        };
+
+        // Exhaustive over the *core* enum, so a cell type added to `xdmf::CellType` stops this
+        // crate compiling until it is added to the list above
+        const _: fn(xdmf::CellType) -> u8 = |cell_type| match cell_type {
+            $(xdmf::CellType::$variant => $code,)+
         };
 
         impl From<PyCellType> for xdmf::CellType {
@@ -134,40 +151,66 @@ cell_types! {
     Hexahedron27 = 50,
 }
 
+/// The codes an integer array holds, rejecting a negative one by name.
+fn codes_of<T>(array: &PyReadonlyArrayDyn<'_, T>) -> PyResult<Vec<u64>>
+where
+    T: Element + Copy + Display,
+    u64: TryFrom<T>,
+{
+    array
+        .as_array()
+        .iter()
+        .map(|&code| {
+            u64::try_from(code).map_err(|_negative| {
+                PyValueError::new_err(format!("cell type code {code} is negative"))
+            })
+        })
+        .collect()
+}
+
+// Generates the raw-code extraction off one dtype list, so the accepted dtypes and the message
+// naming them cannot drift apart -- the same reason `arrays.rs` generates its array enums.
+//
+// Every integer dtype is accepted, rather than the three the codes plausibly come in: `int32` is
+// what NumPy 1.x defaults to on Windows and what `meshio` hands back, so a narrower list makes
+// identical source work on one platform and fail on another.
+macro_rules! code_dtypes {
+    ($dtypes:literal, [$($ty:ty),+ $(,)?]) => {
+        const CELL_CODE_DTYPES: &str = $dtypes;
+
+        /// The raw VTK codes `obj` holds, or `None` if it is not an integer numpy array at all.
+        fn extract_codes(obj: &Bound<'_, PyAny>) -> Option<PyResult<Vec<u64>>> {
+            $(
+                if let Ok(array) = obj.extract::<PyReadonlyArrayDyn<'_, $ty>>() {
+                    return Some(codes_of(&array));
+                }
+            )+
+            None
+        }
+    };
+}
+
+code_dtypes!(
+    "uint8, uint16, uint32, uint64, int8, int16, int32, or int64",
+    [u8, u16, u32, u64, i8, i16, i32, i64]
+);
+
 /// Accepts either a Python sequence of `CellType` values or a numpy integer array of raw VTK cell
-/// codes (`uint8`, `uint64`, or `int64` -- copied into a `Vec` either way, since this runs once per
-/// mesh rather than per time step, unlike the attribute data path in `arrays.rs`).
+/// codes (copied into a `Vec` either way, since this runs once per mesh rather than per time step,
+/// unlike the attribute data path in `arrays.rs`).
 pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::CellType>> {
     if let Ok(list) = obj.extract::<Vec<PyCellType>>() {
         return Ok(list.into_iter().map(Into::into).collect());
     }
 
-    let codes: Vec<u64> = if let Ok(array) = obj.extract::<PyReadonlyArrayDyn<'_, u8>>() {
-        array
-            .as_array()
-            .iter()
-            .map(|&code| u64::from(code))
-            .collect()
-    } else if let Ok(array) = obj.extract::<PyReadonlyArrayDyn<'_, u64>>() {
-        array.as_array().iter().copied().collect()
-    } else if let Ok(array) = obj.extract::<PyReadonlyArrayDyn<'_, i64>>() {
-        array
-            .as_array()
-            .iter()
-            .map(|&code| {
-                u64::try_from(code).map_err(|_negative| {
-                    PyValueError::new_err(format!("cell type code {code} is negative"))
-                })
-            })
-            .collect::<PyResult<Vec<_>>>()?
-    } else {
-        return Err(PyValueError::new_err(
+    let Some(codes) = extract_codes(obj) else {
+        return Err(PyValueError::new_err(format!(
             "cell_types must be a sequence of xdmf.CellType values, or a numpy array of dtype \
-             uint8, uint64, or int64",
-        ));
+             {CELL_CODE_DTYPES}"
+        )));
     };
 
-    codes
+    codes?
         .into_iter()
         .map(|code| {
             cell_type_from_code(code)
@@ -178,8 +221,15 @@ pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::C
 
 /// Type of the data (scalar, vector, tensor, etc.). `matrix`/`generic` carry a size, so this is a
 /// wrapper struct with static constructors rather than a plain enum.
-#[pyclass(name = "DataAttribute", eq, frozen, from_py_object)]
-#[derive(Clone, Copy, PartialEq)]
+#[pyclass(
+    name = "DataAttribute",
+    module = "xdmf",
+    eq,
+    frozen,
+    hash,
+    from_py_object
+)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct PyDataAttribute(xdmf::DataAttribute);
 
 #[pymethods]

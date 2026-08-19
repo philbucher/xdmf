@@ -29,7 +29,7 @@ pub use values::{ConnectivityIndex, Coordinate, Values};
 pub use xdmf_elements::CellType;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum DataStorage {
     /// store the data in ASCII format, each set of data is stored in a separate file.
     Ascii,
@@ -202,7 +202,7 @@ pub const fn is_hdf5_enabled() -> bool {
 }
 
 /// Type of the data (scalar, vector, tensor, etc.)
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DataAttribute {
     /// single value
     Scalar,
@@ -219,14 +219,16 @@ pub enum DataAttribute {
 }
 
 impl DataAttribute {
-    pub(crate) fn size(&self) -> usize {
+    /// Number of components of one entity, [`None`] if [`Matrix`](Self::Matrix)'s two dimensions
+    /// do not fit a `usize` -- a caller-supplied product, so it is checked rather than wrapped.
+    pub(crate) fn size(&self) -> Option<usize> {
         match self {
-            Self::Scalar => 1,
-            Self::Vector => 3,
-            Self::Tensor => 9,
-            Self::Tensor6 => 6,
-            Self::Matrix(n, m) => n * m,
-            Self::Generic(size) => *size,
+            Self::Scalar => Some(1),
+            Self::Vector => Some(3),
+            Self::Tensor => Some(9),
+            Self::Tensor6 => Some(6),
+            Self::Matrix(n, m) => n.checked_mul(*m),
+            Self::Generic(size) => Some(*size),
         }
     }
 }
@@ -329,12 +331,13 @@ mod tests {
         let matrix = DataAttribute::Matrix(3, 3);
         let generic = DataAttribute::Generic(5);
 
-        assert_eq!(scalar.size(), 1);
-        assert_eq!(vector.size(), 3);
-        assert_eq!(tensor.size(), 9);
-        assert_eq!(tensor6.size(), 6);
-        assert_eq!(matrix.size(), 9);
-        assert_eq!(generic.size(), 5);
+        assert_eq!(scalar.size(), Some(1));
+        assert_eq!(vector.size(), Some(3));
+        assert_eq!(tensor.size(), Some(9));
+        assert_eq!(tensor6.size(), Some(6));
+        assert_eq!(matrix.size(), Some(9));
+        assert_eq!(generic.size(), Some(5));
+        assert_eq!(DataAttribute::Matrix(usize::MAX, 2).size(), None);
 
         assert_eq!(attribute::AttributeType::Scalar, scalar.into());
         assert_eq!(attribute::AttributeType::Vector, vector.into());
