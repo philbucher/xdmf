@@ -249,6 +249,7 @@ mod tests {
             },
             topology::Topology {
                 topology_type: topology::TopologyType::Triangle,
+                nodes_per_element: None,
                 number_of_elements: "1".to_string(),
                 data_item: data_item::DataItem {
                     dimensions: Some(dimensions::Dimensions(vec![3])),

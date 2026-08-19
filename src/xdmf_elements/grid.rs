@@ -160,6 +160,7 @@ mod tests {
     fn dummy_topology() -> Topology {
         Topology {
             topology_type: TopologyType::Triangle,
+            nodes_per_element: None,
             number_of_elements: "2".into(),
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
