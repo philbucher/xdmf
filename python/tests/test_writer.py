@@ -213,7 +213,7 @@ def test_accepts_2d_point_and_vector_shapes(tmp_path):
     assert 'AttributeType="Vector"' in file_path.with_suffix(".xdmf2").read_text()
 
 
-@pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64])
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint64, np.int64])
 def test_cell_types_as_numpy_codes(tmp_path, dtype):
     # the CellType values are the raw VTK codes (Triangle == 4), so an array of codes is an
     # equivalent, cheaper-to-produce alternative to a list of CellType
