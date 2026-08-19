@@ -154,8 +154,14 @@ impl TimeSeriesWriter {
             geometry_type: GeometryType::XYZ,
             data_item: data_item_coords_ref,
         };
+
+        // only `Polyvertex`/`Polyline` carry a per-element node count
+        let nodes_per_element = (topo_type != TopologyType::Mixed)
+            .then(|| poly_cell_points(cell_types.first().copied().unwrap_or(CellType::Vertex)))
+            .flatten();
         let topology = Topology {
             topology_type: topo_type,
+            nodes_per_element,
             number_of_elements: num_cells.to_string(),
             data_item: data_item_connectivity_ref,
         };
@@ -263,9 +269,13 @@ fn poly_cell_points(cell_type: CellType) -> Option<u8> {
     }
 }
 
-/// Prepare cells / connectivity for writing. The cell type is prepended to the connectivity list,
-/// and for poly-cells, the number of points is also added.
-/// TODO if all cells are the same, then the type information can be stored as `TopologyType`
+/// Prepare cells / connectivity for writing.
+///
+/// When every cell shares the same `CellType`, the type is written once as a uniform
+/// `TopologyType` instead of being prepended to every cell, saving one word per cell (two for
+/// `Polyvertex`/`Polyline`, whose per-cell node count is otherwise also repeated). Otherwise the
+/// cell type is prepended to the connectivity list as `Mixed` topology requires, and for
+/// poly-cells, the number of points is also added.
 fn prepare_cells<I: ConnectivityIndex>(
     connectivity: &[I],
     cell_types: &[CellType],
@@ -283,6 +293,12 @@ fn prepare_cells<I: ConnectivityIndex>(
             .collect::<Result<Vec<_>>>()?;
 
         return Ok((TopologyType::Polyvertex, indices));
+    }
+
+    if let [first, rest @ ..] = cell_types
+        && rest.iter().all(|cell_type| cell_type == first)
+    {
+        return Ok((TopologyType::from(*first), connectivity.to_vec()));
     }
 
     let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
@@ -792,6 +808,8 @@ mod tests {
 
     #[test]
     fn test_prepare_cells() {
+        // mixed cell types can't be written as a uniform `TopologyType`, so the type is
+        // prepended to every cell, as `Mixed` topology requires
         let (topo_type, cells_prep) = prepare_cells(
             &[0_u64, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             &[
@@ -813,184 +831,209 @@ mod tests {
 
     #[test]
     fn prepare_cells_by_celltype() {
+        // when every cell shares the same type, no per-cell type code is written -- the type is
+        // carried once as a uniform `TopologyType`, and the connectivity is written as-is
         assert_eq!(
-            prepare_cells(&[5], &[CellType::Vertex], 0).unwrap().1,
-            vec![1, 1, 5]
+            prepare_cells(&[5_u64], &[CellType::Vertex], 0).unwrap(),
+            (TopologyType::Polyvertex, vec![5])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6], &[CellType::Edge], 0).unwrap().1,
-            vec![2, 2, 5, 6]
+            prepare_cells(&[5_u64, 6], &[CellType::Edge], 0).unwrap(),
+            (TopologyType::Polyline, vec![5, 6])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7], &[CellType::Triangle], 0)
-                .unwrap()
-                .1,
-            vec![4, 5, 6, 7]
+            prepare_cells(&[5_u64, 6, 7], &[CellType::Triangle], 0).unwrap(),
+            (TopologyType::Triangle, vec![5, 6, 7])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8], &[CellType::Quadrilateral], 0)
-                .unwrap()
-                .1,
-            vec![5, 5, 6, 7, 8]
+            prepare_cells(&[5_u64, 6, 7, 8], &[CellType::Quadrilateral], 0).unwrap(),
+            (TopologyType::Quadrilateral, vec![5, 6, 7, 8])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8], &[CellType::Tetrahedron], 0)
-                .unwrap()
-                .1,
-            vec![6, 5, 6, 7, 8]
+            prepare_cells(&[5_u64, 6, 7, 8], &[CellType::Tetrahedron], 0).unwrap(),
+            (TopologyType::Tetrahedron, vec![5, 6, 7, 8])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9], &[CellType::Pyramid], 0)
-                .unwrap()
-                .1,
-            vec![7, 5, 6, 7, 8, 9]
+            prepare_cells(&[5_u64, 6, 7, 8, 9], &[CellType::Pyramid], 0).unwrap(),
+            (TopologyType::Pyramid, vec![5, 6, 7, 8, 9])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Wedge], 0)
-                .unwrap()
-                .1,
-            vec![8, 5, 6, 7, 8, 9, 10]
+            prepare_cells(&[5_u64, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).unwrap(),
+            (TopologyType::Wedge, vec![5, 6, 7, 8, 9, 10])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0)
-                .unwrap()
-                .1,
-            vec![9, 5, 6, 7, 8, 9, 10, 11, 12]
+            prepare_cells(&[5_u64, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0).unwrap(),
+            (TopologyType::Hexahedron, vec![5, 6, 7, 8, 9, 10, 11, 12])
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7], &[CellType::Edge3], 0).unwrap().1,
-            vec![34, 5, 6, 7]
+            prepare_cells(&[5_u64, 6, 7], &[CellType::Edge3], 0).unwrap(),
+            (TopologyType::Edge3, vec![5, 6, 7])
         );
 
         assert_eq!(
             prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13],
+                &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13],
                 &[CellType::Quadrilateral9],
                 0
             )
-            .unwrap()
-            .1,
-            vec![35, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+            .unwrap(),
+            (
+                TopologyType::Quadrilateral9,
+                vec![5, 6, 7, 8, 9, 10, 11, 12, 13]
+            )
         );
 
         assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0)
-                .unwrap()
-                .1,
-            vec![36, 5, 6, 7, 8, 9, 10]
-        );
-
-        assert_eq!(
-            prepare_cells(&[5, 6, 7, 8, 9, 10, 11, 12], &[CellType::Quadrilateral8], 0)
-                .unwrap()
-                .1,
-            vec![37, 5, 6, 7, 8, 9, 10, 11, 12]
+            prepare_cells(&[5_u64, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).unwrap(),
+            (TopologyType::Triangle6, vec![5, 6, 7, 8, 9, 10])
         );
 
         assert_eq!(
             prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+                &[5_u64, 6, 7, 8, 9, 10, 11, 12],
+                &[CellType::Quadrilateral8],
+                0
+            )
+            .unwrap(),
+            (
+                TopologyType::Quadrilateral8,
+                vec![5, 6, 7, 8, 9, 10, 11, 12]
+            )
+        );
+
+        assert_eq!(
+            prepare_cells(
+                &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14],
                 &[CellType::Tetrahedron10],
                 0
             )
-            .unwrap()
-            .1,
-            vec![38, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+            .unwrap(),
+            (
+                TopologyType::Tetrahedron10,
+                vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+            )
         );
 
         assert_eq!(
             prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
                 &[CellType::Pyramid13],
                 0
             )
-            .unwrap()
-            .1,
-            vec![39, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            .unwrap(),
+            (
+                TopologyType::Pyramid13,
+                vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            )
         );
 
         assert_eq!(
             prepare_cells(
-                &[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+                &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
                 &[CellType::Wedge15],
                 0
             )
-            .unwrap()
-            .1,
-            vec![40, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+            .unwrap(),
+            (
+                TopologyType::Wedge15,
+                vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+            )
         );
 
         assert_eq!(
             prepare_cells(
                 &[
-                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
+                    5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
                 ],
                 &[CellType::Wedge18],
                 0
             )
-            .unwrap()
-            .1,
-            vec![
-                41, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
-            ]
+            .unwrap(),
+            (
+                TopologyType::Wedge18,
+                vec![
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
+                ]
+            )
         );
 
         assert_eq!(
             prepare_cells(
                 &[
-                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                    5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
                 ],
                 &[CellType::Hexahedron20],
                 0
             )
-            .unwrap()
-            .1,
-            vec![
-                48, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
-            ]
+            .unwrap(),
+            (
+                TopologyType::Hexahedron20,
+                vec![
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                ]
+            )
         );
 
         assert_eq!(
             prepare_cells(
                 &[
-                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-                    26, 27, 28
+                    5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+                    25, 26, 27, 28
                 ],
                 &[CellType::Hexahedron24],
                 0
             )
-            .unwrap()
-            .1,
-            vec![
-                49, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-                26, 27, 28
-            ]
+            .unwrap(),
+            (
+                TopologyType::Hexahedron24,
+                vec![
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28
+                ]
+            )
         );
 
         assert_eq!(
             prepare_cells(
                 &[
-                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-                    26, 27, 28, 29, 30, 31
+                    5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+                    25, 26, 27, 28, 29, 30, 31
                 ],
                 &[CellType::Hexahedron27],
                 0
             )
-            .unwrap()
-            .1,
-            vec![
-                50, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-                26, 27, 28, 29, 30, 31
-            ]
+            .unwrap(),
+            (
+                TopologyType::Hexahedron27,
+                vec![
+                    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28, 29, 30, 31
+                ]
+            )
         );
+    }
+
+    #[test]
+    fn prepare_cells_mixed_when_types_differ() {
+        // more than one cell of the same repeated type still can't use a uniform `TopologyType`
+        // once a different type is mixed in
+        let (topo_type, cells_prep) = prepare_cells(
+            &[0_u64, 1, 2, 3, 4, 5, 6, 7],
+            &[CellType::Triangle, CellType::Triangle, CellType::Edge],
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(topo_type, TopologyType::Mixed);
+        assert_eq!(cells_prep, vec![4, 0, 1, 2, 4, 3, 4, 5, 2, 2, 6, 7]);
     }
 
     #[test]
@@ -1759,6 +1802,7 @@ mod tests {
     fn dummy_topology() -> Topology {
         Topology {
             topology_type: TopologyType::Triangle,
+            nodes_per_element: None,
             number_of_elements: "2".into(),
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),

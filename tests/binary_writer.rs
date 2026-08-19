@@ -67,7 +67,9 @@ fn write_and_verify_binary() {
     assert_eq!(read_f64_le(&bin_dir.join("points.bin")), coords.to_vec());
     assert_eq!(
         read_u32_le(&bin_dir.join("cells.bin")),
-        vec![4, 0, 1, 2, 4, 0, 2, 3] // cell type tag (4=Triangle) prefixed per cell
+        // every cell is a Triangle, so the type is carried once as a uniform `TopologyType`
+        // rather than being prefixed per cell
+        vec![0, 1, 2, 0, 2, 3]
     );
 
     // Time-step attribute data.
