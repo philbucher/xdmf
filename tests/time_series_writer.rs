@@ -298,7 +298,7 @@ fn write_xdmf_only_point_mesh() {
             <Geometry GeometryType="XYZ">
                 <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
             </Geometry>
-            <Topology TopologyType="Polyvertex" NumberOfElements="17">
+            <Topology TopologyType="Polyvertex" NodesPerElement="1" NumberOfElements="17">
                 <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
             </Topology>
         </Grid>
@@ -362,7 +362,7 @@ fn write_xdmf_point_mesh() {
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Polyvertex" NumberOfElements="17">
+                <Topology TopologyType="Polyvertex" NodesPerElement="1" NumberOfElements="17">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="0"/>
@@ -374,7 +374,7 @@ fn write_xdmf_point_mesh() {
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Polyvertex" NumberOfElements="17">
+                <Topology TopologyType="Polyvertex" NodesPerElement="1" NumberOfElements="17">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="1"/>
@@ -386,7 +386,7 @@ fn write_xdmf_point_mesh() {
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Polyvertex" NumberOfElements="17">
+                <Topology TopologyType="Polyvertex" NodesPerElement="1" NumberOfElements="17">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="2"/>
@@ -454,7 +454,7 @@ fn write_xdmf_f32_points() {
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Mixed" NumberOfElements="1">
+                <Topology TopologyType="Triangle" NumberOfElements="1">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="0"/>
@@ -467,7 +467,7 @@ fn write_xdmf_f32_points() {
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="3 3" NumberType="Float" Format="XML" Precision="4">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0</DataItem>
-        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>
+        <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -519,7 +519,7 @@ fn write_xdmf_integer_data() {
                 <Geometry GeometryType="XYZ">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
                 </Geometry>
-                <Topology TopologyType="Mixed" NumberOfElements="1">
+                <Topology TopologyType="Triangle" NumberOfElements="1">
                     <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
                 </Topology>
                 <Time Value="0"/>
@@ -538,7 +538,7 @@ fn write_xdmf_integer_data() {
             </Grid>
         </Grid>
         <DataItem Name="coords" Dimensions="3 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0</DataItem>
-        <DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>
+        <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
     <Information Name="version" Value="0.1.3"/>
@@ -703,27 +703,27 @@ fn write_mesh_connectivity_index_types() {
 
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, u32),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">4 0 1 2</DataItem>"#
+        r#"<DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="4">0 1 2</DataItem>"#
     );
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, u64),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="XML" Precision="8">4 0 1 2</DataItem>"#
+        r#"<DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>"#
     );
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, i32),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="Int" Format="XML" Precision="4">4 0 1 2</DataItem>"#
+        r#"<DataItem Name="connectivity" Dimensions="3" NumberType="Int" Format="XML" Precision="4">0 1 2</DataItem>"#
     );
     // i64 is the one type that lifts the u32::MAX limit on the mesh size, and it too is written
     // at its own width
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::AsciiInline, i64),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="Int" Format="XML" Precision="8">4 0 1 2</DataItem>"#
+        r#"<DataItem Name="connectivity" Dimensions="3" NumberType="Int" Format="XML" Precision="8">0 1 2</DataItem>"#
     );
 
     // ...while Binary takes the 32-bit types only, since ParaView misreads 64-bit integers there
     assert_eq!(
         connectivity_line_for!(xdmf::DataStorage::Binary, u32),
-        r#"<DataItem Name="connectivity" Dimensions="4" NumberType="UInt" Format="Binary" Precision="4" Endian="Little">test_output.bin/cells.bin</DataItem>"#
+        r#"<DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="Binary" Precision="4" Endian="Little">test_output.bin/cells.bin</DataItem>"#
     );
 }
 

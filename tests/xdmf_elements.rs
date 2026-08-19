@@ -24,6 +24,7 @@ fn basic_grid() {
         },
         Topology {
             topology_type: TopologyType::Triangle,
+            nodes_per_element: None,
             number_of_elements: "2".into(),
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
@@ -84,6 +85,7 @@ fn hierarchical_tree_grid() {
                         },
                         Topology {
                             topology_type: TopologyType::Triangle,
+                            nodes_per_element: None,
                             number_of_elements: "2".into(),
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![6])),
@@ -106,6 +108,7 @@ fn hierarchical_tree_grid() {
                         },
                         Topology {
                             topology_type: TopologyType::Quadrilateral,
+                            nodes_per_element: None,
                             number_of_elements: "2".into(),
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![8])),
@@ -130,6 +133,7 @@ fn hierarchical_tree_grid() {
                 },
                 Topology {
                     topology_type: TopologyType::Mixed,
+                    nodes_per_element: None,
                     number_of_elements: "2".into(),
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![9])),
@@ -209,6 +213,7 @@ fn mixed_grid() {
         },
         Topology {
             topology_type: TopologyType::Mixed,
+            nodes_per_element: None,
             number_of_elements: "2".into(),
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![9])),
@@ -267,6 +272,7 @@ fn spatial_collection_grid() {
                 },
                 Topology {
                     topology_type: TopologyType::Triangle,
+                    nodes_per_element: None,
                     number_of_elements: "2".into(),
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![6])),
@@ -289,6 +295,7 @@ fn spatial_collection_grid() {
                 },
                 Topology {
                     topology_type: TopologyType::Quadrilateral,
+                    nodes_per_element: None,
                     number_of_elements: "2".into(),
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![8])),
@@ -311,6 +318,7 @@ fn spatial_collection_grid() {
                 },
                 Topology {
                     topology_type: TopologyType::Mixed,
+                    nodes_per_element: None,
                     number_of_elements: "2".into(),
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![9])),
@@ -405,6 +413,7 @@ fn temporal_collection_grid() {
                     }),
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
+                        nodes_per_element: None,
                         number_of_elements: "2".into(),
                         data_item: DataItem::new_reference(&data_items[1], "/Xdmf/Domain/DataItem"),
                     }),
@@ -447,6 +456,7 @@ fn temporal_collection_grid() {
                     }),
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
+                        nodes_per_element: None,
                         number_of_elements: "2".into(),
                         data_item: DataItem::new_reference(&data_items[1], "/Xdmf/Domain/DataItem"),
                     }),
@@ -489,6 +499,7 @@ fn temporal_collection_grid() {
                     }),
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
+                        nodes_per_element: None,
                         number_of_elements: "2".into(),
                         data_item: DataItem::new_reference(&data_items[1], "/Xdmf/Domain/DataItem"),
                     }),
