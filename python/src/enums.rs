@@ -16,7 +16,7 @@ use pyo3::{exceptions::PyValueError, prelude::*};
     hash,
     from_py_object
 )]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct PyDataStorage(xdmf::DataStorage);
 
 #[pymethods]
@@ -95,7 +95,7 @@ macro_rules! cell_types {
         /// `extract_cell_types`) is an equivalent, cheaper-to-produce alternative to a list of
         /// these.
         #[pyclass(name = "CellType", module = "xdmf", eq, eq_int, frozen, hash, from_py_object)]
-        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         #[repr(u8)]
         pub enum PyCellType {
             $($variant = $code,)+
@@ -229,7 +229,7 @@ pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::C
     hash,
     from_py_object
 )]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct PyDataAttribute(xdmf::DataAttribute);
 
 #[pymethods]

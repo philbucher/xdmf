@@ -7,6 +7,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
@@ -30,6 +31,15 @@ use crate::{
 pub struct TimeSeriesWriter {
     xdmf_file_name: PathBuf,
     writer: Box<dyn DataWriter>,
+}
+
+impl fmt::Debug for TimeSeriesWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimeSeriesWriter")
+            .field("xdmf_file_name", &self.xdmf_file_name)
+            .field("data_storage", &self.writer.data_storage())
+            .finish()
+    }
 }
 
 impl TimeSeriesWriter {
@@ -335,6 +345,26 @@ pub struct TimeSeriesDataWriter {
     num_cells: usize,
 }
 
+impl fmt::Debug for TimeSeriesDataWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimeSeriesDataWriter")
+            .field("xdmf_file_name", &self.xdmf_file_name)
+            .field("data_storage", &self.writer.data_storage())
+            .field("num_points", &self.num_points)
+            .field("num_cells", &self.num_cells)
+            // in the order they were written, which the `written_times` map does not keep
+            .field(
+                "written_times",
+                &self
+                    .attributes
+                    .iter()
+                    .map(|(time, _)| time.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl TimeSeriesDataWriter {
     /// Write one time step, passing a [`TimeStep`] to `write_step` to write its data into.
     ///
@@ -551,6 +581,22 @@ pub struct TimeStep<'a> {
     initialized: bool,
     // How many arrays have been handed to the backend so far this step
     next_array_index: usize,
+}
+
+impl fmt::Debug for TimeStep<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimeStep")
+            .field("time", &self.time)
+            .field("point_data", &sorted_names(&self.point_names))
+            .field("cell_data", &sorted_names(&self.cell_names))
+            .finish_non_exhaustive()
+    }
+}
+
+fn sorted_names(names: &HashSet<String>) -> Vec<&str> {
+    let mut names: Vec<&str> = names.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    names
 }
 
 impl TimeStep<'_> {

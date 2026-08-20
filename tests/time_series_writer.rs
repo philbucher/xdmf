@@ -880,3 +880,48 @@ fn write_data_escapes_xml_special_characters_in_a_name() {
     }
     pretty_assertions::assert_eq!(names, vec![name.to_string()]);
 }
+
+#[test]
+fn debug_output_summarizes_the_writers_without_their_data() {
+    let coords = [0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline).unwrap();
+
+    let writer_debug = format!("{writer:?}");
+    assert!(writer_debug.contains("AsciiInline"), "{writer_debug}");
+
+    let mut ts_writer = writer
+        .write_mesh(&coords, &[0_u64, 1, 2], &[xdmf::CellType::Triangle])
+        .unwrap();
+
+    ts_writer
+        .write_time_step("0.5", |step| {
+            step.point_data("temperature", xdmf::DataAttribute::Scalar, &[1.0, 2.0, 3.0])?;
+
+            // a step names the attributes it has taken, not their values
+            let step_debug = format!("{step:?}");
+            assert!(step_debug.contains(r#"time: "0.5""#), "{step_debug}");
+            assert!(
+                step_debug.contains(r#"point_data: ["temperature"]"#),
+                "{step_debug}"
+            );
+            assert!(step_debug.contains("cell_data: []"), "{step_debug}");
+
+            Ok::<(), xdmf::Error>(())
+        })
+        .unwrap();
+
+    let debug = format!("{ts_writer:?}");
+    assert!(debug.contains("num_points: 3"), "{debug}");
+    assert!(debug.contains("num_cells: 1"), "{debug}");
+    assert!(debug.contains(r#"written_times: ["0.5"]"#), "{debug}");
+
+    // The point of the manual impls: the light data is summarized, not dumped. With
+    // `AsciiInline` the `DataItem`s hold the values themselves, so a derived `Debug` would print
+    // the whole time series -- "1e0" is how the temperature value above is written.
+    assert!(debug.contains(".."), "{debug}");
+    assert!(!debug.contains("1e0"), "{debug}");
+}

@@ -95,6 +95,9 @@ used_underscore_items = "warn"
 use_debug = "warn"
 use_self = "warn"
 
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+
 [package]
 authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]
