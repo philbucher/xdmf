@@ -72,15 +72,13 @@ fn write_and_verify_binary() {
         vec![0, 1, 2, 0, 2, 3]
     );
 
-    // Time-step attribute data.
+    // Time-step attribute data, named by the order it was written in -- "temperature" is the
+    // step's first array, "region_id" its second.
     assert_eq!(
-        read_f64_le(&bin_dir.join("data_t_0_point_data_temperature.bin")),
+        read_f64_le(&bin_dir.join("data_t_0_0.bin")),
         vec![10.0, 11.0, 12.0, 13.0]
     );
-    assert_eq!(
-        read_u32_le(&bin_dir.join("data_t_0_cell_data_region_id.bin")),
-        vec![100, 200]
-    );
+    assert_eq!(read_u32_le(&bin_dir.join("data_t_0_1.bin")), vec![100, 200]);
 }
 
 #[test]
@@ -127,7 +125,7 @@ fn binary_rejects_64_bit_integer_data() {
     // the rejected value is caught before any file for this step is opened, so nothing is left
     // on disk that the XDMF file doesn't reference
     let bin_dir = xdmf_file_path.with_extension("bin");
-    assert!(!bin_dir.join("data_t_0_cell_data_region_id.bin").exists());
+    assert!(!bin_dir.join("data_t_0_0.bin").exists());
 
     // the writer must not be left poisoned by the failed step: a following valid step succeeds
     xdmf_writer
@@ -187,14 +185,9 @@ fn write_and_verify_binary_signed_integers() {
     );
 
     let bin_dir = xdmf_file_path.with_extension("bin");
+    assert_eq!(read_i32_le(&bin_dir.join("data_t_0_0.bin")), vec![-2, 0, 2]);
     assert_eq!(
-        read_i32_le(&bin_dir.join("data_t_0_point_data_level_i32.bin")),
-        vec![-2, 0, 2]
-    );
-    assert_eq!(
-        std::fs::read(bin_dir.join("data_t_0_point_data_flag_u32.bin"))
-            .unwrap()
-            .len(),
+        std::fs::read(bin_dir.join("data_t_0_1.bin")).unwrap().len(),
         12,
         "3 values at 4 bytes each, with nothing widened or narrowed on the way out"
     );
@@ -251,7 +244,7 @@ fn write_and_verify_binary_f32() {
 
     float_cmp::assert_approx_eq!(
         &[f32],
-        &read_f32_le(&bin_dir.join("data_t_0_point_data_temperature.bin")),
+        &read_f32_le(&bin_dir.join("data_t_0_0.bin")),
         &[10.5, 11.5, 12.5, 13.5]
     );
 }

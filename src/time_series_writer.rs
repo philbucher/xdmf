@@ -453,6 +453,7 @@ impl TimeSeriesDataWriter {
             point_names: HashSet::new(),
             cell_names: HashSet::new(),
             initialized: false,
+            next_array_index: 0,
         };
 
         match write_step(&mut step) {
@@ -548,6 +549,8 @@ pub struct TimeStep<'a> {
     // Whether `write_data_initialize` has run. Deferred to the first attribute so that a step
     // which never writes anything leaves no trace at all
     initialized: bool,
+    // How many arrays have been handed to the backend so far this step
+    next_array_index: usize,
 }
 
 impl TimeStep<'_> {
@@ -588,8 +591,8 @@ impl TimeStep<'_> {
         if !is_valid_data_name(name) {
             return Err(Error::InvalidData {
                 reason: format!(
-                    "data name '{name}' of {label} is not valid, must be non-empty and contain \
-                     only alphanumeric characters, underscores or dashes"
+                    "data name '{name}' of {label} is not valid, must contain a \
+                     non-whitespace character and must not contain control characters"
                 ),
             });
         }
@@ -638,6 +641,9 @@ impl TimeStep<'_> {
             self.initialized = true;
         }
 
+        let index = self.next_array_index;
+        self.next_array_index += 1;
+
         let format = self.writer.writer.format();
         let data_item = DataItem {
             name: None,
@@ -646,7 +652,7 @@ impl TimeStep<'_> {
             format: Some(format),
             precision: Some(values.precision()),
             endian: format.endian(),
-            data: self.writer.writer.write_data(name, center, &values)?,
+            data: self.writer.writer.write_data(index, &values)?,
             reference: None,
         };
 
@@ -716,23 +722,20 @@ impl TimeStep<'_> {
     }
 }
 
-// The labels below name the data category in error messages as a plain string instead of going
-// through an `attribute::Center`: `attribute::center_to_data_tag` names HDF5 groups and on-disk
-// file segments, and error prose should not change when that storage layout is renamed (or vice
-// versa).
-
 /// Label for point data in user-facing error messages, named after [`TimeStep::point_data`].
 const POINT_DATA: &str = "point_data";
 /// Label for cell data in user-facing error messages, named after [`TimeStep::cell_data`].
 const CELL_DATA: &str = "cell_data";
 
+/// Whether a name the caller chose for a data field can be written.
 fn is_valid_data_name(name: &str) -> bool {
-    if name.is_empty() {
+    // blank rather than merely empty: a whitespace-only name labels the array with nothing at all
+    if name.trim().is_empty() {
         return false;
     }
 
-    name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    // `is_control` also covers the null character, which is invalid in XML and in a file name alike
+    !name.chars().any(char::is_control)
 }
 
 /// Characters not allowed in the final path component of an XDMF file name.
@@ -1301,7 +1304,7 @@ mod tests {
     #[test]
     fn write_time_step_rejects_non_finite_times() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let mut writer = flaky_writer(tmp_dir.path().join("non_finite_times.xdmf2"), None);
+        let mut writer = flaky_writer(tmp_dir.path().join("non_finite_times.xdmf2"), None, None);
 
         // all of these parse as a float, the last one by overflowing to infinity
         for time in ["NaN", "inf", "-infinity", "1e400"] {
@@ -1321,7 +1324,7 @@ mod tests {
     #[test]
     fn write_time_step_treats_negative_zero_as_the_time_already_written() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let mut writer = flaky_writer(tmp_dir.path().join("negative_zero.xdmf2"), None);
+        let mut writer = flaky_writer(tmp_dir.path().join("negative_zero.xdmf2"), None, None);
 
         writer
             .write_time_step("0.0", |step| {
@@ -1383,7 +1386,7 @@ mod tests {
         // the heavy data of the abandoned attribute was removed again, rather than being left
         // behind with nothing in the XDMF file referencing it
         let txt_dir = xdmf_file_path.with_extension("txt");
-        assert!(!txt_dir.join("data_t_0.1_point_data_abandoned.txt").exists());
+        assert!(!txt_dir.join("data_t_0.1_0.txt").exists());
 
         // the backing writer is not poisoned: the same time can be used again (the abandoned
         // step never consumed it), and so can a different one
@@ -1717,12 +1720,14 @@ mod tests {
 
         let res = writer.write_time_step("0.0", |step| {
             step.cell_data("cell_data_ten", DataAttribute::Scalar, vec![0.0; 1])?;
-            step.point_data("cell[_data]_ten", DataAttribute::Scalar, vec![0.0; 1])
+            // Only control characters are rejected
+            step.point_data("cell\u{9}data_ten", DataAttribute::Scalar, vec![0.0; 1])
         });
         std::assert_matches!(
             res.unwrap_err(),
             Error::InvalidData { reason }
-                if reason.contains("data name 'cell[_data]_ten' of point_data is not valid")
+                if reason.contains("of point_data is not valid")
+                    && reason.contains("control characters")
         );
     }
 
@@ -1731,34 +1736,39 @@ mod tests {
         assert!(is_valid_data_name("valid_name"));
         assert!(is_valid_data_name("valid-name"));
         assert!(is_valid_data_name("valid_name_123"));
-        assert!(!is_valid_data_name("")); // empty name
-        assert!(!is_valid_data_name("invalid name")); // space
-        assert!(!is_valid_data_name("invalid@name")); // special character
-        assert!(!is_valid_data_name("invalid#name")); // special character
-        assert!(!is_valid_data_name("invalid$name")); // special character
-        assert!(!is_valid_data_name("invalid%name")); // special character
-        assert!(!is_valid_data_name("invalid^name")); // special character
-        assert!(!is_valid_data_name("invalid&name")); // special character
-        assert!(!is_valid_data_name("invalid*name")); // special character
-        assert!(!is_valid_data_name("invalid(name")); // special character
-        assert!(!is_valid_data_name("invalid)name")); // special character
-        assert!(!is_valid_data_name("invalid+name")); // special character
-        assert!(!is_valid_data_name("invalid=name")); // special character
-        assert!(!is_valid_data_name("invalid{name")); // special character
-        assert!(!is_valid_data_name("invalid}name")); // special character
-        assert!(!is_valid_data_name("invalid[name")); // special character
-        assert!(!is_valid_data_name("invalid]name")); // special character
-        assert!(!is_valid_data_name("invalid|name")); // special character
-        assert!(!is_valid_data_name("invalid:name")); // special character
-        assert!(!is_valid_data_name("invalid;name")); // special character
-        assert!(!is_valid_data_name("invalid'")); // single quote
-        assert!(!is_valid_data_name("invalid\"name")); // double quote
-        assert!(!is_valid_data_name("invalid,name")); // comma
-        assert!(!is_valid_data_name("invalid.name")); // dot
-        assert!(!is_valid_data_name("invalid?name")); // question mark
-        assert!(!is_valid_data_name("invalid/name")); // forward slash
-        assert!(!is_valid_data_name("invalid\\name")); // backslash
+
+        // names as they occur in real solver output
+        assert!(is_valid_data_name("Quantity('SOOT DENSITY')"));
+        assert!(is_valid_data_name("U.component_0"));
+        assert!(is_valid_data_name("stress [Pa]"));
+        assert!(is_valid_data_name("T_max, avg"));
+        assert!(is_valid_data_name("\u{394}\u{3b8}")); // non-ASCII
+
+        // Accepted because a name is only ever light data: it reaches an XML attribute and
+        // nothing else.
+        assert!(is_valid_data_name("a/b"));
+        assert!(is_valid_data_name("a\\b"));
+        assert!(is_valid_data_name("a:b"));
+        assert!(is_valid_data_name("a#b"));
+        assert!(is_valid_data_name("a%b"));
+        assert!(is_valid_data_name("a*b"));
+        assert!(is_valid_data_name("a?b"));
+        assert!(is_valid_data_name("a\"b"));
+        assert!(is_valid_data_name("a<b>c"));
+        assert!(is_valid_data_name("a|b"));
+
+        // surrounding whitespace is kept, it still leaves something to read
+        assert!(is_valid_data_name(" padded name "));
+
+        // only a blank name and the characters XML cannot represent at all
+        assert!(!is_valid_data_name(""));
+        assert!(!is_valid_data_name(" ")); // blank
+        assert!(!is_valid_data_name("   ")); // blank
+        assert!(!is_valid_data_name("\u{a0}")); // blank, non-ASCII whitespace
         assert!(!is_valid_data_name("invalid\0name")); // null-char
+        assert!(!is_valid_data_name("invalid\nname")); // control character
+        assert!(!is_valid_data_name("invalid\tname")); // control character
+        assert!(!is_valid_data_name("invalid\u{7f}name")); // delete
     }
 
     #[test]
@@ -1837,13 +1847,8 @@ mod tests {
                 ))
             }
 
-            fn write_data(
-                &mut self,
-                name: &str,
-                _center: attribute::Center,
-                _data: &Values<'_>,
-            ) -> Result<DataContent> {
-                Ok(DataContent::Raw(format!("data_for_{name}")))
+            fn write_data(&mut self, index: usize, _data: &Values<'_>) -> Result<DataContent> {
+                Ok(DataContent::Raw(format!("data_for_{index}")))
             }
         }
 
@@ -1889,7 +1894,7 @@ mod tests {
                 </Topology>
                 <Time Value="0.0"/>
                 <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
-                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_0</DataItem>
                 </Attribute>
             </Grid>
             <Grid Name="time_series-t1.0" GridType="Uniform">
@@ -1901,7 +1906,7 @@ mod tests {
                 </Topology>
                 <Time Value="1.0"/>
                 <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
-                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_0</DataItem>
                 </Attribute>
             </Grid>
             <Grid Name="time_series-t2.0" GridType="Uniform">
@@ -1913,7 +1918,7 @@ mod tests {
                 </Topology>
                 <Time Value="2.0"/>
                 <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
-                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_0</DataItem>
                 </Attribute>
             </Grid>
             <Grid Name="time_series-t10.0" GridType="Uniform">
@@ -1925,7 +1930,7 @@ mod tests {
                 </Topology>
                 <Time Value="10.0"/>
                 <Attribute Name="scalar_data" AttributeType="Scalar" Center="Node">
-                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_scalar_data</DataItem>
+                    <DataItem Dimensions="0" NumberType="Float" Format="XML" Precision="8">data_for_0</DataItem>
                 </Attribute>
             </Grid>
         </Grid>
@@ -1944,11 +1949,14 @@ mod tests {
     }
 
     // A backend that fails on demand, to exercise the failure paths of a time step without
-    // depending on a real storage format: writing the attribute named "boom" fails, and so does
-    // finalizing the time given as `fail_finalize_at`.
+    // depending on a real storage format: writing the array at `fail_at_index` fails, and so does
+    // finalizing the time given as `fail_finalize_at`. `fail_at_index` fires only once (it is
+    // cleared on use) since the index it names is scoped to one step -- a later step's array of
+    // the same index must not fail too, or a retried step could never succeed.
     struct FlakyWriter {
         write_time: Option<String>,
         fail_finalize_at: Option<&'static str>,
+        fail_at_index: Option<usize>,
     }
 
     impl DataWriter for FlakyWriter {
@@ -1971,20 +1979,16 @@ mod tests {
             ))
         }
 
-        fn write_data(
-            &mut self,
-            name: &str,
-            _center: attribute::Center,
-            _data: &Values<'_>,
-        ) -> Result<DataContent> {
-            if name == "boom" {
+        fn write_data(&mut self, index: usize, _data: &Values<'_>) -> Result<DataContent> {
+            if self.fail_at_index == Some(index) {
+                self.fail_at_index = None;
                 return Err(Error::Io {
                     operation: "writing data (simulated)",
                     path: PathBuf::from("boom"),
                     source: std::io::Error::other("simulated mid-write failure"),
                 });
             }
-            Ok(DataContent::Raw(format!("data_for_{name}")))
+            Ok(DataContent::Raw(format!("data_for_{index}")))
         }
 
         fn write_data_initialize(&mut self, time: &str) -> Result<()> {
@@ -2029,12 +2033,14 @@ mod tests {
     fn flaky_writer(
         xdmf_file_name: PathBuf,
         fail_finalize_at: Option<&'static str>,
+        fail_at_index: Option<usize>,
     ) -> TimeSeriesDataWriter {
         TimeSeriesDataWriter {
             xdmf_file_name,
             writer: Box::new(FlakyWriter {
                 write_time: None,
                 fail_finalize_at,
+                fail_at_index,
             }),
             grid: Grid::new_uniform("test", dummy_geometry(), dummy_topology()),
             data_items: Vec::new(),
@@ -2053,7 +2059,11 @@ mod tests {
         // `TimeSeriesDataWriter::write_time_step` is generic and backend-agnostic, so it needs its own
         // backend-agnostic regression test).
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let mut writer = flaky_writer(tmp_dir.path().join("mid_write_failure.xdmf2"), None);
+        let mut writer = flaky_writer(
+            tmp_dir.path().join("mid_write_failure.xdmf2"),
+            None,
+            Some(1),
+        );
 
         // "ok" is written successfully before "boom" fails, so this genuinely fails partway
         // through the step, after `write_data_initialize` already ran.
@@ -2077,7 +2087,7 @@ mod tests {
     #[test]
     fn write_time_step_discards_when_the_closure_swallows_an_attribute_error() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None);
+        let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None, Some(0));
 
         // The closure ignores the failure of "boom" and returns `Ok`, so the step ends up with
         // no attributes even though the failed write already initialized the backend -- the
@@ -2107,7 +2117,7 @@ mod tests {
     #[test]
     fn write_time_step_keeps_a_step_whose_closure_swallowed_an_attribute_error() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None);
+        let mut writer = flaky_writer(tmp_dir.path().join("swallowed_error.xdmf2"), None, Some(1));
 
         // As above, but one attribute did make it: a step holds exactly what was written
         // successfully, so swallowing the error of "boom" writes the step without it rather
@@ -2130,7 +2140,11 @@ mod tests {
     #[test]
     fn write_time_step_discards_when_finalizing_fails() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();
-        let mut writer = flaky_writer(tmp_dir.path().join("finalize_failure.xdmf2"), Some("0.0"));
+        let mut writer = flaky_writer(
+            tmp_dir.path().join("finalize_failure.xdmf2"),
+            Some("0.0"),
+            None,
+        );
 
         // every attribute is written, but completing the step fails
         let res = writer.write_time_step("0.0", |step| {

@@ -10,10 +10,7 @@ use crate::{
     DataStorage, DataWriter, Error, Result,
     error::io_ctx,
     values::Values,
-    xdmf_elements::{
-        attribute,
-        data_item::{DataContent, Format},
-    },
+    xdmf_elements::data_item::{DataContent, Format},
 };
 
 /// Writes uncompressed, little-endian raw binary data to separate files, referenced from the
@@ -96,21 +93,13 @@ impl DataWriter for BinaryWriter {
         ))
     }
 
-    fn write_data(
-        &mut self,
-        name: &str,
-        center: attribute::Center,
-        data: &Values<'_>,
-    ) -> Result<DataContent> {
+    fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
         let time = self
             .write_time
             .as_ref()
             .ok_or(Error::Internal("writing data was not initialized"))?;
 
-        let data_file_name = format!(
-            "data_t_{time}_{}_{name}.bin",
-            attribute::center_to_data_tag(center)
-        );
+        let data_file_name = format!("data_t_{time}_{index}.bin");
         let data_path = self.bin_files_dir.join(&data_file_name);
 
         let data_file =
@@ -377,21 +366,11 @@ mod tests {
         writer.write_data_initialize("1.5").unwrap();
 
         let data: Values = vec![1.0, -2.0, 3.5].into();
-        let content = writer
-            .write_data("temperature", attribute::Center::Node, &data)
-            .unwrap();
+        let content = writer.write_data(0, &data).unwrap();
 
-        assert_eq!(
-            content,
-            "test.bin/data_t_1.5_point_data_temperature.bin".into()
-        );
+        assert_eq!(content, "test.bin/data_t_1.5_0.bin".into());
 
-        let bytes = std::fs::read(
-            writer
-                .bin_files_dir
-                .join("data_t_1.5_point_data_temperature.bin"),
-        )
-        .unwrap();
+        let bytes = std::fs::read(writer.bin_files_dir.join("data_t_1.5_0.bin")).unwrap();
         let mut expected = Vec::new();
         for v in [1.0_f64, -2.0, 3.5] {
             expected.extend_from_slice(&v.to_le_bytes());
@@ -414,13 +393,7 @@ mod tests {
             .unwrap();
 
         writer.write_data_initialize("0.1").unwrap();
-        writer
-            .write_data(
-                "temperature",
-                attribute::Center::Node,
-                &vec![1.5_f32, 2.5].into(),
-            )
-            .unwrap();
+        writer.write_data(0, &vec![1.5_f32, 2.5].into()).unwrap();
 
         let read_f32 = |path: &Path| -> Vec<f32> {
             std::fs::read(path)
@@ -435,9 +408,7 @@ mod tests {
         assert_eq!(std::fs::metadata(&points_file).unwrap().len(), 3 * 4);
         float_cmp::assert_approx_eq!(&[f32], &read_f32(&points_file), &points);
 
-        let data_file = writer
-            .bin_files_dir
-            .join("data_t_0.1_point_data_temperature.bin");
+        let data_file = writer.bin_files_dir.join("data_t_0.1_0.bin");
         float_cmp::assert_approx_eq!(&[f32], &read_f32(&data_file), &[1.5, 2.5]);
     }
 
@@ -453,16 +424,12 @@ mod tests {
         );
 
         let bin_dir = file_name.with_extension("bin");
-        let node_file = bin_dir.join("data_t_0.5_point_data_discarded.bin");
-        let cell_file = bin_dir.join("data_t_0.5_cell_data_discarded.bin");
+        let node_file = bin_dir.join("data_t_0.5_0.bin");
+        let cell_file = bin_dir.join("data_t_0.5_1.bin");
 
         writer.write_data_initialize("0.5").unwrap();
-        writer
-            .write_data("discarded", attribute::Center::Node, &vec![1.0, 2.0].into())
-            .unwrap();
-        writer
-            .write_data("discarded", attribute::Center::Cell, &vec![3.0].into())
-            .unwrap();
+        writer.write_data(0, &vec![1.0, 2.0].into()).unwrap();
+        writer.write_data(1, &vec![3.0].into()).unwrap();
         assert!(node_file.exists());
         assert!(cell_file.exists());
 
@@ -474,14 +441,13 @@ mod tests {
         assert!(writer.write_time.is_none());
         assert!(writer.step_files.is_empty());
 
-        // the time can be written again afterwards, and finalizing keeps what it wrote
+        // the time can be written again afterwards, and finalizing keeps what it wrote. A
+        // different array number, so the file it keeps is distinguishable from the discarded one
         writer.write_data_initialize("0.5").unwrap();
-        writer
-            .write_data("kept", attribute::Center::Node, &vec![4.0].into())
-            .unwrap();
+        writer.write_data(2, &vec![4.0].into()).unwrap();
         writer.write_data_finalize().unwrap();
 
-        assert!(bin_dir.join("data_t_0.5_point_data_kept.bin").exists());
+        assert!(bin_dir.join("data_t_0.5_2.bin").exists());
         assert!(!node_file.exists());
     }
 
@@ -493,13 +459,11 @@ mod tests {
 
         // a directory in the place of the data file makes `File::create` fail
         let bin_dir = file_name.with_extension("bin");
-        std::fs::create_dir(bin_dir.join("data_t_0.5_point_data_boom.bin")).unwrap();
+        std::fs::create_dir(bin_dir.join("data_t_0.5_0.bin")).unwrap();
 
         writer.write_data_initialize("0.5").unwrap();
         std::assert_matches!(
-            writer
-                .write_data("boom", attribute::Center::Node, &vec![1.0].into())
-                .unwrap_err(),
+            writer.write_data(0, &vec![1.0].into()).unwrap_err(),
             Error::Io { operation, .. } if operation == "creating data file"
         );
 
@@ -522,8 +486,7 @@ mod tests {
             Error::Internal("writing data was not initialized")
         );
 
-        let res_write =
-            writer.write_data("test_data", attribute::Center::Node, &vec![1.0, 2.0].into());
+        let res_write = writer.write_data(0, &vec![1.0, 2.0].into());
         std::assert_matches!(
             res_write.unwrap_err(),
             Error::Internal("writing data was not initialized")

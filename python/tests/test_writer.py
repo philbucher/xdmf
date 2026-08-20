@@ -64,10 +64,11 @@ def test_write_mesh_and_data_binary(tmp_path):
     points_bytes = (bin_dir / "points.bin").read_bytes()
     assert struct.unpack("<12d", points_bytes) == tuple(SQUARE_COORDS)
 
-    temperature_bytes = (bin_dir / "data_t_0_point_data_temperature.bin").read_bytes()
+    # "temperature" (point data) is the step's first array, "region_id" (cell data) its second
+    temperature_bytes = (bin_dir / "data_t_0_0.bin").read_bytes()
     assert struct.unpack("<4d", temperature_bytes) == tuple(TEMPERATURE)
 
-    region_bytes = (bin_dir / "data_t_0_cell_data_region_id.bin").read_bytes()
+    region_bytes = (bin_dir / "data_t_0_1.bin").read_bytes()
     assert struct.unpack("<2I", region_bytes) == tuple(REGION_ID)
 
 
@@ -83,13 +84,13 @@ def test_write_mesh_and_data_hdf5_single_file(tmp_path):
 
     xml = file_path.with_suffix(".xdmf2").read_text()
     assert 'Format="HDF"' in xml
-    assert "test_output.h5:data/t_0/point_data/temperature" in xml
-    assert "test_output.h5:data/t_0/cell_data/region_id" in xml
+    assert "test_output.h5:data/t_0/0" in xml
+    assert "test_output.h5:data/t_0/1" in xml
 
     h5py = pytest.importorskip("h5py")
     with h5py.File(file_path.with_suffix(".h5")) as h5_file:
-        np.testing.assert_array_equal(h5_file["data/t_0/point_data/temperature"][:], TEMPERATURE)
-        np.testing.assert_array_equal(h5_file["data/t_0/cell_data/region_id"][:], REGION_ID)
+        np.testing.assert_array_equal(h5_file["data/t_0/0"][:], TEMPERATURE)
+        np.testing.assert_array_equal(h5_file["data/t_0/1"][:], REGION_ID)
 
 
 def test_write_mesh_and_data_hdf5_multiple_files(tmp_path):
@@ -104,7 +105,7 @@ def test_write_mesh_and_data_hdf5_multiple_files(tmp_path):
 
     h5py = pytest.importorskip("h5py")
     with h5py.File(file_path.with_suffix(".h5") / "data_t_0.h5") as h5_file:
-        np.testing.assert_array_equal(h5_file["point_data/temperature"][:], TEMPERATURE)
+        np.testing.assert_array_equal(h5_file["0"][:], TEMPERATURE)
 
 
 def test_hdf5_custom_deflate_level(tmp_path):
@@ -117,7 +118,7 @@ def test_hdf5_custom_deflate_level(tmp_path):
 
     h5py = pytest.importorskip("h5py")
     with h5py.File(file_path.with_suffix(".h5")) as h5_file:
-        dataset = h5_file["data/t_0/point_data/temperature"]
+        dataset = h5_file["data/t_0/0"]
         assert dataset.compression == "gzip"
         assert dataset.compression_opts == 3
         np.testing.assert_array_equal(dataset[:], TEMPERATURE)
@@ -507,7 +508,7 @@ def test_int64_beyond_the_ascii_range_is_fine_in_hdf5(tmp_path):
 
     h5py = pytest.importorskip("h5py")
     with h5py.File(file_path.with_suffix(".h5")) as h5_file:
-        np.testing.assert_array_equal(h5_file["data/t_0.0/point_data/big"][:], large)
+        np.testing.assert_array_equal(h5_file["data/t_0.0/0"][:], large)
 
 
 @pytest.mark.parametrize("dtype", [np.int64, np.uint64])
@@ -541,7 +542,7 @@ def test_close_releases_the_hdf5_file(tmp_path):
     h5py = pytest.importorskip("h5py")
     # if close() released the HDF5 file handle, another handle can open the file
     with h5py.File(file_path.with_suffix(".h5")) as h5_file:
-        np.testing.assert_array_equal(h5_file["data/t_0/point_data/temperature"][:], [1.0])
+        np.testing.assert_array_equal(h5_file["data/t_0/0"][:], [1.0])
 
 
 def test_write_mesh_result_is_usable_as_a_context_manager(tmp_path):

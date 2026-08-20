@@ -95,12 +95,9 @@ pub(crate) trait DataWriter: Send + Sync {
         cells: &Values<'_>,
     ) -> Result<(DataContent, DataContent)>;
 
-    fn write_data(
-        &mut self,
-        name: &str,
-        center: attribute::Center,
-        data: &Values<'_>,
-    ) -> Result<DataContent>;
+    /// Write one array of attribute data, identified by its position among all the arrays
+    /// written in the current time step.
+    fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent>;
 
     fn write_data_initialize(&mut self, _time: &str) -> Result<()> {
         Ok(())
