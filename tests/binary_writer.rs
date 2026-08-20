@@ -11,16 +11,20 @@ fn write_and_verify_binary() {
     fn read_f64_le(path: &std::path::Path) -> Vec<f64> {
         let bytes = std::fs::read(path).unwrap();
         bytes
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c))
             .collect()
     }
 
     fn read_u32_le(path: &std::path::Path) -> Vec<u32> {
         let bytes = std::fs::read(path).unwrap();
         bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect()
     }
 
@@ -140,8 +144,10 @@ fn write_and_verify_binary_signed_integers() {
     fn read_i32_le(path: &std::path::Path) -> Vec<i32> {
         let bytes = std::fs::read(path).unwrap();
         bytes
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes(*c))
             .collect()
     }
 
@@ -198,8 +204,10 @@ fn write_and_verify_binary_f32() {
     fn read_f32_le(path: &std::path::Path) -> Vec<f32> {
         let bytes = std::fs::read(path).unwrap();
         bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect()
     }
 

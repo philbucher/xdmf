@@ -396,7 +396,12 @@ fn write_fixture(
 
     Ok(ExpectedFixture {
         xdmf_file,
-        points: coords.chunks_exact(3).map(<[f64]>::to_vec).collect(),
+        points: coords
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| c.to_vec())
+            .collect(),
         cells: EXPECTED_CELLS
             .iter()
             .map(|(class_name, points)| ExpectedCell {
