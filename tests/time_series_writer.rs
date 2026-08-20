@@ -828,3 +828,55 @@ fn write_data_rejects_an_attribute_whose_size_is_zero_or_does_not_fit() {
         xdmf::Error::InvalidData { reason } if reason.contains("has no usable size")
     );
 }
+
+// A data name is only ever light data: it reaches an XML attribute value and nothing else, which
+// is what lets `point_data`/`cell_data` accept characters like `<` and `&`. That rests entirely on
+// the serializer escaping them, so it is asserted on the written file rather than taken on trust.
+#[test]
+fn write_data_escapes_xml_special_characters_in_a_name() {
+    let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0_f64];
+    let name = r#"a<b> & "c" 'd'"#;
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let mut data_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(&coords, &[0_u64, 1, 2], &[xdmf::CellType::Triangle])
+        .unwrap();
+
+    data_writer
+        .write_time_step("0.0", |step| {
+            step.point_data(name, xdmf::DataAttribute::Scalar, &[1.0, 2.0, 3.0])
+        })
+        .unwrap();
+
+    let read_xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+    assert!(
+        read_xdmf.contains(
+            r#"<Attribute Name="a&lt;b&gt; &amp; &quot;c&quot; 'd'" AttributeType="Scalar" Center="Node">"#
+        ),
+        "the name was not escaped as expected:\n{read_xdmf}"
+    );
+
+    // and a reader gets the name back unchanged, so the file is well-formed and not merely
+    // escaped somewhere
+    let mut reader = quick_xml::Reader::from_str(&read_xdmf);
+    let mut names = Vec::new();
+    loop {
+        match reader.read_event().unwrap() {
+            quick_xml::events::Event::Eof => break,
+            quick_xml::events::Event::Start(tag) if tag.name().as_ref() == b"Attribute" => {
+                let attribute = tag.try_get_attribute("Name").unwrap().unwrap();
+                names.push(
+                    attribute
+                        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                        .unwrap()
+                        .into_owned(),
+                );
+            }
+            _ => {}
+        }
+    }
+    pretty_assertions::assert_eq!(names, vec![name.to_string()]);
+}

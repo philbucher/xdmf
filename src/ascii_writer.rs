@@ -10,10 +10,7 @@ use crate::{
     DataStorage, DataWriter, Error, Result,
     error::io_ctx,
     values::Values,
-    xdmf_elements::{
-        attribute,
-        data_item::{DataContent, Format, XInclude},
-    },
+    xdmf_elements::data_item::{DataContent, Format, XInclude},
 };
 
 pub(crate) struct AsciiInlineWriter {}
@@ -44,12 +41,7 @@ impl DataWriter for AsciiInlineWriter {
         ))
     }
 
-    fn write_data(
-        &mut self,
-        _name: &str,
-        _center: attribute::Center,
-        data: &Values<'_>,
-    ) -> Result<DataContent> {
+    fn write_data(&mut self, _index: usize, data: &Values<'_>) -> Result<DataContent> {
         Ok(values_to_string(data).into())
     }
 }
@@ -137,21 +129,13 @@ impl DataWriter for AsciiWriter {
         ))
     }
 
-    fn write_data(
-        &mut self,
-        name: &str,
-        center: attribute::Center,
-        data: &Values<'_>,
-    ) -> Result<DataContent> {
+    fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
         let time = self
             .write_time
             .as_ref()
             .ok_or(Error::Internal("writing data was not initialized"))?;
 
-        let data_file_name = format!(
-            "data_t_{time}_{}_{name}.txt",
-            attribute::center_to_data_tag(center)
-        );
+        let data_file_name = format!("data_t_{time}_{index}.txt");
         let data_path = self.txt_files_dir.join(&data_file_name);
 
         let data_file =
@@ -495,9 +479,7 @@ mod tests {
         let raw_data = vec![1.0, 2.0, 3.0];
         let data = raw_data.into();
 
-        let result = writer
-            .write_data("dummy", attribute::Center::Node, &data)
-            .unwrap();
+        let result = writer.write_data(0, &data).unwrap();
         pretty_assertions::assert_eq!(result, "1e0 2e0 3e0".into());
     }
 
@@ -513,23 +495,15 @@ mod tests {
         );
 
         let txt_dir = file_name.with_extension("txt");
-        let node_file = txt_dir.join("data_t_0.5_point_data_discarded.txt");
-        let cell_file = txt_dir.join("data_t_0.5_cell_data_discarded.txt");
+        let node_file = txt_dir.join("data_t_0.5_0.txt");
+        let cell_file = txt_dir.join("data_t_0.5_1.txt");
 
         writer.write_data_initialize("0.5").unwrap();
         writer
-            .write_data(
-                "discarded",
-                attribute::Center::Node,
-                &Values::F64(vec![1.0, 2.0].into()),
-            )
+            .write_data(0, &Values::F64(vec![1.0, 2.0].into()))
             .unwrap();
         writer
-            .write_data(
-                "discarded",
-                attribute::Center::Cell,
-                &Values::F64(vec![3.0].into()),
-            )
+            .write_data(1, &Values::F64(vec![3.0].into()))
             .unwrap();
         assert!(node_file.exists());
         assert!(cell_file.exists());
@@ -542,18 +516,15 @@ mod tests {
         assert!(writer.write_time.is_none());
         assert!(writer.step_files.is_empty());
 
-        // the time can be written again afterwards, and finalizing keeps what it wrote
+        // the time can be written again afterwards, and finalizing keeps what it wrote. A
+        // different array number, so the file it keeps is distinguishable from the discarded one
         writer.write_data_initialize("0.5").unwrap();
         writer
-            .write_data(
-                "kept",
-                attribute::Center::Node,
-                &Values::F64(vec![4.0].into()),
-            )
+            .write_data(2, &Values::F64(vec![4.0].into()))
             .unwrap();
         writer.write_data_finalize().unwrap();
 
-        assert!(txt_dir.join("data_t_0.5_point_data_kept.txt").exists());
+        assert!(txt_dir.join("data_t_0.5_2.txt").exists());
         assert!(!node_file.exists());
     }
 
@@ -564,17 +535,13 @@ mod tests {
         let mut writer = AsciiWriter::new(&file_name).unwrap();
 
         let txt_dir = file_name.with_extension("txt");
-        let first_file = txt_dir.join("data_t_0.5_point_data_first.txt");
-        let second_file = txt_dir.join("data_t_0.5_point_data_second.txt");
+        let first_file = txt_dir.join("data_t_0.5_0.txt");
+        let second_file = txt_dir.join("data_t_0.5_1.txt");
 
         writer.write_data_initialize("0.5").unwrap();
-        for name in ["first", "second"] {
+        for index in [0, 1] {
             writer
-                .write_data(
-                    name,
-                    attribute::Center::Node,
-                    &Values::F64(vec![1.0].into()),
-                )
+                .write_data(index, &Values::F64(vec![1.0].into()))
                 .unwrap();
         }
 
@@ -601,16 +568,12 @@ mod tests {
 
         // a directory in the place of the data file makes `File::create` fail
         let txt_dir = file_name.with_extension("txt");
-        std::fs::create_dir(txt_dir.join("data_t_0.5_point_data_boom.txt")).unwrap();
+        std::fs::create_dir(txt_dir.join("data_t_0.5_0.txt")).unwrap();
 
         writer.write_data_initialize("0.5").unwrap();
         std::assert_matches!(
             writer
-                .write_data(
-                    "boom",
-                    attribute::Center::Node,
-                    &Values::F64(vec![1.0].into()),
-                )
+                .write_data(0, &Values::F64(vec![1.0].into()))
                 .unwrap_err(),
             Error::Io { operation, .. } if operation == "creating data file"
         );
@@ -634,11 +597,7 @@ mod tests {
             Error::Internal("writing data was not initialized")
         );
 
-        let res_write = writer.write_data(
-            "test_data",
-            attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0].into()),
-        );
+        let res_write = writer.write_data(0, &Values::F64(vec![1.0, 2.0].into()));
         std::assert_matches!(
             res_write.unwrap_err(),
             Error::Internal("writing data was not initialized")
@@ -739,21 +698,14 @@ mod tests {
 
         writer.write_data_initialize("0.1").unwrap();
         let raw_data = vec![1.0_f32, 2.0, 3.0];
-        let result = writer
-            .write_data("temperature", attribute::Center::Node, &raw_data.into())
-            .unwrap();
+        let result = writer.write_data(0, &raw_data.into()).unwrap();
 
         assert_eq!(
             result,
-            XInclude::new("test.txt/data_t_0.1_point_data_temperature.txt", true).into()
+            XInclude::new("test.txt/data_t_0.1_0.txt", true).into()
         );
         assert_eq!(
-            std::fs::read_to_string(
-                writer
-                    .txt_files_dir
-                    .join("data_t_0.1_point_data_temperature.txt")
-            )
-            .unwrap(),
+            std::fs::read_to_string(writer.txt_files_dir.join("data_t_0.1_0.txt")).unwrap(),
             "1e0 2e0 3e0\n"
         );
     }
@@ -779,9 +731,7 @@ mod tests {
         let raw_data = vec![1.0_f32, 2.0, 3.0];
         let data = raw_data.into();
 
-        let result = writer
-            .write_data("dummy", attribute::Center::Node, &data)
-            .unwrap();
+        let result = writer.write_data(0, &data).unwrap();
         pretty_assertions::assert_eq!(result, "1e0 2e0 3e0".into());
     }
 
@@ -791,14 +741,12 @@ mod tests {
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = AsciiWriter::new(file_name).unwrap();
         let write_time = "12.258";
-        let point_data_name = "dummy_point_data";
-        let cell_data_name = "some_cell_data";
-        let data_file_points = writer.txt_files_dir.join(format!(
-            "data_t_{write_time}_point_data_{point_data_name}.txt"
-        ));
-        let data_file_cells = writer.txt_files_dir.join(format!(
-            "data_t_{write_time}_cell_data_{cell_data_name}.txt"
-        ));
+        let data_file_points = writer
+            .txt_files_dir
+            .join(format!("data_t_{write_time}_0.txt"));
+        let data_file_cells = writer
+            .txt_files_dir
+            .join(format!("data_t_{write_time}_1.txt"));
         assert!(!data_file_points.exists());
         assert!(!data_file_cells.exists());
 
@@ -809,11 +757,7 @@ mod tests {
         // write points data
         let data_points = vec![0.0, 1.0, 2.0];
         let data_path_points = writer
-            .write_data(
-                point_data_name,
-                attribute::Center::Node,
-                &Values::F64(data_points.as_slice().into()),
-            )
+            .write_data(0, &Values::F64(data_points.as_slice().into()))
             .unwrap();
 
         assert!(data_file_points.exists());
@@ -822,11 +766,7 @@ mod tests {
         // write cell data
         let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
         let data_path_cells = writer
-            .write_data(
-                "some_cell_data",
-                attribute::Center::Cell,
-                &Values::F64(data_cells.as_slice().into()),
-            )
+            .write_data(1, &Values::F64(data_cells.as_slice().into()))
             .unwrap();
         assert!(data_file_points.exists());
         assert!(data_file_cells.exists());
@@ -835,15 +775,11 @@ mod tests {
 
         assert_eq!(
             data_path_points,
-            XInclude::new(
-                "test.txt/data_t_12.258_point_data_dummy_point_data.txt",
-                true
-            )
-            .into()
+            XInclude::new("test.txt/data_t_12.258_0.txt", true).into()
         );
         assert_eq!(
             data_path_cells,
-            XInclude::new("test.txt/data_t_12.258_cell_data_some_cell_data.txt", true).into()
+            XInclude::new("test.txt/data_t_12.258_1.txt", true).into()
         );
 
         // read back the data to verify

@@ -7,10 +7,7 @@ use hdf5::{File as H5File, Group as H5Group, H5Type};
 use crate::{
     DataStorage, DataWriter, Error, Result, Values,
     error::io_ctx,
-    xdmf_elements::{
-        attribute,
-        data_item::{DataContent, Format},
-    },
+    xdmf_elements::data_item::{DataContent, Format},
 };
 
 // Attach an operation description to an `hdf5::Error`, mirroring `error::io_ctx` for the
@@ -100,22 +97,13 @@ impl DataWriter for SingleFileHdf5Writer {
         ))
     }
 
-    fn write_data(
-        &mut self,
-        name: &str,
-        center: attribute::Center,
-        data: &Values<'_>,
-    ) -> Result<DataContent> {
+    fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
         let time = self
             .write_time
             .as_ref()
             .ok_or(Error::Internal("writing data was not initialized"))?;
 
-        let group_name = &format!(
-            "{}/{}",
-            time_group_name(time),
-            attribute::center_to_data_tag(center)
-        );
+        let group_name = &time_group_name(time);
 
         // Create the group if it does not exist
         if !self.h5_file.link_exists(group_name) {
@@ -129,7 +117,7 @@ impl DataWriter for SingleFileHdf5Writer {
                 .h5_file
                 .group(group_name)
                 .map_err(hdf5_ctx("opening data group"))?,
-            name,
+            &index.to_string(),
             data,
             self.deflate_level,
         )?;
@@ -237,36 +225,15 @@ impl DataWriter for MultipleFilesHdf5Writer {
         ))
     }
 
-    fn write_data(
-        &mut self,
-        name: &str,
-        center: attribute::Center,
-        data: &Values<'_>,
-    ) -> Result<DataContent> {
-        // also double check that the name does not already exist
-
+    fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
         let data_file = self
             .h5_data_file
             .as_ref()
             .ok_or(Error::Internal("writing data was not initialized"))?;
 
-        let group_name = attribute::center_to_data_tag(center);
-
-        // Create the group if it does not exist
-        if !data_file.link_exists(group_name) {
-            data_file
-                .create_group(group_name)
-                .map_err(hdf5_ctx("creating data group"))?;
-        }
-
-        let data_path = write_values(
-            &data_file
-                .group(group_name)
-                .map_err(hdf5_ctx("opening data group"))?,
-            name,
-            data,
-            self.deflate_level,
-        )?;
+        // Written directly at the file's root: the whole file already belongs to one time step,
+        // so there is nothing left to group by.
+        let data_path = write_values(data_file, &index.to_string(), data, self.deflate_level)?;
 
         let rel_file_name = parent_and_filename(data_file.filename()).ok_or(Error::Internal(
             "could not resolve parent directory and file name for an HDF5 path",
@@ -629,24 +596,15 @@ mod tests {
 
         let data_points = vec![0.0_f32, 1.0, 2.5];
         let data_path_points = writer
-            .write_data(
-                "dummy_point_data",
-                attribute::Center::Node,
-                &Values::F32(data_points.as_slice().into()),
-            )
+            .write_data(0, &Values::F32(data_points.as_slice().into()))
             .unwrap();
 
         writer.write_data_finalize().unwrap();
 
-        assert_eq!(
-            data_path_points,
-            ("test.h5:data/t_12.258/point_data/dummy_point_data").into()
-        );
+        assert_eq!(data_path_points, ("test.h5:data/t_12.258/0").into());
 
         let h5_file = H5File::open(h5_file_name).unwrap();
-        let dataset = h5_file
-            .dataset("data/t_12.258/point_data/dummy_point_data")
-            .unwrap();
+        let dataset = h5_file.dataset("data/t_12.258/0").unwrap();
 
         assert_eq!(dataset.dtype().unwrap().size(), 4);
 
@@ -665,18 +623,14 @@ mod tests {
 
         let data_cells = vec![-9.0_f32, 1.0, 2.0, 55.875];
         writer
-            .write_data(
-                "some_cell_data",
-                attribute::Center::Cell,
-                &Values::F32(data_cells.as_slice().into()),
-            )
+            .write_data(0, &Values::F32(data_cells.as_slice().into()))
             .unwrap();
 
         writer.write_data_finalize().unwrap();
 
         let h5_file =
             H5File::open(writer.h5_files_dir.join(format!("data_t_{write_time}.h5"))).unwrap();
-        let dataset = h5_file.dataset("cell_data/some_cell_data").unwrap();
+        let dataset = h5_file.dataset("0").unwrap();
 
         assert_eq!(dataset.dtype().unwrap().size(), 4);
 
@@ -698,11 +652,7 @@ mod tests {
             Error::Internal("writing data was not initialized")
         );
 
-        let res_write = writer.write_data(
-            "test_data",
-            attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0].into()),
-        );
+        let res_write = writer.write_data(0, &Values::F64(vec![1.0, 2.0].into()));
         std::assert_matches!(
             res_write.unwrap_err(),
             Error::Internal("writing data was not initialized")
@@ -734,11 +684,7 @@ mod tests {
 
         writer.write_data_initialize("0.5").unwrap();
         writer
-            .write_data(
-                "discarded",
-                attribute::Center::Node,
-                &Values::F64(vec![1.0, 2.0].into()),
-            )
+            .write_data(0, &Values::F64(vec![1.0, 2.0].into()))
             .unwrap();
         assert!(writer.h5_file.link_exists("data/t_0.5"));
 
@@ -748,23 +694,16 @@ mod tests {
         assert!(!writer.h5_file.link_exists("data/t_0.5"));
         assert!(writer.write_time.is_none());
 
-        // the time can be written again afterwards
+        // the time can be written again afterwards. A different array number, so the dataset it
+        // keeps is distinguishable from the discarded one
         writer.write_data_initialize("0.5").unwrap();
         writer
-            .write_data(
-                "kept",
-                attribute::Center::Node,
-                &Values::F64(vec![3.0, 4.0].into()),
-            )
+            .write_data(1, &Values::F64(vec![3.0, 4.0].into()))
             .unwrap();
         writer.write_data_finalize().unwrap();
 
-        assert!(writer.h5_file.link_exists("data/t_0.5/point_data/kept"));
-        assert!(
-            !writer
-                .h5_file
-                .link_exists("data/t_0.5/point_data/discarded")
-        );
+        assert!(writer.h5_file.link_exists("data/t_0.5/1"));
+        assert!(!writer.h5_file.link_exists("data/t_0.5/0"));
     }
 
     #[test]
@@ -782,11 +721,7 @@ mod tests {
 
         writer.write_data_initialize("0.5").unwrap();
         writer
-            .write_data(
-                "discarded",
-                attribute::Center::Node,
-                &Values::F64(vec![1.0, 2.0].into()),
-            )
+            .write_data(0, &Values::F64(vec![1.0, 2.0].into()))
             .unwrap();
         assert!(data_file.exists());
 
@@ -799,11 +734,7 @@ mod tests {
         // the time can be written again afterwards
         writer.write_data_initialize("0.5").unwrap();
         writer
-            .write_data(
-                "kept",
-                attribute::Center::Node,
-                &Values::F64(vec![3.0, 4.0].into()),
-            )
+            .write_data(0, &Values::F64(vec![3.0, 4.0].into()))
             .unwrap();
         writer.write_data_finalize().unwrap();
         assert!(data_file.exists());
@@ -822,11 +753,7 @@ mod tests {
             Error::Internal("writing data was not initialized")
         );
 
-        let res_write = writer.write_data(
-            "test_data",
-            attribute::Center::Node,
-            &Values::F64(vec![1.0, 2.0].into()),
-        );
+        let res_write = writer.write_data(0, &Values::F64(vec![1.0, 2.0].into()));
         std::assert_matches!(
             res_write.unwrap_err(),
             Error::Internal("writing data was not initialized")
@@ -954,45 +881,31 @@ mod tests {
         // write points data
         let data_points = vec![0.0, 1.0, 2.0];
         let data_path_points = writer
-            .write_data(
-                "dummy_point_data",
-                attribute::Center::Node,
-                &Values::F64(data_points.as_slice().into()),
-            )
+            .write_data(0, &Values::F64(data_points.as_slice().into()))
             .unwrap();
 
         // write cell data
         let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
         let data_path_cells = writer
-            .write_data(
-                "some_cell_data",
-                attribute::Center::Cell,
-                &Values::F64(data_cells.as_slice().into()),
-            )
+            .write_data(1, &Values::F64(data_cells.as_slice().into()))
             .unwrap();
 
         writer.write_data_finalize().unwrap();
 
-        assert_eq!(
-            data_path_points,
-            ("test.h5:data/t_12.258/point_data/dummy_point_data").into()
-        );
-        assert_eq!(
-            data_path_cells,
-            ("test.h5:data/t_12.258/cell_data/some_cell_data").into()
-        );
+        assert_eq!(data_path_points, ("test.h5:data/t_12.258/0").into());
+        assert_eq!(data_path_cells, ("test.h5:data/t_12.258/1").into());
 
         // read back the data to verify
         let h5_file = H5File::open(h5_file).unwrap();
         let points_data: Vec<f64> = h5_file
-            .dataset("data/t_12.258/point_data/dummy_point_data")
+            .dataset("data/t_12.258/0")
             .unwrap()
             .read()
             .unwrap()
             .to_vec();
 
         let cells_data: Vec<f64> = h5_file
-            .dataset("data/t_12.258/cell_data/some_cell_data")
+            .dataset("data/t_12.258/1")
             .unwrap()
             .read()
             .unwrap()
@@ -1017,49 +930,25 @@ mod tests {
         // write points data
         let data_points = vec![0.0, 1.0, 2.0];
         let data_path_points = writer
-            .write_data(
-                "dummy_point_data",
-                attribute::Center::Node,
-                &Values::F64(data_points.as_slice().into()),
-            )
+            .write_data(0, &Values::F64(data_points.as_slice().into()))
             .unwrap();
 
         // write cell data
         let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
         let data_path_cells = writer
-            .write_data(
-                "some_cell_data",
-                attribute::Center::Cell,
-                &Values::F64(data_cells.as_slice().into()),
-            )
+            .write_data(1, &Values::F64(data_cells.as_slice().into()))
             .unwrap();
 
         writer.write_data_finalize().unwrap();
         assert!(data_file.exists());
 
-        assert_eq!(
-            data_path_points,
-            ("test.h5/data_t_12.258.h5:point_data/dummy_point_data").into()
-        );
-        assert_eq!(
-            data_path_cells,
-            ("test.h5/data_t_12.258.h5:cell_data/some_cell_data").into()
-        );
+        assert_eq!(data_path_points, ("test.h5/data_t_12.258.h5:0").into());
+        assert_eq!(data_path_cells, ("test.h5/data_t_12.258.h5:1").into());
 
         // read back the data to verify
         let h5_file = H5File::open(&data_file).unwrap();
-        let points_data: Vec<f64> = h5_file
-            .dataset("point_data/dummy_point_data")
-            .unwrap()
-            .read()
-            .unwrap()
-            .to_vec();
-        let cells_data: Vec<f64> = h5_file
-            .dataset("cell_data/some_cell_data")
-            .unwrap()
-            .read()
-            .unwrap()
-            .to_vec();
+        let points_data: Vec<f64> = h5_file.dataset("0").unwrap().read().unwrap().to_vec();
+        let cells_data: Vec<f64> = h5_file.dataset("1").unwrap().read().unwrap().to_vec();
 
         assert_approx_eq!(&[f64], &data_points, &points_data);
         assert_approx_eq!(&[f64], &data_cells, &cells_data);
