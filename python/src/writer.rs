@@ -44,6 +44,7 @@ macro_rules! dispatch_dtype {
 
 /// Writer for time series data in XDMF format.
 #[pyclass(name = "TimeSeriesWriter")]
+#[derive(Debug)]
 pub struct PyTimeSeriesWriter {
     inner: Option<xdmf::TimeSeriesWriter>,
 }
@@ -112,6 +113,7 @@ impl PyTimeSeriesWriter {
 
 /// Writer for the per-step data, obtained from `TimeSeriesWriter.write_mesh`.
 #[pyclass(name = "TimeSeriesDataWriter")]
+#[derive(Debug)]
 pub struct PyTimeSeriesDataWriter {
     inner: Option<xdmf::TimeSeriesDataWriter>,
 }
