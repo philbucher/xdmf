@@ -70,7 +70,7 @@ cfg_select! {
     }
 }
 
-use std::{cfg_select, path::Path, str::FromStr};
+use std::{path::Path, str::FromStr};
 
 use light_data::{Analysis, Document};
 use selection::Membership;
@@ -122,8 +122,6 @@ impl ValueType for u64 {}
 impl ValueType for u32 {}
 
 pub(crate) mod sealed {
-    use std::cfg_select;
-
     use super::{Error, Result, Values};
 
     // `H5Type` is a supertrait only where there is an HDF5 to read: it is what lets
