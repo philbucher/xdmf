@@ -1,6 +1,8 @@
 //! Round-trip tests for `TimeSeriesReader`, which reads `Format="HDF"` documents only.
 #![cfg(feature = "hdf5")]
 
+use std::ops::Range;
+
 use float_cmp::assert_approx_eq;
 use temp_dir::TempDir;
 use xdmf::{CellType, DataAttribute, DataStorage, TimeSeriesReader, TimeSeriesWriter};
@@ -223,6 +225,254 @@ fn round_trip_point_and_cell_data_over_several_steps() {
         }
     }
 }
+
+#[test]
+fn reading_a_field_repeatedly_allocates_nothing_of_its_size() {
+    // A field read back at the width it was written goes straight into the caller's buffer, so a
+    // loop over the steps allocates once rather than once per step. Measured in bytes rather than
+    // in allocation *count*, which the path/name handling makes brittle: what must not happen is
+    // an array the size of the field, and that is what shows up here.
+    const NUM_POINTS: usize = 50_000;
+    let field_bytes = NUM_POINTS * size_of::<f64>();
+
+    for storage in STORAGES {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        let coords: Vec<f64> = (0..NUM_POINTS * 3).map(|i| i as f64).collect();
+        let mut writer = TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh(&coords, &[] as &[u32], &[])
+            .unwrap();
+
+        let times = ["0.0", "1.0", "2.0"];
+        for time in times {
+            let t: f64 = time.parse().unwrap();
+            writer
+                .write_time_step(time, |step| {
+                    step.point_data(
+                        "temperature",
+                        DataAttribute::Scalar,
+                        (0..NUM_POINTS).map(|i| t + i as f64).collect::<Vec<_>>(),
+                    )
+                })
+                .unwrap();
+        }
+        drop(writer);
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+
+        // the first read is what sizes the buffer, and is allowed to allocate it
+        let mut temperature = Vec::new();
+        reader
+            .read_point_data::<f64>(0, "temperature", &mut temperature)
+            .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
+
+        for (step, time) in times.iter().enumerate().skip(1) {
+            let before = counting_allocator::allocated_bytes();
+            reader
+                .read_point_data::<f64>(step, "temperature", &mut temperature)
+                .unwrap();
+            let allocated = counting_allocator::allocated_bytes() - before;
+
+            let t: f64 = time.parse().unwrap();
+            assert_approx_eq!(f64, temperature[0], t);
+            assert_eq!(temperature.len(), NUM_POINTS, "{storage:?}");
+            assert!(
+                allocated < field_bytes / 8,
+                "{storage:?}: reading step {step} into a buffer that already fits it allocated \
+                 {allocated} bytes, about the {field_bytes} bytes of the field itself -- it is \
+                 going through an array of its own instead of filling the buffer"
+            );
+        }
+    }
+}
+
+#[test]
+fn re_reading_the_mesh_allocates_nothing_of_its_size() {
+    // Points and connectivity are filled in place too, so a second read into the same buffers
+    // costs nothing -- no `u64` staging array for the connectivity, whatever type the file holds.
+    const NUM_POINTS: usize = 50_000;
+    let num_cells = NUM_POINTS - 2;
+
+    for storage in STORAGES {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        let coords: Vec<f64> = (0..NUM_POINTS * 3).map(|i| i as f64).collect();
+        let connectivity: Vec<u32> = (0..num_cells as u32)
+            .flat_map(|i| [i, i + 1, i + 2])
+            .collect();
+        let cell_types = vec![CellType::Triangle; num_cells];
+
+        let mut writer = TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh(&coords, &connectivity, &cell_types)
+            .unwrap();
+        writer
+            .write_time_step("0.0", |step| {
+                step.point_data("temperature", DataAttribute::Scalar, vec![0.0; NUM_POINTS])
+            })
+            .unwrap();
+        drop(writer);
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+
+        // the first read of each is what sizes the buffers
+        let mut points: Vec<f64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
+        let mut read_cell_types = Vec::new();
+        reader
+            .read_points(&mut points)
+            .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
+
+        assert_eq!(points.len(), NUM_POINTS * 3, "{storage:?}");
+        assert_eq!(read_connectivity, connectivity, "{storage:?}");
+        assert_eq!(read_cell_types, cell_types, "{storage:?}");
+
+        let points_bytes = NUM_POINTS * 3 * size_of::<f64>();
+        let before = counting_allocator::allocated_bytes();
+        reader.read_points(&mut points).unwrap();
+        let allocated = counting_allocator::allocated_bytes() - before;
+        assert!(
+            allocated < points_bytes / 8,
+            "{storage:?}: re-reading the points allocated {allocated} bytes against the \
+             {points_bytes} bytes of the array itself"
+        );
+
+        let connectivity_bytes = connectivity.len() * size_of::<u32>();
+        let before = counting_allocator::allocated_bytes();
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap();
+        let allocated = counting_allocator::allocated_bytes() - before;
+        assert!(
+            allocated < connectivity_bytes / 8,
+            "{storage:?}: re-reading the topology allocated {allocated} bytes against the \
+             {connectivity_bytes} bytes of the connectivity itself"
+        );
+    }
+}
+
+#[test]
+fn re_reading_a_mesh_with_submeshes_holds_one_submesh_at_a_time() {
+    // The submesh path cannot fill the caller's buffers straight from the file -- the mesh is
+    // scattered back together out of arrays that are each some submesh's own -- but nothing of
+    // the mesh's own size is ever held twice: the points are interleaved one direction at a time,
+    // and the topology decodes one submesh at a time into a buffer it reuses for the next.
+    const NUM_CELLS: usize = 20_000;
+    const NUM_SUBMESHES: usize = 4;
+    let num_points = NUM_CELLS + 7;
+
+    for storage in STORAGES {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        let coords: Vec<f64> = (0..num_points * 3).map(|i| i as f64).collect();
+        let connectivity: Vec<u64> = (0..NUM_CELLS as u64)
+            .flat_map(|cell| cell..cell + 8)
+            .collect();
+        let cell_types = vec![CellType::Hexahedron; NUM_CELLS];
+
+        let per_submesh = NUM_CELLS / NUM_SUBMESHES;
+        let submeshes: Vec<(String, Range<usize>)> = (0..NUM_SUBMESHES)
+            .map(|block| {
+                (
+                    format!("block_{block}"),
+                    block * per_submesh..(block + 1) * per_submesh,
+                )
+            })
+            .collect();
+
+        TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh_with_submeshes(&coords, &connectivity, &cell_types, submeshes)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+
+        // the first read of each is what sizes the buffers
+        let mut points: Vec<f64> = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_cell_types = Vec::new();
+        reader
+            .read_points(&mut points)
+            .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
+
+        assert_approx_eq!(&[f64], &coords, &points);
+        assert_eq!(read_connectivity, connectivity, "{storage:?}");
+        assert_eq!(read_cell_types, cell_types, "{storage:?}");
+
+        let points_bytes = num_points * 3 * size_of::<f64>();
+        let before = counting_allocator::allocated_bytes();
+        reader.read_points(&mut points).unwrap();
+        let allocated = counting_allocator::allocated_bytes() - before;
+        assert!(
+            allocated < points_bytes / 2,
+            "{storage:?}: re-reading the points allocated {allocated} bytes against the \
+             {points_bytes} bytes of the array itself -- it is holding all three directions at \
+             once instead of one"
+        );
+
+        let connectivity_bytes = connectivity.len() * size_of::<u64>();
+        let before = counting_allocator::allocated_bytes();
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap();
+        let allocated = counting_allocator::allocated_bytes() - before;
+        assert!(
+            allocated < connectivity_bytes / 2,
+            "{storage:?}: re-reading the topology allocated {allocated} bytes against the \
+             {connectivity_bytes} bytes of the connectivity itself -- it is holding every \
+             submesh's decoded topology at once instead of one"
+        );
+    }
+}
+
+/// Counts the bytes Rust code allocates, so a test can assert that a read does not build an array
+/// the size of the field it is reading. Only Rust allocations are seen: HDF5's own buffers come
+/// from the C library's `malloc` and do not pass through here.
+mod counting_allocator {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn allocated_bytes() -> usize {
+        ALLOCATED.load(Ordering::Relaxed)
+    }
+
+    pub struct Counting;
+
+    // SAFETY: every method forwards to `System`, which upholds the contract; the counter is the
+    // only thing added and touches no allocation state.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOCATED.fetch_add(layout.size(), Ordering::Relaxed);
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) };
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ALLOCATED.fetch_add(new_size.saturating_sub(layout.size()), Ordering::Relaxed);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: counting_allocator::Counting = counting_allocator::Counting;
 
 #[test]
 fn round_trip_f32_attributes() {

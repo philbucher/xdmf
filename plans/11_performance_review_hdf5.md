@@ -1,8 +1,10 @@
 # Performance review — Python write → Rust read, HDF5 storage
 
 Static review (2026-08-23, `submeshes` branch). Scope: the path a caller actually takes when
-writing from Python and reading back in Rust, both with `DataStorage::Hdf5*`. Nothing was
-measured; every claim below is read off the code, and each finding names what to measure.
+writing from Python and reading back in Rust, both with `DataStorage::Hdf5*`. Every finding was
+read off the code rather than profiled; the exception is finding 2, which was measured afterwards
+(see "Measured" under it). Findings 1, 3, 4 and 5 have since been implemented — see the status
+column and the note under each.
 
 Overlaps with `02_performance.md` are marked — parts B and C5 of that plan are still unimplemented
 and are still the two biggest write-side items.
@@ -16,17 +18,23 @@ GIL is released around the write. Nothing in `python/src/` needs work.
 
 The costs are all in the core crate:
 
-| # | Where | Cost | Priority |
-|---|-------|------|----------|
-| 1 | `read_topology` | ~5× the connectivity's own size in peak RSS, 4 full copies | **high** (read) |
-| 2 | `write_xdmf_file` per step | O(steps²) serialization + O(steps) retained memory | **high** (write) — `02_performance.md` part B |
-| 3 | `prepare_cells` uniform arm | full copy of the connectivity, avoidable | **high** (write) |
-| 4 | `hdf5_reader::read` | one `H5File::open` per array read | medium (read) |
-| 5 | `TimeSeriesReader::read_data` | one full extra copy of every field read | medium (read) |
-| 6 | `read_points` | drops the caller's buffer instead of reusing it | medium (read) |
-| 7 | `SingleFileHdf5Writer::write_data` | 3 HDF5 round-trips + 2 `String`s per attribute per step | low — `02_performance.md` C5 |
-| 8 | default chunk shape | 64 MB minimum chunk, one chunk for most arrays | low, but **measure** |
-| 9 | `Membership::apply` | reads a whole array to keep a slice of it | low today, high if per-submesh reads land |
+| # | Where | Cost | Priority | Status |
+|---|-------|------|----------|--------|
+| 1 | `read_topology` | ~5× the connectivity's own size in peak RSS, 4 full copies | **high** (read) | **done** (a, b and c) |
+| 2 | `write_xdmf_file` per step | O(steps²) serialization + O(steps) retained memory | **high** (write) — `02_performance.md` part B | open, **measured** |
+| 3 | `prepare_cells` uniform arm | full copy of the connectivity, avoidable | **high** (write) | **done** |
+| 4 | `hdf5_reader::read` | one `H5File::open` per array read | medium (read) | **done** |
+| 5 | `TimeSeriesReader::read_data` | one full extra copy of every field read | medium (read) | **done** |
+| 6 | `read_points` | drops the caller's buffer instead of reusing it | medium (read) | **done** |
+| 7 | `SingleFileHdf5Writer::write_data` | 3 HDF5 round-trips + 2 `String`s per attribute per step | low — `02_performance.md` C5 | open |
+| 8 | default chunk shape | 64 MB minimum chunk, one chunk for most arrays | low, but **measure** | open |
+| 9 | `Membership::apply` | reads a whole array to keep a slice of it | low today, high if per-submesh reads land | open |
+
+**Findings 1, 3, 4, 5 and 6 were implemented on 2026-08-23.** Verified afterwards: `cargo nextest run`
+261/261 in debug and release, `--no-default-features` 218/218, `cargo test --doc` 7/7, `cargo clippy
+--all-targets -- -D warnings` clean with and without the `hdf5` feature, `cargo doc` under `-D
+warnings -D missing_docs` clean, `cargo +nightly fmt --check` clean, `typos` clean, and the
+`python/` crate still checks. What changed is recorded under each finding.
 
 ---
 
@@ -61,11 +69,53 @@ Fixes, in increasing order of work:
   the values widened into their own array first. Bigger change; do (a) and (b) first and measure
   whether (c) is still worth it.
 
-The submesh path (`read_topology_with_submeshes`, `reader.rs:783`) is worse in a different way: it
-holds **every** submesh's decoded topology in memory simultaneously (`decoded`, `:800`) plus the
-global `connectivity`/`cell_types`/`offsets`/`covered` arrays. Peak is roughly the whole mesh twice
-over plus one `bool` and one `usize` per cell. Streaming one submesh at a time into the global
-arrays would drop that to ~1× — the scatter loop already visits them independently.
+**Done, all three.** (a) and (b) went in first — `decode` and `widen_to_u64` taking their values by
+value — and (c) then removed `widen_to_u64` outright:
+
+- `SealedIndex` gained `indices_from_values`, which takes *any* integer array and checks the values
+  (`MAX_INDEX`, and not negative) rather than the element type, and `as_index`. It moves the array
+  when the file already holds the requested type, walking it once to catch a negative index rather
+  than copying it.
+- `topology::decode_in_place` replaced `decode`: the caller's buffer arrives holding the file's array
+  and leaves holding the mesh's. A uniform topology moves nothing at all (only `cell_types` is
+  produced); `Mixed` is compacted in place with `copy_within` as each cell's type code is dropped,
+  which is safe because the write position always trails the read one.
+- `read_topology`, `read_topology_plain`, `read_topology_with_submeshes` and `decode_submesh_topology`
+  are generic over `I: ConnectivityIndex` throughout, so no `u64` array exists on the path any more.
+
+**Peak for the plain path is now 1C — the caller's buffer, filled by `read_into_raw`** — against the
+5C this finding opened with. `re_reading_the_mesh_allocates_nothing_of_its_size` guards it (checked
+against a staged copy: it fails with "allocated 1199997 bytes against the 599976 bytes of the
+connectivity itself").
+
+The submesh path (`read_topology_with_submeshes`) was worse in a different way: it held **every**
+submesh's decoded topology in memory simultaneously plus the global
+`connectivity`/`cell_types`/`offsets`/`covered` arrays — the whole mesh twice over plus one `bool`
+and one `usize` per cell.
+
+**Also done.** It is now two passes over the submeshes, because the mesh's cell offsets need *every*
+cell's type before *any* cell's points can be placed:
+
+1. Fill the caller's `cell_types` (used directly as the global array, so it is no longer replaced
+   wholesale at the end). A **uniform** submesh states its one cell type in the light data, so
+   `topology::uniform_cell_type` answers it with **no heavy-data read at all**; only `Mixed` is
+   decoded here, and therefore decoded twice.
+2. Decode each submesh into a scratch pair reused across submeshes, and scatter its connectivity.
+
+So for everything this crate writes, each submesh's array is still read exactly once — in pass 2 —
+and peak drops from 2C to 1C plus the largest single submesh. `decode_submesh_topology` also gained
+the cell-count check that `cell_of_submesh` (now gone) used to make per cell, which additionally
+catches a submesh `Topology` holding *fewer* cells than `submesh_cells` names for it.
+
+What remains proportional to the mesh on this path is inherent to the algorithm: `offsets`
+(8 B/cell), `covered` (1 B/cell) and `cell_types` (1 B/cell). Against a `u32` tet connectivity
+(16 B/cell) that bookkeeping is not negligible, but it cannot be folded away without losing the
+random access into `offsets` that the scatter needs.
+
+`re_reading_a_mesh_with_submeshes_holds_one_submesh_at_a_time` (`tests/reader.rs`) guards both this
+and the points change below, under the same counting allocator. Measured on 20 000 hexahedra with a
+`u64` connectivity split into 4 submeshes: topology 1 806 KB → 505 KB, points 640 KB → 160 KB. Both
+halves were checked against a reintroduction of the old behaviour and fail against it.
 
 ## 2. The XDMF file is re-serialized after every time step (write path)
 
@@ -82,6 +132,52 @@ win. Nothing has changed since that plan was written except the line numbers. No
 submesh document shape (one temporal collection *per submesh*, `wrap_first_step`, `:1635`) means the
 fragment is appended in N places rather than one — part B's design needs to account for that, which
 it currently does not.
+
+### Measured, 2026-08-23
+
+`Hdf5SingleFile`, release build, throwaway driver (not kept). A 64-point mesh, so the per-step HDF5
+cost sits at its floor and the light-data term is what moves:
+
+| steps | attrs | final `.xdmf2` | fragment/step | cumulative XML written | wall | us/step |
+|---|---|---|---|---|---|---|
+| 100 | 1 | 73 KB | 727 B | 3.7 MB | 55 ms | 551 |
+| 500 | 1 | 366 KB | 730 B | 92 MB | 660 ms | 1 317 |
+| 1000 | 1 | 732 KB | 731 B | 367 MB | 2.56 s | 2 553 |
+| 2000 | 1 | 1.5 MB | 733 B | 1.5 GB | 10.19 s | 5 093 |
+| 4000 | 1 | 2.9 MB | 734 B | **5.9 GB** | 39.97 s | 9 987 |
+| 4000 | 5 | 6.8 MB | 1 693 B | **13.5 GB** | 86.38 s | 21 589 |
+
+Per-step time doubles when the step count doubles: O(steps) per step, O(steps²) over a run, exactly
+as the plan predicted. Fitting `per_step = a + b × steps` gives a constant `a` of ~310 µs for one
+attribute (HDF5 dataset + `H5Fflush` + temp-file rename) and a slope `b` of ~4.8 µs per
+already-written step; with five attributes, ~419 µs and ~10.6 µs.
+
+**The slope is simply the document being re-serialized at ~150 MB/s** — `b` divided by the fragment
+size comes to ~0.0066 µs/byte in both rows. So the useful way to state the cost is: *every step pays
+(current `.xdmf2` size) ÷ 150 MB/s, on top of its own work.*
+
+That puts the crossover — where rewriting history costs more than writing the step — at roughly
+`steps ≈ a / 5 µs`. A second run, 200 steps of two point fields, puts real numbers on `a`:
+
+| mesh | per-step heavy data | first 10% | last 10% | growth over 200 steps | crossover |
+|---|---|---|---|---|---|
+| 64 points | ~0 | — | — | — | ~70 steps |
+| 10 000 points | 240 KB | 2 425 µs | 3 322 µs | **1.37×** | ~500 steps |
+| 200 000 points | 4.8 MB | 41 087 µs | 42 427 µs | **1.03×** | ~8 000 steps |
+
+**So the impact depends entirely on the ratio of steps to mesh size**, because the light-data term is
+independent of mesh size while the heavy-data term is not:
+
+- Small mesh, long run (0D/1D models, reduced-order runs, boundary-only meshes, parameter sweeps):
+  severe. At 4000 steps on the 64-point mesh ~97% of the runtime is re-serializing history, and the
+  last step spends 19 ms of XML on 310 µs of real data.
+- Large mesh (the 1e7 CFD case, where one step is ~1 s of compression): the crossover lands around
+  10⁵ steps, so part B buys close to nothing there.
+
+Part B is therefore worth doing for the scaling being *correct* rather than for the headline CFD
+number — and the unbounded memory growth (`self.xdmf` retains every step's `Grid` and `Attribute`:
+6.8 MB of XML at 4000 steps × 5 attributes, held as structs) is arguably the better reason.
+
 
 Independent of part B: `H5Fflush` per step is worth measuring separately. It is what makes a
 half-written run openable in ParaView, so it should stay, but if it dominates for cheap steps a
@@ -105,6 +201,11 @@ of a numpy buffer that was deliberately borrowed zero-copy two frames up.
 uniform arm, `Owned` in the `Mixed` and polyvertex arms — removes the copy with no other change to
 the call sites. This is the cheapest large win on the write path.
 
+**Done.** `prepare_cells` returns `Cow<'c, [I]>` and `PreparedMesh` holds it; every call site took
+the change through deref coercion. `prepare_cells_borrows_a_uniform_connectivity` asserts the
+uniform arm hands back the caller's own pointer, and the existing value assertions go through a
+`prepare_cells_vec` test helper that owns the result.
+
 While there: `write_mesh` walks the connectivity three times before it reaches HDF5
 (`validate_points_and_cells` bounds check, `prepare_cells`, then `paraview::validate`). The third is
 free for every type except `u64` (`paraview.rs:57` returns immediately otherwise), so only fix it if
@@ -127,6 +228,13 @@ it is `pub(super)` and has three call sites, so this is contained.
 
 Measure first: an `H5File::open` on a warm page cache is likely tens of microseconds, so this only
 matters against small fields or many steps. It is cheap enough to be worth doing anyway.
+
+**Done.** `hdf5_reader::FileCache` holds one slot -- the last file opened -- behind a `Mutex`, so
+`TimeSeriesReader` stays `Sync` while every read method keeps taking `&self`. It lives on
+`Document`, which is why `read_data_item`/`parse_selector` and the reader's helpers now take a
+`&Document` rather than a `&Path` base dir. One slot rather than a map deliberately: a map would
+hold one open file descriptor per time step. The trade is that a reader keeps its heavy-data file
+open until it is dropped, which `TimeSeriesReader`'s docs now state.
 
 ## 5. Every field read is copied twice (read path)
 
@@ -154,10 +262,25 @@ Two options:
   fast path for the same-type case, falling back to today's `Values` route for widening
   (`f32` → `Vec<f64>` etc.), would make the common read allocation-free after the first call.
 
-Same applies to `read_points_with_submeshes` (`reader.rs:730`), which builds three full
-`Vec<C>` direction arrays and then interleaves them into `points` — 2× peak. Interleaving needs all
-three, so that one is inherent; but `points.reserve` + push is correct there and worth keeping as
-the model for the rest.
+**Done, the `read_into_raw` way.** `hdf5_reader::read_into` resizes the caller's `Vec` to the
+dataset and lets HDF5 fill it in place whenever the dataset's own dtype is already `T`; a dataset of
+another type still goes through `Values`, where `ValueType` decides whether it widens or is a
+mismatch. `selection::read_data_item_into` is the recursive wrapper -- a selection cannot be filled
+in place, since it has to read its whole source before it knows what to keep, so that shape falls
+back to the owned route -- and `TimeSeriesReader::read_data`/`read_submesh_field` fill the caller's
+buffer directly. The `H5Type` bound this needs is a `cfg`-gated supertrait of
+`reader::sealed::SealedValueType`, which is crate-private, so no public bound changed.
+
+`tests/reader.rs`'s `reading_a_field_repeatedly_allocates_nothing_of_its_size` guards it with a
+counting `#[global_allocator]`, asserting in *bytes* rather than allocation count (the path and name
+handling makes counts brittle). Checked against the previous behaviour, where it fails with
+"allocated 400039 bytes, about the 400000 bytes of the field itself".
+
+`read_points_with_submeshes` built three full `Vec<C>` direction arrays and then interleaved them
+into `points` — 2× peak. **Also done:** it now sizes `points` from the first direction and reads one
+direction at a time into a reused scratch, scattering each straight into its stride of the output.
+Peak 1.33×, and directions 2 and 3 refill the buffer the first one allocated — they also pick up the
+`read_exact_into` in-place path, which the old `read_data_item` + convert bypassed.
 
 ## 6. `read_points`/`read_topology` drop the caller's buffer (read path)
 
@@ -169,7 +292,23 @@ one from the HDF5 read. Same for `*cell_types = decoded.cell_types` (`:722`) and
 
 Behaviourally harmless, but it means the buffer-reuse the API advertises does not happen on the
 plain path (it does on the submesh path, which uses `reserve` + push). Either make it true, or drop
-the sentence from the docs. Making it true falls out of finding 5's `read_into_raw` fix.
+the sentence from the docs.
+
+**Done, with finding 1(c).** The obstacle was that `Coordinate` and `ConnectivityIndex` carry their
+own conversions with their own wording, so the fallback arm could not just reuse `ValueType`'s. The
+fix was to make that arm a parameter: `hdf5_reader::read_exact_into` does the in-place fill and
+reports whether the dataset's type matched, and `selection::read_data_item_into` takes a `convert`
+closure for everything else — `T::from_values`, `C::coordinates_from_values` or
+`I::indices_from_values` at the three call sites. `read_points_plain` and `read_topology_plain` now
+fill the caller's buffer, so the sentence in their docs is true.
+
+The three conversions had to be named apart (`SealedValueType::from_values` stayed;
+`SealedCoordinate::from_values` and the new `SealedIndex` one became
+`coordinates_from_values`/`indices_from_values`) because `SealedValueType` is now a supertrait of
+both and `T::from_values` would otherwise be ambiguous.
+
+`read_points_with_submeshes` now fills the caller's buffer too, by sizing it from the first
+direction and scattering each direction into its stride (see finding 3).
 
 ## 7. Per-attribute HDF5 overhead in the writer (write path)
 
@@ -255,18 +394,16 @@ noting now so per-submesh reads are not built on `apply`.
 
 ---
 
-## Suggested order
+## What is left, in order
 
-1. Finding 3 (`Cow` in `prepare_cells`) — smallest diff, largest single write-path allocation.
-2. Finding 1 (a) and (b) — two small changes, −2C peak on every topology read.
-3. Finding 5 + 6 (`read_into_raw` fast path) — makes repeated reads allocation-free and makes the
-   documented buffer reuse true.
-4. Finding 4 (open-file cache) — contained, helps every read.
-5. Finding 8 (chunk sweep) — measurement, no code, but gates finding 9.
-6. Finding 2 (`02_performance.md` part B) — largest win, largest change, needs the submesh document
-   shape accounted for.
-7. Findings 7, 9 — per-step constants and future-proofing.
+1. Finding 8 (chunk sweep) — measurement, no code, and it gates finding 9.
+2. Finding 2 (`02_performance.md` part B) — now measured: worth it for small-mesh/long-run cases and
+   for the unbounded memory, close to worthless for the 1e7 CFD case. Note that part B was written
+   before submeshes and does not account for the one-temporal-collection-per-submesh document shape.
+3. Findings 7, 9 — per-step write constants, and pushing selections down to HDF5 before per-submesh
+   reads get built on `Membership::apply`.
 
-Each of 1–4 should show up on the `write_mesh` / `read_*` benches and on the allocation counter that
-`02_performance.md` part A specifies; that harness is still the prerequisite for confirming any of
-this.
+The findings implemented here were verified by the test suite and by two targeted allocation
+tests; none of them has been *benchmarked*. `02_performance.md` part A's harness is still the
+prerequisite for numbers — the finding-2 driver above was thrown away rather than kept, and is the
+kind of thing part A should own permanently.

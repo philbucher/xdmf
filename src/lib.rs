@@ -223,38 +223,30 @@ pub(crate) fn create_writer(
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
         DataStorage::Hdf5SingleFile { deflate_level } => {
             validate_deflate_level(deflate_level)?;
-            #[cfg(feature = "hdf5")]
-            {
-                Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
+            cfg_select! {
+                feature = "hdf5" => Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
                     file_name,
                     deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
-                )?))
-            }
-            #[cfg(not(feature = "hdf5"))]
-            {
-                Err(Error::InvalidConfiguration {
+                )?)),
+                _ => Err(Error::InvalidConfiguration {
                     reason: format!(
                         "using {data_storage:?} DataStorage requires the 'hdf5' feature"
                     ),
-                })
+                }),
             }
         }
         DataStorage::Hdf5MultipleFiles { deflate_level } => {
             validate_deflate_level(deflate_level)?;
-            #[cfg(feature = "hdf5")]
-            {
-                Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
+            cfg_select! {
+                feature = "hdf5" => Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
                     file_name,
                     deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
-                )?))
-            }
-            #[cfg(not(feature = "hdf5"))]
-            {
-                Err(Error::InvalidConfiguration {
+                )?)),
+                _ => Err(Error::InvalidConfiguration {
                     reason: format!(
                         "using {data_storage:?} DataStorage requires the 'hdf5' feature"
                     ),
-                })
+                }),
             }
         }
         DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
@@ -263,13 +255,9 @@ pub(crate) fn create_writer(
 
 /// Check if the hdf5 feature is enabled.
 pub const fn is_hdf5_enabled() -> bool {
-    #[cfg(feature = "hdf5")]
-    {
-        true
-    }
-    #[cfg(not(feature = "hdf5"))]
-    {
-        false
+    cfg_select! {
+        feature = "hdf5" => true,
+        _ => false,
     }
 }
 

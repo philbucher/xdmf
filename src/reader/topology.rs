@@ -3,66 +3,83 @@
 //! submesh wrote it.
 
 use crate::{
-    CellType, Error, Result, Values,
+    CellType, ConnectivityIndex, Error, Result,
     xdmf_elements::topology::{Topology, TopologyType},
 };
 
-/// One submesh's decoded topology: its cells' types and its connectivity with any `Mixed` type
-/// codes stripped out, indices still local to whatever point list the submesh was written against.
-#[derive(Debug)]
-pub(super) struct DecodedTopology {
-    pub cell_types: Vec<CellType>,
-    pub connectivity: Vec<u64>,
-}
-
-/// Decode a `Topology`'s raw connectivity values, per `topology.topology_type`.
-pub(super) fn decode(topology: &Topology, raw: &Values<'_>) -> Result<DecodedTopology> {
-    let values = widen_to_u64(raw)?;
+/// Decode a connectivity the caller has already read, in place, per `topology.topology_type`.
+///
+/// `connectivity` arrives holding the array as the file does and leaves holding the mesh's own:
+/// for a uniform topology those are the same array and nothing is moved at all, and `Mixed` is
+/// compacted where it stands by dropping each cell's type code (and a poly-cell's point count).
+/// So neither shape needs a second array, which is what lets the whole read be one allocation --
+/// the caller's buffer.
+///
+/// `cell_types` is filled to match and is cleared first.
+pub(super) fn decode_in_place<I: ConnectivityIndex>(
+    topology: &Topology,
+    connectivity: &mut Vec<I>,
+    cell_types: &mut Vec<CellType>,
+) -> Result<()> {
+    cell_types.clear();
 
     match topology.topology_type {
-        TopologyType::Mixed => decode_mixed(&values),
-        uniform => decode_uniform(uniform, topology.nodes_per_element, &values),
+        TopologyType::Mixed => decode_mixed_in_place(connectivity, cell_types),
+        uniform => decode_uniform_in_place(
+            uniform,
+            topology.nodes_per_element,
+            connectivity,
+            cell_types,
+        ),
     }
 }
 
-fn decode_uniform(
+/// Every cell shares one type, so the connectivity is already what the file holds -- only the
+/// per-cell types have to be produced.
+fn decode_uniform_in_place<I: ConnectivityIndex>(
     topology_type: TopologyType,
     nodes_per_element: Option<u8>,
-    values: &[u64],
-) -> Result<DecodedTopology> {
+    connectivity: &[I],
+    cell_types: &mut Vec<CellType>,
+) -> Result<()> {
     let cell_type = cell_type_of(topology_type, nodes_per_element)?;
     let stride = cell_type.num_points();
 
-    if stride == 0 || !values.len().is_multiple_of(stride) {
+    if stride == 0 || !connectivity.len().is_multiple_of(stride) {
         return Err(Error::InvalidDocument {
             reason: format!(
                 "a {topology_type:?} connectivity of {} values is not a multiple of {stride}",
-                values.len()
+                connectivity.len()
             ),
         });
     }
 
-    let num_cells = values.len() / stride;
+    cell_types.resize(connectivity.len() / stride, cell_type);
 
-    Ok(DecodedTopology {
-        cell_types: vec![cell_type; num_cells],
-        connectivity: values.to_vec(),
-    })
+    Ok(())
 }
 
-fn decode_mixed(values: &[u64]) -> Result<DecodedTopology> {
-    let mut cell_types = Vec::new();
-    let mut connectivity = Vec::new();
-    let mut position = 0;
+/// `Mixed` prepends each cell's type code (and, for a poly-cell, its point count) to its points,
+/// so the points are moved down over the entries dropped ahead of them.
+///
+/// The write position only ever trails the read position -- every cell drops at least the one
+/// entry its type code takes -- so nothing is overwritten before it has been read.
+fn decode_mixed_in_place<I: ConnectivityIndex>(
+    connectivity: &mut Vec<I>,
+    cell_types: &mut Vec<CellType>,
+) -> Result<()> {
+    let mut read = 0;
+    let mut write = 0;
 
-    while position < values.len() {
-        let code = u8::try_from(values[position]).map_err(|_source| Error::InvalidDocument {
+    while read < connectivity.len() {
+        let entry = connectivity[read];
+        let code = u8::try_from(entry.as_i128()).map_err(|_source| Error::InvalidDocument {
             reason: format!(
                 "Mixed connectivity cell type code {} is out of range",
-                values[position]
+                entry.as_i128()
             ),
         })?;
-        position += 1;
+        read += 1;
 
         let cell_type = CellType::from_code(code).ok_or_else(|| Error::InvalidDocument {
             reason: format!("Mixed connectivity has an unknown cell type code {code}"),
@@ -74,14 +91,17 @@ fn decode_mixed(values: &[u64]) -> Result<DecodedTopology> {
         // type code" further along. Rejected here instead, as `cell_type_of` rejects the
         // equivalent `NodesPerElement` for a uniform topology.
         if let Some(expected) = poly_cell_points(cell_type) {
-            let stated = *values.get(position).ok_or_else(|| Error::InvalidDocument {
-                reason: format!(
-                    "Mixed connectivity ends after a {cell_type:?} cell's type code, before its \
-                     point count"
-                ),
-            })?;
+            let stated = connectivity
+                .get(read)
+                .ok_or_else(|| Error::InvalidDocument {
+                    reason: format!(
+                        "Mixed connectivity ends after a {cell_type:?} cell's type code, before \
+                         its point count"
+                    ),
+                })?
+                .as_i128();
 
-            if stated != u64::from(expected) {
+            if stated != i128::from(expected) {
                 return Err(Error::Unsupported {
                     reason: format!(
                         "a Mixed connectivity's {cell_type:?} cell states {stated} points, only \
@@ -90,28 +110,41 @@ fn decode_mixed(values: &[u64]) -> Result<DecodedTopology> {
                 });
             }
 
-            position += 1;
+            read += 1;
         }
 
         let num_points = cell_type.num_points();
-        let end = position.checked_add(num_points).ok_or(Error::Internal(
+        let end = read.checked_add(num_points).ok_or(Error::Internal(
             "a Mixed connectivity's cell span does not fit a usize",
         ))?;
-        let cell_points = values
-            .get(position..end)
-            .ok_or_else(|| Error::InvalidDocument {
-                reason: "Mixed connectivity ends in the middle of a cell".to_string(),
-            })?;
 
-        connectivity.extend_from_slice(cell_points);
+        if end > connectivity.len() {
+            return Err(Error::InvalidDocument {
+                reason: "Mixed connectivity ends in the middle of a cell".to_string(),
+            });
+        }
+
+        connectivity.copy_within(read..end, write);
+        write += num_points;
+        read = end;
         cell_types.push(cell_type);
-        position = end;
     }
 
-    Ok(DecodedTopology {
-        cell_types,
-        connectivity,
-    })
+    connectivity.truncate(write);
+
+    Ok(())
+}
+
+/// The single `CellType` every cell of a uniform topology has, or `None` for `Mixed` -- whose
+/// per-cell types only its connectivity itself states.
+///
+/// This is what lets `read_topology_with_submeshes` learn a submesh's cell types without reading
+/// its heavy data at all, in the common case that the submesh is uniform.
+pub(super) fn uniform_cell_type(topology: &Topology) -> Result<Option<CellType>> {
+    match topology.topology_type {
+        TopologyType::Mixed => Ok(None),
+        uniform => cell_type_of(uniform, topology.nodes_per_element).map(Some),
+    }
 }
 
 /// The one `CellType` a uniform `TopologyType` decodes to -- the inverse of
@@ -173,35 +206,13 @@ fn poly_cell_points(cell_type: CellType) -> Option<u8> {
     }
 }
 
-/// Widen a raw connectivity array to `u64`, as every reader-facing connectivity is: the crate's
-/// own writer never emits a negative index, and a foreign file's is rejected rather than wrapped.
-fn widen_to_u64(values: &Values<'_>) -> Result<Vec<u64>> {
-    let widen_signed = |value: i64| {
-        u64::try_from(value).map_err(|_source| Error::InvalidDocument {
-            reason: format!("connectivity index {value} is negative"),
-        })
-    };
-
-    match values {
-        Values::F64(_) | Values::F32(_) => Err(Error::InvalidDocument {
-            reason: "a Topology's connectivity holds floating-point values".to_string(),
-        }),
-        Values::U64(v) => Ok(v.to_vec()),
-        Values::U32(v) => Ok(v.iter().map(|&value| u64::from(value)).collect()),
-        Values::I64(v) => v.iter().map(|&value| widen_signed(value)).collect(),
-        Values::I32(v) => v
-            .iter()
-            .map(|&value| widen_signed(i64::from(value)))
-            .collect(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xdmf_elements::data_item::DataItem;
+    use crate::{Values, values::sealed::SealedIndex, xdmf_elements::data_item::DataItem};
 
-    fn mixed(values: &[u64]) -> Result<DecodedTopology> {
+    /// A `Mixed` connectivity decoded in place, returned as the two buffers it fills.
+    fn mixed<I: ConnectivityIndex>(values: &[I]) -> Result<(Vec<CellType>, Vec<I>)> {
         let topology = Topology {
             topology_type: TopologyType::Mixed,
             nodes_per_element: None,
@@ -209,16 +220,20 @@ mod tests {
             data_item: DataItem::default(),
         };
 
-        decode(&topology, &Values::from(values))
+        let mut connectivity = I::indices_from_values(I::as_values(values))?;
+        let mut cell_types = Vec::new();
+        decode_in_place(&topology, &mut connectivity, &mut cell_types)?;
+
+        Ok((cell_types, connectivity))
     }
 
     #[test]
     fn a_poly_cells_point_count_is_consumed() {
         // a Vertex (code 1, 1 point) and an Edge (code 2, 2 points), each stating its own count
-        let decoded = mixed(&[1, 1, 7, 2, 2, 3, 4]).unwrap();
+        let (cell_types, connectivity) = mixed(&[1_u64, 1, 7, 2, 2, 3, 4]).unwrap();
 
-        assert_eq!(decoded.cell_types, [CellType::Vertex, CellType::Edge]);
-        assert_eq!(decoded.connectivity, [7, 3, 4]);
+        assert_eq!(cell_types, [CellType::Vertex, CellType::Edge]);
+        assert_eq!(connectivity, [7, 3, 4]);
     }
 
     /// Taking the stated count on trust would consume one value too few and read the rest of the
@@ -226,7 +241,7 @@ mod tests {
     #[test]
     fn a_poly_cell_stating_another_point_count_is_rejected() {
         std::assert_matches!(
-            mixed(&[1, 3, 7, 8, 9]).unwrap_err(),
+            mixed(&[1_u64, 3, 7, 8, 9]).unwrap_err(),
             Error::Unsupported { reason }
                 if reason.contains("Vertex cell states 3 points, only 1 is supported")
         );
@@ -235,8 +250,38 @@ mod tests {
     #[test]
     fn a_poly_cell_without_its_point_count_is_rejected() {
         std::assert_matches!(
-            mixed(&[1]).unwrap_err(),
+            mixed(&[1_u64]).unwrap_err(),
             Error::InvalidDocument { reason } if reason.contains("before its point count")
+        );
+    }
+
+    /// The compaction moves each cell's points down over the entries dropped ahead of them, so a
+    /// mesh of several cells is where a wrong write position would show.
+    #[test]
+    fn a_mixed_connectivity_is_compacted_in_place() {
+        // three triangles (code 4, 3 points each), written as `prepare_cells` writes them
+        let (cell_types, connectivity) = mixed(&[4_u32, 0, 1, 2, 4, 1, 2, 3, 4, 2, 3, 4]).unwrap();
+
+        assert_eq!(cell_types, [CellType::Triangle; 3]);
+        assert_eq!(connectivity, [0, 1, 2, 1, 2, 3, 2, 3, 4]);
+    }
+
+    /// The index type is checked against the *values*, whatever type the file itself holds -- a
+    /// connectivity is positions, not a number format.
+    #[test]
+    fn an_index_beyond_the_requested_type_is_rejected() {
+        std::assert_matches!(
+            u32::indices_from_values(Values::from(&[u64::from(u32::MAX) + 1][..])).unwrap_err(),
+            Error::IntegerOutOfRange { value, .. } if value == i128::from(u32::MAX) + 1
+        );
+    }
+
+    #[test]
+    fn a_negative_index_is_rejected() {
+        // caught in the same-type arm too, which moves the array rather than converting it
+        std::assert_matches!(
+            i64::indices_from_values(Values::from(&[0_i64, -1][..])).unwrap_err(),
+            Error::InvalidDocument { reason } if reason.contains("index -1 is negative")
         );
     }
 }

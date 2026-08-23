@@ -1,14 +1,15 @@
 //! Evaluating `ItemType::HyperSlab`/`ItemType::Coordinates` selections, and the general
 //! `DataItem` -> [`Values`] dispatcher every other reader module reads heavy data through.
 
-use std::path::Path;
+use std::path::PathBuf;
 
-use super::{hdf5_reader, light_data};
+use super::{hdf5_reader, light_data, light_data::Document};
 use crate::{
     Error, Result, Values,
+    reader::sealed::SealedValueType,
     xdmf_elements::{
         Domain,
-        data_item::{DataContent, DataItem},
+        data_item::{DataContent, DataItem, Format},
     },
 };
 
@@ -87,22 +88,103 @@ impl Membership {
 /// `HyperSlab`/`Coordinates` selection, down to the `Format="HDF"` array that actually holds them.
 pub(super) fn read_data_item(
     item: &DataItem,
-    base_dir: &Path,
+    document: &Document,
     domain: &Domain,
 ) -> Result<Values<'static>> {
     if item.reference.is_some() {
         let target = light_data::resolve_reference(item, domain)?;
-        return read_data_item(target, base_dir, domain);
+        return read_data_item(target, document, domain);
     }
 
     if item.item_type.is_some() {
         let (selector, source) = selection_parts(item)?;
-        let membership = parse_selector(selector, base_dir, domain)?;
-        let source_values = read_data_item(source, base_dir, domain)?;
+        let membership = parse_selector(selector, document, domain)?;
+        let source_values = read_data_item(source, document, domain)?;
         return membership.apply(&source_values);
     }
 
-    hdf5_reader::read(item, base_dir)
+    read_heavy(item, document)
+}
+
+/// The same read, into a caller's buffer rather than into a fresh [`Values`].
+///
+/// Only the plain array a reference chain ends at can be filled in place, and only when the
+/// dataset already holds `T`. Everything else -- another element type, or a selection, which has
+/// to evaluate its whole source before it knows what to keep -- goes through `convert`, which is
+/// what each kind of array does with a `Values` of its own: widen it (field data), check its
+/// values against the index type (a connectivity), or reject it (coordinates).
+pub(super) fn read_data_item_into<T, F>(
+    item: &DataItem,
+    document: &Document,
+    domain: &Domain,
+    into: &mut Vec<T>,
+    convert: F,
+) -> Result<()>
+where
+    T: SealedValueType,
+    F: FnOnce(Values<'static>) -> Result<Vec<T>>,
+{
+    if item.reference.is_some() {
+        let target = light_data::resolve_reference(item, domain)?;
+        return read_data_item_into(target, document, domain, into, convert);
+    }
+
+    if item.item_type.is_none() && read_heavy_exact_into(item, document, into)? {
+        return Ok(());
+    }
+
+    let values = read_data_item(item, document, domain)?;
+    into.clear();
+    into.extend(convert(values)?);
+
+    Ok(())
+}
+
+/// One plain `DataItem`'s heavy data, whole.
+fn read_heavy(item: &DataItem, document: &Document) -> Result<Values<'static>> {
+    let (file_path, dataset_path) = heavy_data_path(item, document)?;
+
+    hdf5_reader::read(&file_path, dataset_path, &document.files)
+}
+
+/// The same, into the caller's buffer -- see [`hdf5_reader::read_exact_into`] for what the `bool`
+/// reports.
+fn read_heavy_exact_into<T: SealedValueType>(
+    item: &DataItem,
+    document: &Document,
+    into: &mut Vec<T>,
+) -> Result<bool> {
+    let (file_path, dataset_path) = heavy_data_path(item, document)?;
+
+    hdf5_reader::read_exact_into(&file_path, dataset_path, &document.files, into)
+}
+
+/// Where one `DataItem`'s heavy data lives: the file, and the path inside it.
+///
+/// Light-data parsing rather than heavy-data reading, so it happens on this side of the boundary
+/// and a `Format` this reader does not support is reported as such even in a build without the
+/// `hdf5` feature.
+fn heavy_data_path<'i>(item: &'i DataItem, document: &Document) -> Result<(PathBuf, &'i str)> {
+    if item.format != Some(Format::HDF) {
+        return Err(Error::Unsupported {
+            reason: format!(
+                "Format {:?} is not supported by this reader, only \"HDF\" is",
+                item.format
+            ),
+        });
+    }
+
+    let DataContent::Raw(raw) = &item.data else {
+        return Err(Error::InvalidDocument {
+            reason: "a Format=\"HDF\" DataItem has no path text".to_string(),
+        });
+    };
+
+    let (file_part, dataset_path) = raw.split_once(':').ok_or_else(|| Error::InvalidDocument {
+        reason: format!("'{raw}' is not a valid HDF5 heavy-data path, expected 'file:path'"),
+    })?;
+
+    Ok((document.base_dir.join(file_part), dataset_path))
 }
 
 /// The `<selector, source>` pair a `HyperSlab`/`Coordinates` `DataItem` carries as its nested
@@ -130,12 +212,12 @@ pub(super) fn selection_parts(item: &DataItem) -> Result<(&DataItem, &DataItem)>
 /// to learn which mesh points a submesh holds without reading the (whole-mesh) source at all.
 pub(super) fn parse_selector(
     selector: &DataItem,
-    base_dir: &Path,
+    document: &Document,
     domain: &Domain,
 ) -> Result<Membership> {
     if selector.reference.is_some() {
         let target = light_data::resolve_reference(selector, domain)?;
-        let indices = hdf5_reader::read(target, base_dir)?;
+        let indices = read_heavy(target, document)?;
         return Ok(Membership::Explicit(values_to_usize(&indices)?));
     }
 

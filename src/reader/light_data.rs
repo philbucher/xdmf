@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::hdf5_reader::FileCache;
 use crate::{
     Error, Result,
     xdmf_elements::{
@@ -17,6 +18,9 @@ use crate::{
 pub(super) struct Document {
     pub xdmf: Xdmf,
     pub base_dir: PathBuf,
+    /// The heavy-data file a read last opened, held open for the next one -- see [`FileCache`].
+    /// Lives here because it is exactly as long-lived as the paths it caches.
+    pub files: FileCache,
 }
 
 impl Document {
@@ -33,7 +37,11 @@ impl Document {
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
 
-        Ok(Self { xdmf, base_dir })
+        Ok(Self {
+            xdmf,
+            base_dir,
+            files: FileCache::default(),
+        })
     }
 
     pub(super) fn domain(&self) -> Result<&Domain> {

@@ -231,17 +231,25 @@ pub(crate) mod sealed {
     use std::borrow::Cow;
 
     use super::Values;
-    use crate::{Error, Result};
+    use crate::{Error, Result, reader::sealed::SealedValueType};
 
     /// Conversion backing [`Coordinate`](super::Coordinate), not nameable outside the crate
-    pub trait SealedCoordinate: Copy + Sized {
+    ///
+    /// [`SealedValueType`] is a supertrait because every type a mesh's points can have is also one
+    /// a field can have, which is what lets a coordinate array be read straight into the caller's
+    /// buffer (see `reader::hdf5_reader::read_exact_into`).
+    pub trait SealedCoordinate: SealedValueType {
         /// Borrow a slice of coordinates as [`Values`]
         fn as_values(points: &[Self]) -> Values<'_>;
 
         /// Take a read coordinate array as this type, widening `f32` to `f64` but rejecting the
         /// narrowing direction rather than silently losing precision -- the same rule
         /// [`ValueType`](crate::ValueType) states for field data.
-        fn from_values(values: Values<'_>) -> Result<Vec<Self>>;
+        ///
+        /// Named apart from [`SealedValueType::from_values`], which every implementor also has,
+        /// because the two differ: that one is about the element *type*, this one says the same
+        /// thing in the wording a coordinate mismatch deserves.
+        fn coordinates_from_values(values: Values<'_>) -> Result<Vec<Self>>;
     }
 
     fn not_floating_point(requested: &str, found: &Values<'_>) -> Error {
@@ -258,7 +266,7 @@ pub(crate) mod sealed {
             Values::F64(Cow::Borrowed(points))
         }
 
-        fn from_values(values: Values<'_>) -> Result<Vec<Self>> {
+        fn coordinates_from_values(values: Values<'_>) -> Result<Vec<Self>> {
             match values {
                 Values::F64(v) => Ok(v.into_owned()),
                 Values::F32(v) => Ok(v.iter().map(|&value| Self::from(value)).collect()),
@@ -272,7 +280,7 @@ pub(crate) mod sealed {
             Values::F32(Cow::Borrowed(points))
         }
 
-        fn from_values(values: Values<'_>) -> Result<Vec<Self>> {
+        fn coordinates_from_values(values: Values<'_>) -> Result<Vec<Self>> {
             match values {
                 Values::F32(v) => Ok(v.into_owned()),
                 other => Err(not_floating_point("f32", &other)),
@@ -282,7 +290,9 @@ pub(crate) mod sealed {
 
     /// Conversion backing [`ConnectivityIndex`](super::ConnectivityIndex), not nameable outside
     /// the crate
-    pub trait SealedIndex: Copy + Sized {
+    ///
+    /// [`SealedValueType`] is a supertrait for the same reason it is on [`SealedCoordinate`].
+    pub trait SealedIndex: SealedValueType {
         /// The largest index this type can hold.
         ///
         /// Deliberately the type's own limit and nothing else: the lower cap `ParaView` puts on
@@ -302,6 +312,62 @@ pub(crate) mod sealed {
 
         /// Widened for bounds checking, so signed and unsigned indices compare the same way
         fn as_i128(self) -> i128;
+
+        /// The index as a position, `None` when it is negative or beyond what a `usize` holds.
+        fn as_index(self) -> Option<usize>;
+
+        /// Take a read connectivity array as this type.
+        ///
+        /// Unlike [`SealedCoordinate::coordinates_from_values`], the file's own element type has
+        /// neither to match nor to widen: what a connectivity holds are positions, so any integer
+        /// array is acceptable and it is the *values* that are checked -- against
+        /// [`Self::MAX_INDEX`] and against being negative. Every value in the result is therefore
+        /// a valid position, which is what lets the reader treat a later [`Self::as_index`] on one
+        /// as infallible.
+        ///
+        /// Named apart from [`SealedValueType::from_values`] for the reason
+        /// [`SealedCoordinate::coordinates_from_values`] is.
+        fn indices_from_values(values: Values<'_>) -> Result<Vec<Self>>;
+    }
+
+    /// One index array converted element by element, for the types that are not already the one
+    /// asked for. Split out of the macro so the conversion is written once.
+    fn convert_indices<I: SealedIndex>(values: &Values<'_>) -> Result<Vec<I>> {
+        match values {
+            Values::F64(_) | Values::F32(_) => Err(not_an_index_array()),
+            Values::U64(v) => v.iter().map(|&value| index_of(i128::from(value))).collect(),
+            Values::U32(v) => v.iter().map(|&value| index_of(i128::from(value))).collect(),
+            Values::I64(v) => v.iter().map(|&value| index_of(i128::from(value))).collect(),
+            Values::I32(v) => v.iter().map(|&value| index_of(i128::from(value))).collect(),
+        }
+    }
+
+    fn not_an_index_array() -> Error {
+        Error::InvalidDocument {
+            reason: "a Topology's connectivity holds floating-point values".to_string(),
+        }
+    }
+
+    /// One connectivity value as the requested index type, rejecting the two ways a file's own
+    /// array can hold something that is not a position this reader can hand back.
+    fn index_of<I: SealedIndex>(value: i128) -> Result<I> {
+        if value < 0 {
+            return Err(Error::InvalidDocument {
+                reason: format!("connectivity index {value} is negative"),
+            });
+        }
+
+        usize::try_from(value)
+            .ok()
+            .and_then(I::from_index)
+            .ok_or_else(|| Error::IntegerOutOfRange {
+                value,
+                reason: format!(
+                    "the connectivity index does not fit the requested index type, whose largest \
+                     is {}",
+                    I::MAX_INDEX
+                ),
+            })
     }
 
     macro_rules! impl_sealed_index {
@@ -324,6 +390,26 @@ pub(crate) mod sealed {
 
                     fn as_i128(self) -> i128 {
                         i128::from(self)
+                    }
+
+                    fn as_index(self) -> Option<usize> {
+                        usize::try_from(self).ok()
+                    }
+
+                    fn indices_from_values(values: Values<'_>) -> Result<Vec<Self>> {
+                        match values {
+                            // already the type asked for, so it is moved rather than converted --
+                            // but still walked once, since nothing has yet ruled out a negative
+                            // index or (on a 32-bit target) one past `usize`
+                            Values::$variant(v) => {
+                                let v = v.into_owned();
+                                for &value in &v {
+                                    index_of::<Self>(value.as_i128())?;
+                                }
+                                Ok(v)
+                            }
+                            other => convert_indices(&other),
+                        }
                     }
                 }
             )+

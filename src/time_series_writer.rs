@@ -354,12 +354,12 @@ impl TimeSeriesWriter {
 
     /// Everything the two entry points share, once the mesh itself has been validated: assembling
     /// the connectivity and deciding the topology it is written as.
-    fn prepare_mesh<C: Coordinate, I: ConnectivityIndex>(
+    fn prepare_mesh<'c, C: Coordinate, I: ConnectivityIndex>(
         &mut self,
         points: &[C],
-        connectivity: &[I],
+        connectivity: &'c [I],
         cell_types: &[CellType],
-    ) -> Result<PreparedMesh<I>> {
+    ) -> Result<PreparedMesh<'c, I>> {
         let num_cells = num_cells(points.len(), cell_types);
         let points = C::as_values(points);
         let num_points = points.len() / 3;
@@ -707,14 +707,19 @@ fn index_values(indices: &[usize]) -> Result<Values<'static>> {
 }
 
 /// The parts of a written mesh that do not depend on how its cells are split into submeshes.
-struct PreparedMesh<I> {
+struct PreparedMesh<'c, I: Clone> {
     num_points: usize,
     num_cells: usize,
     topology_type: TopologyType,
     /// Per-element node count, set only for the `Polyvertex`/`Polyline` topologies that carry one.
     nodes_per_element: Option<u8>,
-    /// Connectivity of the whole mesh, with the cell types prepended (see `prepare_cells`)
-    cells: Vec<I>,
+    /// Connectivity of the whole mesh, with the cell types prepended (see `prepare_cells`).
+    ///
+    /// Borrowed from the caller's own array whenever `prepare_cells` had nothing to prepend --
+    /// which is every mesh whose cells all share one type, the common case. Only a `Mixed` mesh
+    /// (or one of points only) owns an array here, since only those interleave something with the
+    /// indices the caller passed. Nothing below writes through it, so the borrow costs nothing.
+    cells: Cow<'c, [I]>,
 }
 
 /// One submesh's geometry, as a selection out of the mesh's coordinates: one item per coordinate
@@ -1443,11 +1448,11 @@ fn poly_cell_points(cell_type: CellType) -> Option<u8> {
 /// `Polyvertex`/`Polyline`, whose per-cell node count is otherwise also repeated). Otherwise the
 /// cell type is prepended to the connectivity list as `Mixed` topology requires, and for
 /// poly-cells, the number of points is also added.
-fn prepare_cells<I: ConnectivityIndex>(
-    connectivity: &[I],
+fn prepare_cells<'c, I: ConnectivityIndex>(
+    connectivity: &'c [I],
     cell_types: &[CellType],
     num_points: usize,
-) -> Result<(TopologyType, Vec<I>)> {
+) -> Result<(TopologyType, Cow<'c, [I]>)> {
     // every index fits by the time this runs, `validate_points_and_cells` checked the point count
     // against `I::MAX_INDEX` first
     let index_fits = || Error::Internal("a point index does not fit the connectivity type");
@@ -1459,13 +1464,15 @@ fn prepare_cells<I: ConnectivityIndex>(
             .map(|index| I::from_index(index).ok_or_else(index_fits))
             .collect::<Result<Vec<_>>>()?;
 
-        return Ok((TopologyType::Polyvertex, indices));
+        return Ok((TopologyType::Polyvertex, Cow::Owned(indices)));
     }
 
     if let [first, rest @ ..] = cell_types
         && rest.iter().all(|cell_type| cell_type == first)
     {
-        return Ok((TopologyType::from(*first), connectivity.to_vec()));
+        // borrowed, not copied: a uniform topology stores the caller's indices as they are, so
+        // the array that reaches the backend can be the caller's own however large the mesh is
+        return Ok((TopologyType::from(*first), Cow::Borrowed(connectivity)));
     }
 
     let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
@@ -1485,7 +1492,7 @@ fn prepare_cells<I: ConnectivityIndex>(
         index += num_points; // move index to the next cell
     }
 
-    Ok((TopologyType::Mixed, cells_with_types))
+    Ok((TopologyType::Mixed, Cow::Owned(cells_with_types)))
 }
 
 /// Writer for time series data in XDMF format. Can be used after writing the mesh with `TimeSeriesWriter::write_mesh`.
@@ -2477,11 +2484,24 @@ mod tests {
         assert_eq!(poly_cell_points(CellType::Hexahedron27), None);
     }
 
+    /// [`prepare_cells`] with the prepared connectivity taken as a `Vec`, so an expected value
+    /// can be spelled `vec![..]` whether the real one borrows the caller's array (every uniform
+    /// topology) or owns a new one (`Mixed`, and a mesh of points only).
+    fn prepare_cells_vec<I: ConnectivityIndex>(
+        connectivity: &[I],
+        cell_types: &[CellType],
+        num_points: usize,
+    ) -> Result<(TopologyType, Vec<I>)> {
+        let (topology_type, cells) = prepare_cells(connectivity, cell_types, num_points)?;
+
+        Ok((topology_type, cells.into_owned()))
+    }
+
     #[test]
     fn test_prepare_cells() {
         // mixed cell types can't be written as a uniform `TopologyType`, so the type is
         // prepended to every cell, as `Mixed` topology requires
-        let (topo_type, cells_prep) = prepare_cells(
+        let (topo_type, cells_prep) = prepare_cells_vec(
             &[0_u64, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             &[
                 CellType::Vertex,
@@ -2505,52 +2525,53 @@ mod tests {
         // when every cell shares the same type, no per-cell type code is written -- the type is
         // carried once as a uniform `TopologyType`, and the connectivity is written as-is
         assert_eq!(
-            prepare_cells(&[5_u64], &[CellType::Vertex], 0).unwrap(),
+            prepare_cells_vec(&[5_u64], &[CellType::Vertex], 0).unwrap(),
             (TopologyType::Polyvertex, vec![5])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6], &[CellType::Edge], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6], &[CellType::Edge], 0).unwrap(),
             (TopologyType::Polyline, vec![5, 6])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7], &[CellType::Triangle], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7], &[CellType::Triangle], 0).unwrap(),
             (TopologyType::Triangle, vec![5, 6, 7])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7, 8], &[CellType::Quadrilateral], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7, 8], &[CellType::Quadrilateral], 0).unwrap(),
             (TopologyType::Quadrilateral, vec![5, 6, 7, 8])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7, 8], &[CellType::Tetrahedron], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7, 8], &[CellType::Tetrahedron], 0).unwrap(),
             (TopologyType::Tetrahedron, vec![5, 6, 7, 8])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7, 8, 9], &[CellType::Pyramid], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7, 8, 9], &[CellType::Pyramid], 0).unwrap(),
             (TopologyType::Pyramid, vec![5, 6, 7, 8, 9])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7, 8, 9, 10], &[CellType::Wedge], 0).unwrap(),
             (TopologyType::Wedge, vec![5, 6, 7, 8, 9, 10])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7, 8, 9, 10, 11, 12], &[CellType::Hexahedron], 0)
+                .unwrap(),
             (TopologyType::Hexahedron, vec![5, 6, 7, 8, 9, 10, 11, 12])
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7], &[CellType::Edge3], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7], &[CellType::Edge3], 0).unwrap(),
             (TopologyType::Edge3, vec![5, 6, 7])
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13],
                 &[CellType::Quadrilateral9],
                 0
@@ -2563,12 +2584,12 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(&[5_u64, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).unwrap(),
+            prepare_cells_vec(&[5_u64, 6, 7, 8, 9, 10], &[CellType::Triangle6], 0).unwrap(),
             (TopologyType::Triangle6, vec![5, 6, 7, 8, 9, 10])
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[5_u64, 6, 7, 8, 9, 10, 11, 12],
                 &[CellType::Quadrilateral8],
                 0
@@ -2581,7 +2602,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14],
                 &[CellType::Tetrahedron10],
                 0
@@ -2594,7 +2615,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
                 &[CellType::Pyramid13],
                 0
@@ -2607,7 +2628,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
                 &[CellType::Wedge15],
                 0
@@ -2620,7 +2641,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[
                     5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
                 ],
@@ -2637,7 +2658,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[
                     5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
                 ],
@@ -2654,7 +2675,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[
                     5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
                     25, 26, 27, 28
@@ -2673,7 +2694,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare_cells(
+            prepare_cells_vec(
                 &[
                     5_u64, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
                     25, 26, 27, 28, 29, 30, 31
@@ -2693,10 +2714,21 @@ mod tests {
     }
 
     #[test]
+    fn prepare_cells_borrows_a_uniform_connectivity() {
+        // the point of the `Cow`: a uniform topology writes the caller's indices as they are, so
+        // no copy of them is made however large the mesh is
+        let connectivity = [0_u64, 1, 2, 1, 2, 3];
+        let (_topology_type, cells) =
+            prepare_cells(&connectivity, &[CellType::Triangle; 2], 4).unwrap();
+
+        std::assert_matches!(cells, Cow::Borrowed(borrowed) if borrowed.as_ptr() == connectivity.as_ptr());
+    }
+
+    #[test]
     fn prepare_cells_mixed_when_types_differ() {
         // more than one cell of the same repeated type still can't use a uniform `TopologyType`
         // once a different type is mixed in
-        let (topo_type, cells_prep) = prepare_cells(
+        let (topo_type, cells_prep) = prepare_cells_vec(
             &[0_u64, 1, 2, 3, 4, 5, 6, 7],
             &[CellType::Triangle, CellType::Triangle, CellType::Edge],
             0,
@@ -2709,7 +2741,7 @@ mod tests {
 
     #[test]
     fn test_prepare_cells_no_cells() {
-        let (topo_type, cells_prep) = prepare_cells(&[] as &[u64], &[], 5).unwrap();
+        let (topo_type, cells_prep) = prepare_cells_vec(&[] as &[u64], &[], 5).unwrap();
 
         assert_eq!(topo_type, TopologyType::Polyvertex);
         assert_eq!(cells_prep, vec![0, 1, 2, 3, 4]);

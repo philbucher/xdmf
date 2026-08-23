@@ -2346,20 +2346,20 @@ fn write_xdmf_with_submeshes_names_the_heavy_data_by_array_and_submesh() {
             "bin",
             "test_output.bin/cells_1.bin",
         ),
-        #[cfg(feature = "hdf5")]
-        (
-            xdmf::DataStorage::Hdf5SingleFile {
-                deflate_level: None,
-            },
-            "h5",
-            "test_output.h5:mesh/points/1",
-        ),
-        #[cfg(not(feature = "hdf5"))]
-        (
-            xdmf::DataStorage::Ascii,
-            "txt",
-            "test_output.txt/cells_0.txt",
-        ),
+        cfg_select! {
+            feature = "hdf5" => (
+                xdmf::DataStorage::Hdf5SingleFile {
+                    deflate_level: None,
+                },
+                "h5",
+                "test_output.h5:mesh/points/1",
+            ),
+            _ => (
+                xdmf::DataStorage::Ascii,
+                "txt",
+                "test_output.txt/cells_0.txt",
+            ),
+        },
     ];
 
     for (storage, extension, referenced) in expected {
