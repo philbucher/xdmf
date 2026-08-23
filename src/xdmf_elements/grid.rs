@@ -148,12 +148,12 @@ mod tests {
     fn dummy_geometry() -> Geometry {
         Geometry {
             geometry_type: GeometryType::XYZ,
-            data_item: DataItem {
+            data_items: vec![DataItem {
                 dimensions: Some(Dimensions(vec![5, 3])),
                 data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
                 number_type: Some(NumberType::Float),
                 ..Default::default()
-            },
+            }],
         }
     }
 

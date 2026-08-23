@@ -48,6 +48,17 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
   `(3, N)` layout (separate x/y/z rows, which is C-contiguous too) raises instead of being read as
   interleaved coordinates. `cell_types` may be a numpy array of the raw VTK cell type codes, in any
   integer dtype, instead of a list.
+- `write_mesh_with_submeshes(points, connectivity, cell_types, submeshes)` splits the mesh into
+  named, independently selectable submeshes for ParaView's Multi-block Inspector — `submeshes` is a
+  sequence of `(name, cells)` pairs, `cells` a numpy integer array or a plain sequence of `int`
+  naming which cells belong to it. A submesh that is one block of consecutive cells is better given
+  as a `range` — `("fluid", range(0, 1_000_000))` costs the two numbers it is stored as, where the
+  equivalent list would first build a million Python ints. Any other `range` (a step of 2, say) is
+  read as the plain sequence it also is. Point and cell data are still passed over the whole mesh in
+  `write_time_step`; the writer slices each submesh's share. Submeshes may overlap, but every cell
+  must belong to at least one, and no two names may be the same — compared verbatim, so names that
+  differ in case alone are two submeshes. A name only ever labels a `<Grid>`, never a file (the
+  heavy data is numbered), so it may hold any printable character.
 - A time step is all-or-nothing, as in Rust: it is written when every attribute of it was accepted,
   and discarded — leaving no heavy data behind and the time still available — as soon as one is not.
 - The data writer is a context manager, so the HDF5 file is closed at the end of the `with` block
@@ -66,4 +77,8 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
   the [integer data](https://github.com/philbucher/xdmf#can-integer-data-be-written) section,
   whose limits apply here too),
   `OSError` for a failing write, and `RuntimeError` for using a consumed writer.
+- These bindings are a **writing** interface only. The crate's `TimeSeriesReader` is deliberately
+  not bound: reading is Rust-only for now, and Python code that needs to read an XDMF file back is
+  better served by `h5py` on the heavy data plus an XML parser on the `.xdmf2` file, or by ParaView's
+  own `paraview.simple`.
 - Type stubs (`xdmf.pyi`) ship with the package, so editors and type checkers see the full interface.

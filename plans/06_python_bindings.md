@@ -6,10 +6,11 @@
 > builder of M7 and the `paraview.rs` value validation), and every *pre-merge* review finding below
 > that still applies is addressed — see the "Review findings to fix on the way in" list, each of
 > which now carries its resolution. **A post-merge review of the landed commit (`5166dce`) then
-> found nine more; seven are fixed as of 2026-08-19 and two (5 and 6, both message polish) are
-> deliberately left alone — see "Post-merge review findings", each of which carries its resolution.
-> Six of the fixes landed with the M4 work; 7 (the unchecked multiply in the core crate) was
-> deferred behind it and done on this branch afterwards, where 5 and 6 were also reconsidered.**
+> found nine more; eight are fixed as of 2026-08-19 and one (6, message polish) is deliberately
+> left alone — see "Post-merge review findings", each of which carries its resolution. Six of the
+> fixes landed with the M4 work; 7 (the unchecked multiply in the core crate) was deferred behind
+> it and done on this branch afterwards, where 6 was also reconsidered (an `i64` fix was written,
+> then reverted back to `u8` to avoid duplicating the core's own bound and message).**
 > **Part 2 (wheels on PyPI) and the reader bindings are untouched**, as is Part 3 (the pyvista
 > re-run). This landed ahead of its place in the milestone order, so the ordering note below still
 > holds in reverse: M2/M4/M5 will each change the Rust API this layer wraps, and this layer then has
@@ -142,7 +143,7 @@ release wheel locally and reproduced each item against the installed module**, s
 below is a transcript, not a reading. The recorded output is from
 `maturin build --release --compatibility linux` on CPython 3.12.
 
-**All resolved on 2026-08-19**, seven by a fix and 5 and 6 by deciding against one — see the
+**All resolved on 2026-08-19**, eight by a fix and 6 by deciding against one — see the
 resolutions after the list. Two items (1 and 7) are
 silent-corruption bugs — output that is accepted, opens fine, and holds something other than what
 the caller passed, which is the one failure mode `paraview.rs` exists to prevent. Ranked by what
@@ -287,9 +288,9 @@ is validated at writer construction; the five `paraview.rs` limits surface as th
 `OverflowError`/`ValueError`.
 
 **How each was resolved (2026-08-19).** Verified the way they were found: rebuilt the wheel and
-re-ran the reproduction for every item. The suite is 60 tests (from 46), each fix carrying its own
-— 6's covers what it does instead; 7's test is a Rust one, in `tests/time_series_writer.rs`, since
-the bug is in the core crate.
+re-ran the reproduction for every item. The suite grew accordingly (from 46), each fix carrying its
+own test — 6's covers what it does instead; 7's test is a Rust one, in `tests/time_series_writer.rs`,
+since the bug is in the core crate.
 
 1. `PointArray::validate_shape` (`python/src/arrays.rs`) rejects a trailing dimension that is not 3.
    Flat arrays are exempt — a 1-D array's only dimension is a count, not a component width — so
@@ -310,11 +311,8 @@ the bug is in the core crate.
    deliberately not added:** a `__reduce__` needs a public reconstructor, which is API design rather
    than a fix, so `copy.copy`/`pickle.dumps` still raise. Worth revisiting if a caller wants to hand
    a `DataStorage` to a `multiprocessing` worker.
-5. **Not fixed, deliberately.** Threading a `role` through `contiguous_slice` touches the
-   dtype-dispatch macro, every call site and `to_values`, to turn one word of a message into
-   another word -- and a caller who gets it has one `numpy.ascontiguousarray()` to place among a
-   handful of arrays. Not worth carrying that plumbing for; the message stays the bare
-   `NOT_CONTIGUOUS` const.
+5. `contiguous_slice` takes a `role`, and `writer.rs`'s `data_role()` builds the same name the dtype
+   message uses, so `"data of 'pressure' must be C-contiguous"` points at one array out of many.
 6. **Not fixed, deliberately.** The fix was written (an `i64` parameter range-checked in the
    bindings) and then reverted: it made the bindings restate the core crate's own limit and its
    message, which `validate_deflate_level` (`src/lib.rs`) owns, and the only way to have Rust
@@ -325,8 +323,9 @@ the bug is in the core crate.
    the core validates), and -1/300 do not survive pyo3's argument conversion and are its
    `OverflowError`. Worth revisiting only if the core's field itself ever widens.
 7. Deferred at the time — the fix lands in `src/time_series_writer.rs`, which the M4 submesh work
-   was rewriting wholesale in the same tree — and done afterwards, on the branch that carries the
-   other eight without M4. `DataAttribute::size()` returns `Option<usize>` (`Matrix`'s own `n * m`
+   was rewriting wholesale in the same tree. `main` independently landed the identical fix (word for
+   word) while this branch carried its own copy, so rebasing this branch onto `main` merged the two
+   without a conflict. `DataAttribute::size()` returns `Option<usize>` (`Matrix`'s own `n * m`
    is a caller-supplied product too, so it is `checked_mul`), and `write_attribute` rejects a
    component count that is zero or does not fit, and a `num_entities * size` that does not fit,
    with one `InvalidData` — before anything is written, like every other check there. Fixing it in

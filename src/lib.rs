@@ -18,13 +18,15 @@ mod error;
 #[cfg(feature = "hdf5")]
 mod hdf5_writer;
 mod paraview;
+mod reader;
 mod time_series_writer;
 mod values;
 pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use error::{Error, Result};
-pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
+pub use reader::{DataInfo, TimeSeriesReader, ValueType};
+pub use time_series_writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use values::{ConnectivityIndex, Coordinate, Values};
 pub use xdmf_elements::CellType;
 
@@ -80,24 +82,97 @@ impl FromStr for DataStorage {
 
 /// this trait defines the interface used to write the heavy data
 ///
-/// `Send + Sync` so that a `Box<dyn DataWriter>`, and with it every writer holding one, can cross
-/// a thread boundary and be held by a shared type -- which is what lets the Python bindings
-/// (`python/`) hand a writer to Python (whose objects are shared by definition) and release the GIL
-/// for the duration of a write, instead of blocking every other Python thread.
+/// `Send + Sync` so the Python bindings can hold a writer in a `#[pyclass]` and release the GIL
+/// for the duration of a write
 pub(crate) trait DataWriter: Send + Sync {
     fn format(&self) -> Format;
 
     fn data_storage(&self) -> DataStorage;
 
-    fn write_mesh(
+    /// Write one point-coordinate array: the mesh's own when `submesh` is `None`, or that of the
+    /// submesh at that position otherwise.
+    ///
+    /// Called once per mesh or once per submesh, before the matching
+    /// [`write_connectivity`](Self::write_connectivity), and never both ways for one mesh: a
+    /// submesh carries only the points its own cells use, so that a viewer holds each block's
+    /// geometry once rather than the whole mesh's once per block.
+    fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent>;
+
+    /// Write one component of the mesh's own coordinates: every X value, then every Y, then every
+    /// Z.
+    ///
+    /// Called instead of [`write_points`](Self::write_points) for a mesh whose submeshes select
+    /// their points out of the mesh's rather than carrying a copy of them, and then exactly three
+    /// times, in order. Split by component because that is what lets all three of a submesh's
+    /// selections share the one index list naming its points -- an interleaved array would need
+    /// one index per coordinate instead. Only reachable from a backend that answers
+    /// [`supports_selections`](Self::supports_selections) with `true`.
+    fn write_point_component(
         &mut self,
-        points: &Values<'_>,
+        _component: usize,
+        _coordinates: &Values<'_>,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage cannot be selected out of, so its submeshes carry their own points",
+        ))
+    }
+
+    /// Write one connectivity array: the mesh's own when `submesh` is `None`, or that of the
+    /// submesh at that position otherwise.
+    ///
+    /// A mesh written with submeshes has no connectivity of its own -- each submesh carries the
+    /// cells it contains, indexed into its own points -- so a backend sees either one `None` call
+    /// or one `Some` call per submesh, never both.
+    fn write_connectivity(
+        &mut self,
+        submesh: Option<usize>,
         cells: &Values<'_>,
-    ) -> Result<(DataContent, DataContent)>;
+    ) -> Result<DataContent>;
+
+    /// Write one submesh's global cell indices, as the position of each of its cells in the
+    /// mesh the submesh was cut out of.
+    ///
+    /// Called once per scattered submesh, at mesh-write time; a contiguous one is a start and a
+    /// length and needs no array. Nothing in the light data references what this writes -- it is
+    /// there to read the file back with, not for `ParaView`.
+    fn write_submesh_cells(&mut self, submesh: usize, cells: &Values<'_>) -> Result<DataContent>;
+
+    /// Write one submesh's global point indices, as the position of each of its points in the
+    /// mesh the submesh was cut out of.
+    ///
+    /// The counterpart of [`write_submesh_cells`](Self::write_submesh_cells) for the points a
+    /// submesh's connectivity is renumbered against. A side channel for a reader where a submesh
+    /// carries a copy of its points, and the array its `<Geometry>` selects them through where it
+    /// does not -- in which case the light data references this and records it nowhere else.
+    fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent>;
 
     /// Write one array of attribute data, identified by its position among all the arrays
-    /// written in the current time step.
+    /// written in the current time step. Backends name their heavy data by this index
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent>;
+
+    /// Whether a submesh may reference this storage's arrays instead of being given a copy of
+    /// its share of them.
+    ///
+    /// Only the HDF5 storages can: `ParaView`'s XDMF2 reader honours a `HyperSlab`/`Coordinates`
+    /// selection for `Format="HDF"`, while for the ascii storages it reads the source array from
+    /// its start instead -- silently, so a selection there would put values in the viewer that
+    /// the file does not contain.
+    fn supports_selections(&self) -> bool {
+        false
+    }
+
+    /// Write one array of indices for a submesh's grids to select their share of a field with,
+    /// identified by its position among all such arrays.
+    ///
+    /// Written once, at the step that first needs it, and referenced by every step after --
+    /// which is why it belongs with the mesh's arrays rather than with a step's data, and why a
+    /// backend that removes a discarded step's data must leave it alone. Only reachable from a
+    /// backend that answers [`supports_selections`](Self::supports_selections) with `true`.
+    fn write_selection(&mut self, _index: usize, _indices: &Values<'_>) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage cannot be selected out of, so it is never asked to write a selection",
+        ))
+    }
 
     fn write_data_initialize(&mut self, _time: &str) -> Result<()> {
         Ok(())
@@ -148,38 +223,30 @@ pub(crate) fn create_writer(
         DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
         DataStorage::Hdf5SingleFile { deflate_level } => {
             validate_deflate_level(deflate_level)?;
-            #[cfg(feature = "hdf5")]
-            {
-                Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
+            cfg_select! {
+                feature = "hdf5" => Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
                     file_name,
                     deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
-                )?))
-            }
-            #[cfg(not(feature = "hdf5"))]
-            {
-                Err(Error::InvalidConfiguration {
+                )?)),
+                _ => Err(Error::InvalidConfiguration {
                     reason: format!(
                         "using {data_storage:?} DataStorage requires the 'hdf5' feature"
                     ),
-                })
+                }),
             }
         }
         DataStorage::Hdf5MultipleFiles { deflate_level } => {
             validate_deflate_level(deflate_level)?;
-            #[cfg(feature = "hdf5")]
-            {
-                Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
+            cfg_select! {
+                feature = "hdf5" => Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
                     file_name,
                     deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
-                )?))
-            }
-            #[cfg(not(feature = "hdf5"))]
-            {
-                Err(Error::InvalidConfiguration {
+                )?)),
+                _ => Err(Error::InvalidConfiguration {
                     reason: format!(
                         "using {data_storage:?} DataStorage requires the 'hdf5' feature"
                     ),
-                })
+                }),
             }
         }
         DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
@@ -188,13 +255,9 @@ pub(crate) fn create_writer(
 
 /// Check if the hdf5 feature is enabled.
 pub const fn is_hdf5_enabled() -> bool {
-    #[cfg(feature = "hdf5")]
-    {
-        true
-    }
-    #[cfg(not(feature = "hdf5"))]
-    {
-        false
+    cfg_select! {
+        feature = "hdf5" => true,
+        _ => false,
     }
 }
 
@@ -288,6 +351,31 @@ pub(crate) fn remove_step_files(step_files: &mut Vec<PathBuf>) -> Result<()> {
     match first_error {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// The arrays a mesh is written as, named for the file or `HDF5` dataset each goes into.
+pub(crate) const POINTS: &str = "points";
+pub(crate) const CELLS: &str = "cells";
+pub(crate) const SUBMESH_POINTS: &str = "submesh_points";
+pub(crate) const SUBMESH_CELLS: &str = "submesh_cells";
+/// Index arrays a submesh's grids select their share of a field with, see
+/// [`DataWriter::write_selection`]. Numbered like a submesh's own arrays, but by the order they
+/// were needed rather than by submesh -- one submesh needs one per shape of field it carries.
+pub(crate) const SELECTIONS: &str = "selections";
+
+/// Name of the `Information` element recording which [`DataStorage`] wrote the document. The
+/// reader takes it to reject a file it cannot read when the file is opened, rather than at the
+/// first read call that reaches heavy data.
+pub(crate) const DATA_STORAGE: &str = "data_storage";
+
+/// Name of the file one of a mesh's arrays goes into, for the backends that write one file per
+/// array: `<array>.<extension>` for the mesh's own, `<array>_<index>.<extension>` for the one
+/// belonging to the submesh at that position.
+pub(crate) fn mesh_file_name(array: &str, submesh: Option<usize>, extension: &str) -> String {
+    match submesh {
+        Some(index) => format!("{array}_{index}.{extension}"),
+        None => format!("{array}.{extension}"),
     }
 }
 

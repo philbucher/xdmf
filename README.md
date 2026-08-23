@@ -61,6 +61,51 @@ nothing references. The error may be one of your own — any type that `xdmf::Er
 works, so `?` can be used on both inside the closure, and `write_time_step` hands your error back
 unchanged.
 
+### Can parts of the mesh be shown separately?
+
+Yes — `write_mesh_with_submeshes` takes named subsets of the mesh's cells alongside the mesh itself,
+and each becomes a separately selectable block in ParaView's Multi-block Inspector
+(`View -> Multi-block Inspector`). Submeshes may overlap: a cell can belong to any number of them.
+
+A submesh's cells are given either as an index list or, when it is one block of consecutive cells
+(as element blocks and material zones usually are), as a range — `("fluid", 0..1_000_000)` rather
+than a million-entry `Vec`. Both are stored as the same two numbers; the range just skips building
+the list. See `SubmeshCells` for every shape accepted.
+
+Time step data is still written over the whole mesh, exactly as above — point data over all points,
+cell data over all cells — and the writer gives each submesh its share, so submeshes can be added to
+existing code without changing how it produces its field data.
+
+Each block holds only the points its own cells use, with its connectivity numbered against them,
+so ParaView holds the mesh roughly once however many blocks it is split into. Measured on a
+40,401-point mesh in ParaView 5.13.3 and 6.1: 2.8 MB as one block, 4.8 MB as 256 — where a layout
+that gave every block the whole point set took 317.8 MB.
+
+For the two HDF5 storages nothing is copied per block: the mesh's coordinates are written once, and
+each block's `<Geometry>` and `<Attribute>`s say which part of them and of every field that block
+holds. A point on a block boundary is therefore stored once however many blocks touch it, and a
+step costs the same however many blocks there are and however much they overlap. Measured on the
+same mesh over 10 steps at 64 blocks: 27.2 MB of heavy data before, 17.2 MB now, and 65.1 MB
+against 20.2 MB when the blocks are strided rather than contiguous. It is paid for in light data
+(+78%) and in read time (about 40% longer to step through that animation, roughly double when the
+blocks are strided).
+
+The ascii and binary storages keep a copy per block instead — of its points, and of its share of
+every field — because ParaView reads a selection out of those formats from the start of the array
+instead of where it points, silently, so the writer does not emit one there. Their cost is the
+duplication: points on a block boundary are written once per block that touches them (+73% of the
+mesh's heavy data at 256 blocks, nothing measurable at a handful).
+
+To look at one submesh on its own, use the Multi-block Inspector or an `Extract Block` filter,
+which both select a block by name and hold it for the whole animation. ParaView's *other* selection
+list — `Grids` in the reader's Properties panel — does not: it lists one entry per grid in the file,
+which for a time series is one per (submesh, time step), so unchecking entries there hides a submesh
+at some steps and not at others. That list is per-step for any time series this crate writes,
+submeshes or not.
+
+See [`examples/submeshes.rs`](examples/submeshes.rs) for a complete example
+(`cargo run --example submeshes`).
+
 ### Which precision should be used for the floating point data?
 
 Both `f32` and `f64` are accepted, for the mesh coordinates as well as for the point and cell data,
@@ -148,6 +193,68 @@ The xdmf format allows to separate the storing of light and heavy data. Differen
 - `XdmfH5Single`: The heavy data is stored in a single hdf5 file. This is the **recommended format** unless special requirements exist.
 - `XdmfH5Multiple`: The heavy data is stored in a multiple hdf5 files, one for each time step (and mesh). This creates more files and usually only makes sense when the data is accessed concurrently while its being written.
 
+## Reading
+
+`TimeSeriesReader::new` parses the whole file up front, so every read call after it is a plain,
+independent, repeatable query -- there is no phase to pass through first, unlike the writer (which
+writes the mesh once and irreversibly before any time step). Only the two HDF5 storages
+(`Hdf5SingleFile`/`Hdf5MultipleFiles`) can be read so far; opening a file written with
+`Ascii`/`AsciiInline`/`Binary` fails right there, rather than at the first call that reaches the
+heavy data.
+
+~~~rs
+use xdmf::TimeSeriesReader;
+
+// open the file the writer example above produced
+let reader = TimeSeriesReader::new("xdmf_writing.xdmf2").expect("failed to open XDMF file");
+
+// points and topology (connectivity + cell types) are independent reads, each filling a buffer
+// of whichever element type the caller wants it at
+let mut points: Vec<f64> = Vec::new();
+reader.read_points(&mut points).expect("failed to read points");
+
+let mut connectivity: Vec<u64> = Vec::new();
+let mut cell_types = Vec::new();
+reader
+    .read_topology(&mut connectivity, &mut cell_types)
+    .expect("failed to read topology");
+
+// if the mesh was written with submeshes, each one's own cells (and points) can be recovered,
+// as indices into the buffers above -- empty for a mesh with no submeshes
+for (index, name) in reader.submesh_names().iter().enumerate() {
+    let cells = reader.submesh_cells(index).expect("failed to read submesh cells");
+    println!("{name}: {} cells", cells.len());
+}
+
+// then read each step's data, reusing the same buffers
+let mut point_data = Vec::new();
+let mut cell_data = Vec::new();
+for step in 0..reader.num_steps() {
+    reader
+        .read_point_data::<f64>(step, "point_data", &mut point_data)
+        .expect("failed to read point data");
+    reader
+        .read_cell_data::<f64>(step, "cell_data", &mut cell_data)
+        .expect("failed to read cell data");
+}
+~~~
+
+`point_data_info`/`cell_data_info` report a field's shape and element type before it is read, so a
+caller can size a buffer and pick a type without guessing. Reading a field into a wider type than it
+was written as is allowed (e.g. `f32` file data read into a `Vec<f64>`); narrowing is rejected
+instead of silently losing precision. `read_points` follows the same rule (`f32`/`f64`, see
+`Coordinate`). `read_topology` takes any of `u32`/`u64`/`i32`/`i64` (see `ConnectivityIndex`) and
+checks the *values* instead: what it hands back are positions in the mesh it reassembled, not the
+file's own array, so any type that holds every index works whatever the file was written as.
+
+A mesh written with `write_mesh_with_submeshes` reads back as the single, whole mesh it started from
+— `read_points`/`read_topology` put it back together from the submeshes' own points, cells and
+connectivity, and `points`/`cell_types`/`connectivity` come back exactly as they would from a mesh
+written without submeshes at all. `submesh_names()`/`submesh_cells()`/`submesh_points()` recover
+which mesh cells and points each submesh holds, in case a caller wants that split back too.
+
+See [`tests/reader.rs`](./tests/reader.rs) for more examples.
+
 ## Python interface
 
 The [`python/`](./python) directory holds bindings that expose the same `TimeSeriesWriter` interface
@@ -171,8 +278,7 @@ Initial comparisons show smaller storage sizes as well as faster write times. Th
 ## Roadmap / planned features
 
 - MPI support <!-- (writing to one file => writing separate independent files can already work if file names passed have ranks) -->
-- SubMesh support, so that parts of the mesh can be visualized with the MultiBlock inspector
-- Reading files. Hopefully even concurrently, perhaps consuming to safe space.
+- Reading `Ascii`/`AsciiInline`/`Binary` files (HDF5 already supported, see [Reading](#reading)).
 
 <!-- ## TODOs
 

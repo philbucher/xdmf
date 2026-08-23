@@ -1,5 +1,8 @@
 """Type stubs for the `xdmf` extension module (pyo3/maturin), hand-written since the API surface
 is small. Keep in sync with `src/{enums,writer}.rs`.
+
+These bindings expose the crate's writing interface only; its `TimeSeriesReader` is deliberately
+not bound, so reading an XDMF file back is Rust-only for now.
 """
 
 from collections.abc import Sequence
@@ -14,6 +17,10 @@ IndexArray = (
 )
 ValueArray = PointArray | IndexArray
 NamedData = Sequence[tuple[str, "DataAttribute", ValueArray]]
+# a `range` of step 1 is passed straight through as the block it names, without its indices being
+# built; any other range reads as the plain sequence of ints it also is
+SubmeshCells = range | Sequence[int] | npt.NDArray[np.integer]
+NamedSubmesh = Sequence[tuple[str, SubmeshCells]]
 
 def is_hdf5_enabled() -> bool:
     """Whether this build can write the HDF5 storages."""
@@ -29,11 +36,17 @@ class DataStorage:
 
     @staticmethod
     def hdf5_single_file(deflate_level: int) -> "DataStorage":
-        """HDF5, all data in a single file, at the given deflate level (0-9)."""
+        """HDF5, all data in a single file, at the given deflate level.
+
+        Raises `ValueError` if the level is outside 0-9.
+        """
 
     @staticmethod
     def hdf5_multiple_files(deflate_level: int) -> "DataStorage":
-        """HDF5, one file per time step, at the given deflate level (0-9)."""
+        """HDF5, one file per time step, at the given deflate level.
+
+        Raises `ValueError` if the level is outside 0-9.
+        """
 
 class CellType:
     """Cell types as defined in the VTK file format. The values are the raw VTK codes."""
@@ -120,4 +133,33 @@ class TimeSeriesWriter:
 
         Consumes this writer; calling it a second time raises `RuntimeError`. A *rejected* call
         leaves the writer usable, so a dtype or shape that can be fixed can simply be retried.
+        """
+
+    def write_mesh_with_submeshes(
+        self,
+        points: PointArray,
+        connectivity: IndexArray,
+        cell_types: CellTypes,
+        submeshes: NamedSubmesh,
+    ) -> TimeSeriesDataWriter:
+        """Write the mesh split into named submeshes, returning the writer for the time step data.
+
+        `submeshes` is a sequence of `(name, cells)` pairs, `cells` being a `range`, a numpy integer
+        array or a sequence of `int` naming which cells (indices into `cell_types`) belong to that
+        submesh. A submesh that is one block of consecutive cells is best given as
+        `range(start, stop)`, which is taken as the two numbers it is stored as without its indices
+        being built at all. Each submesh becomes its own selectable block in ParaView's Multi-block
+        Inspector (`View -> Multi-block Inspector`); every cell must belong to at least one
+        submesh, but submeshes may overlap. Each submesh is written with the points its own cells
+        use, so a viewer holds the mesh about once however many submeshes it is split into. Point
+        and cell data are still written over the whole mesh in
+        `TimeSeriesDataWriter.write_time_step`, exactly as for `write_mesh`.
+
+        Raises `ValueError` for a bad submesh (empty, a duplicate or out-of-range cell index, a name
+        used twice, or a cell in no submesh at all).
+
+        Consumes this writer; calling it a second time (or after `write_mesh`) raises `RuntimeError`.
+        A call rejected over a dtype, a shape or a cell type leaves the writer usable, but the
+        submesh and mesh `ValueError`s above are raised from inside the consuming call, so retrying
+        after one of those raises `RuntimeError` instead.
         """

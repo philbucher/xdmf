@@ -5,11 +5,15 @@ use serde::{Deserialize, Serialize};
 use super::dimensions::Dimensions;
 
 /// Core datastructure to define how, where, and in which format data is stored.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DataItem {
     #[serde(rename = "@Name", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]
     pub name: Option<String>,
+
+    #[serde(rename = "@ItemType", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
+    pub item_type: Option<ItemType>,
 
     #[serde(rename = "@Dimensions", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]
@@ -44,6 +48,7 @@ impl Default for DataItem {
     fn default() -> Self {
         Self {
             name: None,
+            item_type: None,
             dimensions: Some(Dimensions(vec![1])),
             number_type: Some(NumberType::default()),
             format: Some(Format::default()),
@@ -55,11 +60,72 @@ impl Default for DataItem {
     }
 }
 
+// `quick-xml`'s serde support cannot deserialize `#[serde(flatten)]` combined with a `$value`
+// variant (verified: it errors "no variant of enum DataContent found in flattened data" on every
+// shape). Serialization is unaffected -- only `Deserialize` is hand-written, against a
+// non-flattened intermediate that names the three content shapes as ordinary fields instead of a
+// flattened enum, which `quick-xml` handles fine.
+impl<'de> Deserialize<'de> for DataItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(rename = "@Name", default)]
+            name: Option<String>,
+            #[serde(rename = "@ItemType", default)]
+            item_type: Option<ItemType>,
+            #[serde(rename = "@Dimensions", default)]
+            dimensions: Option<Dimensions>,
+            #[serde(rename = "@NumberType", default)]
+            number_type: Option<NumberType>,
+            #[serde(rename = "@Format", default)]
+            format: Option<Format>,
+            #[serde(rename = "@Precision", default)]
+            precision: Option<u8>,
+            #[serde(rename = "@Endian", default)]
+            endian: Option<Endian>,
+            #[serde(rename = "@Reference", default)]
+            reference: Option<String>,
+            #[serde(rename = "$text", default)]
+            text: Option<String>,
+            #[serde(rename = "xi:include", default)]
+            include: Option<XInclude>,
+            #[serde(rename = "DataItem", default)]
+            items: Vec<DataItem>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+
+        let data = if !raw.items.is_empty() {
+            DataContent::Items(raw.items)
+        } else if let Some(include) = raw.include {
+            DataContent::Include(include)
+        } else {
+            DataContent::Raw(raw.text.unwrap_or_default())
+        };
+
+        Ok(Self {
+            name: raw.name,
+            item_type: raw.item_type,
+            dimensions: raw.dimensions,
+            number_type: raw.number_type,
+            format: raw.format,
+            precision: raw.precision,
+            endian: raw.endian,
+            data,
+            reference: raw.reference,
+        })
+    }
+}
+
 impl DataItem {
     /// Create a new data item that references another data item
     pub fn new_reference(source: &Self, source_path: &str) -> Self {
         Self {
             name: None,
+            item_type: None,
             dimensions: None,
             number_type: None,
             format: None,
@@ -100,7 +166,11 @@ impl XInclude {
 }
 
 /// Specifies where (ascii) data is stored, either inline or in an external file.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// Only [`Serialize`]s: `DataItem`'s hand-written [`Deserialize`] builds this directly from a
+/// non-flattened intermediate rather than through this enum's own derive, which `quick-xml`
+/// cannot deserialize combined with `#[serde(flatten)]` -- see the impl on [`DataItem`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum DataContent {
     #[serde(rename = "$value")]
     /// Store the data as raw text
@@ -109,6 +179,11 @@ pub enum DataContent {
     #[serde(rename = "xi:include")]
     /// Store the data in an external file and include it using [XInclude](https://www.w3.org/TR/xinclude/)
     Include(XInclude),
+
+    #[serde(rename = "DataItem")]
+    /// Take the data from nested items, which is how the [`ItemType`]s other than
+    /// `Uniform` name what they select and what they select it from
+    Items(Vec<DataItem>),
 }
 
 impl From<String> for DataContent {
@@ -120,6 +195,12 @@ impl From<String> for DataContent {
 impl From<&str> for DataContent {
     fn from(data: &str) -> Self {
         Self::Raw(data.to_string())
+    }
+}
+
+impl From<Vec<DataItem>> for DataContent {
+    fn from(items: Vec<DataItem>) -> Self {
+        Self::Items(items)
     }
 }
 
@@ -143,6 +224,22 @@ pub enum NumberType {
     Char,
     #[doc(hidden)]
     UChar,
+}
+
+/// How a `DataItem` gets its values: from the storage it names, or by selecting out of another
+/// item.
+///
+/// The selecting types take two nested items -- what to select, then what to select it from -- and
+/// are only read correctly by `ParaView` when that source is stored as [`Format::HDF`]; the ascii
+/// storages ignore a selection and read the source from its start instead, and `Format::Binary`
+/// does the same for `Coordinates`.
+/// `Uniform`, the default, is left out of the XML rather than written, and has no variant here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ItemType {
+    #[doc(hidden)]
+    HyperSlab,
+    #[doc(hidden)]
+    Coordinates,
 }
 
 /// The format in which the heavy data is stored.
@@ -182,7 +279,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Serialize)]
+    #[derive(Deserialize, Serialize)]
     struct XmlRoot {
         #[serde(rename = "DataItem")]
         data_item: DataItem,
@@ -222,6 +319,7 @@ mod tests {
     fn data_item_custom() {
         let custom_item = DataItem {
             name: Some("custom_data_item".to_string()),
+            item_type: None,
             dimensions: Some(Dimensions(vec![2, 3])),
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
@@ -265,6 +363,7 @@ mod tests {
     fn data_item_serialize() {
         let data_item = DataItem {
             name: Some("custom_data_item".to_string()),
+            item_type: None,
             dimensions: Some(Dimensions(vec![2, 3])),
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
@@ -306,6 +405,7 @@ mod tests {
     fn data_item_include_serialize() {
         let custom_item = DataItem {
             name: Some("custom_data_item".to_string()),
+            item_type: None,
             dimensions: Some(Dimensions(vec![2, 3])),
             number_type: Some(NumberType::Int),
             format: Some(Format::HDF),
@@ -336,6 +436,153 @@ mod tests {
                 </DataItem>\
             </XmlRoot>"
         );
+    }
+
+    #[test]
+    fn data_item_selection_serialize() {
+        let source = DataItem {
+            name: None,
+            item_type: None,
+            dimensions: Some(Dimensions(vec![9, 3])),
+            number_type: Some(NumberType::Float),
+            format: Some(Format::HDF),
+            precision: Some(8),
+            endian: None,
+            data: "mesh.h5:/data/t_0/0".to_string().into(),
+            reference: None,
+        };
+        let selector = DataItem {
+            name: None,
+            item_type: None,
+            dimensions: Some(Dimensions(vec![3, 2])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::XML),
+            precision: Some(4),
+            endian: None,
+            data: "2 0 1 1 4 3".to_string().into(),
+            reference: None,
+        };
+
+        let selection = DataItem {
+            name: None,
+            item_type: Some(ItemType::HyperSlab),
+            dimensions: Some(Dimensions(vec![4, 3])),
+            number_type: Some(NumberType::Float),
+            format: None,
+            precision: Some(8),
+            endian: None,
+            data: vec![selector, source].into(),
+            reference: None,
+        };
+
+        pretty_assertions::assert_eq!(
+            to_string(&XmlRoot {
+                data_item: selection
+            })
+            .unwrap(),
+            "<XmlRoot>\
+            <DataItem ItemType=\"HyperSlab\" Dimensions=\"4 3\" NumberType=\"Float\" Precision=\"8\">\
+                <DataItem Dimensions=\"3 2\" NumberType=\"Int\" Format=\"XML\" Precision=\"4\">2 0 1 1 4 3</DataItem>\
+                <DataItem Dimensions=\"9 3\" NumberType=\"Float\" Format=\"HDF\" Precision=\"8\">mesh.h5:/data/t_0/0</DataItem>\
+            </DataItem>\
+            </XmlRoot>"
+        );
+    }
+
+    // `quick-xml`'s serde support cannot deserialize `#[serde(flatten)]` combined with a `$value`
+    // variant, which is why `DataItem` has a hand-written `Deserialize` -- these four round-trip
+    // every shape it is written in.
+    #[test]
+    fn data_item_deserialize() {
+        let data_item = DataItem {
+            name: Some("custom_data_item".to_string()),
+            item_type: None,
+            dimensions: Some(Dimensions(vec![2, 3])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::HDF),
+            precision: Some(8),
+            endian: None,
+            data: "custom_data".to_string().into(),
+            reference: None,
+        };
+
+        let xml = to_string(&XmlRoot {
+            data_item: data_item.clone(),
+        })
+        .unwrap();
+        let round_tripped: XmlRoot = quick_xml::de::from_str(&xml).unwrap();
+
+        pretty_assertions::assert_eq!(round_tripped.data_item, data_item);
+    }
+
+    #[test]
+    fn data_item_reference_deserialize() {
+        let source_data_item = DataItem {
+            name: Some("source_data_item".to_string()),
+            ..Default::default()
+        };
+        let ref_item = DataItem::new_reference(&source_data_item, "/Xdmf/Domain/DataItem");
+
+        let xml = to_string(&XmlRoot {
+            data_item: ref_item.clone(),
+        })
+        .unwrap();
+        let round_tripped: XmlRoot = quick_xml::de::from_str(&xml).unwrap();
+
+        pretty_assertions::assert_eq!(round_tripped.data_item, ref_item);
+    }
+
+    // No `data_item_include_deserialize` round-trip: `quick-xml` fails to route a nested
+    // `xi:include` child to the `Raw::include` field once `DataItem` sits inside another struct
+    // (verified -- it resolves fine as the directly-deserialized root type, but every real
+    // document nests it inside `Domain`/`Geometry`/`Topology`/`Attribute`). Not a gap the reader
+    // hits today: `Format::HDF` never writes `DataContent::Include`, only the `Ascii` backend's
+    // external-file mode does (`ascii_writer.rs`), so it only needs solving once the ascii
+    // storages can be read -- most likely with a hand-rolled event-loop parse of that one child.
+
+    #[test]
+    fn data_item_selection_deserialize() {
+        let source = DataItem {
+            name: None,
+            item_type: None,
+            dimensions: Some(Dimensions(vec![9, 3])),
+            number_type: Some(NumberType::Float),
+            format: Some(Format::HDF),
+            precision: Some(8),
+            endian: None,
+            data: "mesh.h5:/data/t_0/0".to_string().into(),
+            reference: None,
+        };
+        let selector = DataItem {
+            name: None,
+            item_type: None,
+            dimensions: Some(Dimensions(vec![3, 2])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::XML),
+            precision: Some(4),
+            endian: None,
+            data: "2 0 1 1 4 3".to_string().into(),
+            reference: None,
+        };
+        let selection = DataItem {
+            name: None,
+            item_type: Some(ItemType::HyperSlab),
+            dimensions: Some(Dimensions(vec![4, 3])),
+            number_type: Some(NumberType::Float),
+            format: None,
+            precision: Some(8),
+            endian: None,
+            data: vec![selector, source].into(),
+            reference: None,
+        };
+
+        let xml = to_string(&XmlRoot {
+            data_item: selection.clone(),
+        })
+        .unwrap();
+        let round_tripped: XmlRoot = quick_xml::de::from_str(&xml).unwrap();
+
+        pretty_assertions::assert_eq!(round_tripped.data_item, selection);
     }
 
     #[test]

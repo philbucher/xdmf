@@ -7,8 +7,9 @@ use std::{
 };
 
 use crate::{
-    DataStorage, DataWriter, Error, Result,
+    CELLS, DataStorage, DataWriter, Error, POINTS, Result, SUBMESH_CELLS, SUBMESH_POINTS,
     error::io_ctx,
+    mesh_file_name,
     values::Values,
     xdmf_elements::data_item::{DataContent, Format, XInclude},
 };
@@ -30,15 +31,34 @@ impl DataWriter for AsciiInlineWriter {
         DataStorage::AsciiInline
     }
 
-    fn write_mesh(
+    // Which submesh this is plays no part here, for the points as for every other mesh array:
+    // inline data is identified by where it sits in the XML, not by a name or a number of its own.
+    fn write_points(
         &mut self,
+        _submesh: Option<usize>,
         points: &Values<'_>,
+    ) -> Result<DataContent> {
+        Ok(values_to_string(points).into())
+    }
+
+    fn write_connectivity(
+        &mut self,
+        _submesh: Option<usize>,
         cells: &Values<'_>,
-    ) -> Result<(DataContent, DataContent)> {
-        Ok((
-            values_to_string(points).into(),
-            values_to_string(cells).into(),
-        ))
+    ) -> Result<DataContent> {
+        Ok(values_to_string(cells).into())
+    }
+
+    fn write_submesh_cells(&mut self, _submesh: usize, cells: &Values<'_>) -> Result<DataContent> {
+        Ok(values_to_string(cells).into())
+    }
+
+    fn write_submesh_points(
+        &mut self,
+        _submesh: usize,
+        points: &Values<'_>,
+    ) -> Result<DataContent> {
+        Ok(values_to_string(points).into())
     }
 
     fn write_data(&mut self, _index: usize, data: &Values<'_>) -> Result<DataContent> {
@@ -81,6 +101,21 @@ impl AsciiWriter {
     fn relative_path(&self, file_name: &str) -> String {
         format!("{}/{file_name}", self.folder_name.to_string_lossy())
     }
+
+    // Shared by the points and every connectivity array, which differ only in the file they go to.
+    fn write_mesh_file(&self, file_name: &str, values: &Values<'_>) -> Result<DataContent> {
+        let path = self.txt_files_dir.join(file_name);
+
+        let mut file =
+            BufWriter::new(File::create(&path).map_err(io_ctx("creating mesh file", &path))?);
+
+        values_to_writer(values, &mut file).map_err(io_ctx("writing mesh data", &path))?;
+
+        // explicitly flush the buffer to ensure all data is written and errors are caught
+        file.flush().map_err(io_ctx("flushing mesh file", &path))?;
+
+        Ok(XInclude::new(self.relative_path(file_name), true).into())
+    }
 }
 
 impl DataWriter for AsciiWriter {
@@ -92,41 +127,27 @@ impl DataWriter for AsciiWriter {
         DataStorage::Ascii
     }
 
-    fn write_mesh(
+    fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_file(&mesh_file_name(POINTS, submesh, "txt"), points)
+    }
+
+    fn write_connectivity(
         &mut self,
-        points: &Values<'_>,
+        submesh: Option<usize>,
         cells: &Values<'_>,
-    ) -> Result<(DataContent, DataContent)> {
-        // create files for points and cells
-        let points_file_name = "points.txt";
-        let cells_file_name = "cells.txt";
-        let points_path = self.txt_files_dir.join(points_file_name);
-        let cells_path = self.txt_files_dir.join(cells_file_name);
+    ) -> Result<DataContent> {
+        self.write_mesh_file(&mesh_file_name(CELLS, submesh, "txt"), cells)
+    }
 
-        let mut file_points = BufWriter::new(
-            File::create(&points_path).map_err(io_ctx("creating points file", &points_path))?,
-        );
-        let mut file_cells = BufWriter::new(
-            File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
-        );
+    fn write_submesh_cells(&mut self, submesh: usize, cells: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_file(&mesh_file_name(SUBMESH_CELLS, Some(submesh), "txt"), cells)
+    }
 
-        values_to_writer(points, &mut file_points)
-            .map_err(io_ctx("writing points data", &points_path))?;
-        values_to_writer(cells, &mut file_cells)
-            .map_err(io_ctx("writing cells data", &cells_path))?;
-
-        // explicitly flush the buffers to ensure all data is written and errors are caught
-        file_points
-            .flush()
-            .map_err(io_ctx("flushing points file", &points_path))?;
-        file_cells
-            .flush()
-            .map_err(io_ctx("flushing cells file", &cells_path))?;
-
-        Ok((
-            XInclude::new(self.relative_path(points_file_name), true).into(),
-            XInclude::new(self.relative_path(cells_file_name), true).into(),
-        ))
+    fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_file(
+            &mesh_file_name(SUBMESH_POINTS, Some(submesh), "txt"),
+            points,
+        )
     }
 
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
@@ -464,13 +485,14 @@ mod tests {
         let points = vec![1., 2., 3., 4., 5., 6.];
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
-        let result = writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+        let points_data = writer
+            .write_points(None, &points.as_slice().into())
             .unwrap();
-        pretty_assertions::assert_eq!(
-            result,
-            ("1e0 2e0 3e0 4e0 5e0 6e0".into(), "0 1 2 0 2 3".into())
-        );
+        let cells_data = writer
+            .write_connectivity(None, &cells.as_slice().into())
+            .unwrap();
+        pretty_assertions::assert_eq!(points_data, "1e0 2e0 3e0 4e0 5e0 6e0".into());
+        pretty_assertions::assert_eq!(cells_data, "0 1 2 0 2 3".into());
     }
 
     #[test]
@@ -495,8 +517,8 @@ mod tests {
         );
 
         let txt_dir = file_name.with_extension("txt");
-        let node_file = txt_dir.join("data_t_0.5_0.txt");
-        let cell_file = txt_dir.join("data_t_0.5_1.txt");
+        let first_file = txt_dir.join("data_t_0.5_0.txt");
+        let second_file = txt_dir.join("data_t_0.5_1.txt");
 
         writer.write_data_initialize("0.5").unwrap();
         writer
@@ -505,14 +527,14 @@ mod tests {
         writer
             .write_data(1, &Values::F64(vec![3.0].into()))
             .unwrap();
-        assert!(node_file.exists());
-        assert!(cell_file.exists());
+        assert!(first_file.exists());
+        assert!(second_file.exists());
 
         writer.write_data_discard().unwrap();
 
         // every file written for the step is removed, not just the last one
-        assert!(!node_file.exists());
-        assert!(!cell_file.exists());
+        assert!(!first_file.exists());
+        assert!(!second_file.exists());
         assert!(writer.write_time.is_none());
         assert!(writer.step_files.is_empty());
 
@@ -525,7 +547,7 @@ mod tests {
         writer.write_data_finalize().unwrap();
 
         assert!(txt_dir.join("data_t_0.5_2.txt").exists());
-        assert!(!node_file.exists());
+        assert!(!first_file.exists());
     }
 
     #[test]
@@ -650,8 +672,11 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
-        let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+        let points_path = writer
+            .write_points(None, &points.as_slice().into())
+            .unwrap();
+        let cells_path = writer
+            .write_connectivity(None, &cells.as_slice().into())
             .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
@@ -680,7 +705,10 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.5];
         let cells = vec![0_u64, 1, 2];
         writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+            .write_points(None, &points.as_slice().into())
+            .unwrap();
+        writer
+            .write_connectivity(None, &cells.as_slice().into())
             .unwrap();
 
         // f32 coordinates are written with f32's digit count, not f64's
@@ -716,13 +744,14 @@ mod tests {
         let points = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let cells = vec![0_u64, 1, 2, 0, 2, 3];
 
-        let result = writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+        let points_data = writer
+            .write_points(None, &points.as_slice().into())
             .unwrap();
-        pretty_assertions::assert_eq!(
-            result,
-            ("1e0 2e0 3e0 4e0 5e0 6e0".into(), "0 1 2 0 2 3".into())
-        );
+        let cells_data = writer
+            .write_connectivity(None, &cells.as_slice().into())
+            .unwrap();
+        pretty_assertions::assert_eq!(points_data, "1e0 2e0 3e0 4e0 5e0 6e0".into());
+        pretty_assertions::assert_eq!(cells_data, "0 1 2 0 2 3".into());
     }
 
     #[test]
@@ -741,12 +770,14 @@ mod tests {
         let file_name = tmp_dir.path().join("sub/folder/test.xdmf");
         let mut writer = AsciiWriter::new(file_name).unwrap();
         let write_time = "12.258";
+        let points_index = 0;
+        let cells_index = 1;
         let data_file_points = writer
             .txt_files_dir
-            .join(format!("data_t_{write_time}_0.txt"));
+            .join(format!("data_t_{write_time}_{points_index}.txt"));
         let data_file_cells = writer
             .txt_files_dir
-            .join(format!("data_t_{write_time}_1.txt"));
+            .join(format!("data_t_{write_time}_{cells_index}.txt"));
         assert!(!data_file_points.exists());
         assert!(!data_file_cells.exists());
 
@@ -757,7 +788,7 @@ mod tests {
         // write points data
         let data_points = vec![0.0, 1.0, 2.0];
         let data_path_points = writer
-            .write_data(0, &Values::F64(data_points.as_slice().into()))
+            .write_data(points_index, &Values::F64(data_points.as_slice().into()))
             .unwrap();
 
         assert!(data_file_points.exists());
@@ -766,7 +797,7 @@ mod tests {
         // write cell data
         let data_cells = vec![-9.0, 1.0, 2.0, 55.87];
         let data_path_cells = writer
-            .write_data(1, &Values::F64(data_cells.as_slice().into()))
+            .write_data(cells_index, &Values::F64(data_cells.as_slice().into()))
             .unwrap();
         assert!(data_file_points.exists());
         assert!(data_file_cells.exists());
