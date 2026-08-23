@@ -56,8 +56,9 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
   equivalent list would first build a million Python ints. Any other `range` (a step of 2, say) is
   read as the plain sequence it also is. Point and cell data are still passed over the whole mesh in
   `write_time_step`; the writer slices each submesh's share. Submeshes may overlap, but every cell
-  must belong to at least one, and no two names may differ only in case (a name becomes a file name
-  for the ascii and binary storages).
+  must belong to at least one, and no two names may be the same — compared verbatim, so names that
+  differ in case alone are two submeshes. A name only ever labels a `<Grid>`, never a file (the
+  heavy data is numbered), so it may hold any printable character.
 - A time step is all-or-nothing, as in Rust: it is written when every attribute of it was accepted,
   and discarded — leaving no heavy data behind and the time still available — as soon as one is not.
 - The data writer is a context manager, so the HDF5 file is closed at the end of the `with` block

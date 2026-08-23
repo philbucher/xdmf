@@ -308,6 +308,7 @@ impl TimeSeriesReader {
             let num_points =
                 mesh_num_points_with_submeshes(analysis.mesh_grid(0, domain)?, domain)?;
             let points_membership = submesh_points_membership(&analysis, domain, &document)?;
+            check_membership_in_range(&points_membership, num_points, "point")?;
             let cells_membership = parse_submesh_cells(&document, domain)?;
 
             if cells_membership.len() != submesh_names.len() {
@@ -959,6 +960,20 @@ fn read_topology_with_submeshes<I: ConnectivityIndex>(
 
         let mut local_offset = 0_usize;
         for (&cell_type, global_cell) in scratch_cell_types.iter().zip(cells.iter()) {
+            // `offsets` was built from the cell types pass 1 recorded, where the last submesh to
+            // claim an overlapped cell won. Two submeshes disagreeing about a shared cell's type
+            // would make this cell's span here a different width than the slot reserved for it,
+            // and write over its neighbour's -- so the disagreement is reported instead.
+            if cell_type != cell_types[global_cell] {
+                return Err(Error::InvalidDocument {
+                    reason: format!(
+                        "submeshes disagree about mesh cell {global_cell}: one holds it as \
+                         {cell_type:?}, another as {:?}",
+                        cell_types[global_cell]
+                    ),
+                });
+            }
+
             let stride = cell_type.num_points();
             let global_start = offsets[global_cell];
 
@@ -1066,6 +1081,33 @@ fn submesh_points_membership(
             submesh_geometry_membership(analysis.mesh_grid(submesh, domain)?, domain, document)
         })
         .collect()
+}
+
+/// Reject a membership naming an entity the mesh does not have, once, when the document is opened.
+///
+/// The cell lists need no such check -- `mesh_num_cells_from_membership` takes the mesh's cell
+/// count *from* them -- but a submesh's points are named by its `<Geometry>` selector while the
+/// mesh's point count comes from the array that selector reads out of, so the two are independent
+/// statements of the file's and can disagree. Every later use of these indices treats them as
+/// positions: `scatter_field` writes at them, and [`TimeSeriesReader::submesh_points`] hands them
+/// out as indices into the buffer [`TimeSeriesReader::read_points`] fills.
+fn check_membership_in_range(
+    membership: &[Membership],
+    num_entities: usize,
+    entity: &str,
+) -> Result<()> {
+    for (submesh, entities) in membership.iter().enumerate() {
+        if let Some(out_of_range) = entities.iter().find(|&index| index >= num_entities) {
+            return Err(Error::InvalidDocument {
+                reason: format!(
+                    "submesh {submesh} holds {entity} {out_of_range}, but the mesh only has \
+                     {num_entities} {entity}s"
+                ),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn submesh_geometry_membership(

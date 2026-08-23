@@ -977,6 +977,92 @@ fn a_selector_past_the_end_of_its_source_is_rejected() {
     }
 }
 
+/// A submesh's `<Geometry>` selector names which mesh points it holds, while the mesh's point
+/// count comes from the array that selector reads out of -- two independent statements of the
+/// file's, so a hand-written or truncated document can have them disagree. Those indices are
+/// written *at* when a field is scattered back together, so one past the end is reported when the
+/// document is opened rather than indexed with.
+#[test]
+fn a_submesh_holding_a_point_the_mesh_does_not_have_is_rejected() {
+    let (coords, connectivity, cell_types) = submesh_test_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, STORAGES[0])
+        .unwrap()
+        .write_mesh_with_submeshes(
+            &coords,
+            &connectivity,
+            &cell_types,
+            [("edge", &[0][..]), ("surface", &[1, 2][..])],
+        )
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+
+    // the first submesh holds the mesh's points 0..2, as the HyperSlab its three coordinate
+    // selections share -- widened here to reach past the 4 points the mesh has
+    assert!(document.contains(">0 1 2<"), "{document}");
+    std::fs::write(&document_path, document.replace(">0 1 2<", ">0 1 40<")).unwrap();
+
+    std::assert_matches!(
+        TimeSeriesReader::new(&document_path).unwrap_err(),
+        xdmf::Error::InvalidDocument { reason }
+            if reason == "submesh 0 holds point 4, but the mesh only has 4 points"
+    );
+}
+
+/// Two submeshes may overlap, but not while disagreeing about what a shared cell is: the mesh's
+/// cell offsets are built from one of the two answers, so writing the other one's (differently
+/// sized) cell there would run over its neighbour's points.
+#[test]
+fn submeshes_disagreeing_about_a_shared_cell_type_are_rejected() {
+    let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+    let connectivity = [0_u64, 1, 3, 2];
+    let cell_types = [CellType::Quadrilateral];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    // both submeshes hold the one cell, so the document states its type twice
+    TimeSeriesWriter::new(&file_name, STORAGES[0])
+        .unwrap()
+        .write_mesh_with_submeshes(
+            &coords,
+            &connectivity,
+            &cell_types,
+            [("a", &[0][..]), ("b", &[0][..])],
+        )
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+
+    // `Tetrahedron` rather than a type of another size, so the disagreement itself is what is
+    // caught and not the cell count it would otherwise imply
+    let quadrilateral = "TopologyType=\"Quadrilateral\"";
+    assert!(document.contains(quadrilateral), "{document}");
+    std::fs::write(
+        &document_path,
+        document.replacen(quadrilateral, "TopologyType=\"Tetrahedron\"", 1),
+    )
+    .unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    let mut read_connectivity: Vec<u64> = Vec::new();
+    let mut read_cell_types = Vec::new();
+
+    std::assert_matches!(
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap_err(),
+        xdmf::Error::InvalidDocument { reason }
+            if reason.contains("submeshes disagree about mesh cell 0")
+    );
+}
+
 /// A mesh whose steps were never written has no step 0: its single grid is the mesh itself, and
 /// counting it as a step would contradict `num_steps`.
 #[test]
