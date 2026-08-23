@@ -161,6 +161,35 @@ pub enum CellType {
 }
 
 impl CellType {
+    /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None` for a code
+    /// this crate does not know. The inverse of the `as u8` cast `prepare_cells`
+    /// (`time_series_writer.rs`) writes with -- kept next to the discriminants themselves so the
+    /// write and read directions cannot drift apart.
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Vertex),
+            2 => Some(Self::Edge),
+            4 => Some(Self::Triangle),
+            5 => Some(Self::Quadrilateral),
+            6 => Some(Self::Tetrahedron),
+            7 => Some(Self::Pyramid),
+            8 => Some(Self::Wedge),
+            9 => Some(Self::Hexahedron),
+            34 => Some(Self::Edge3),
+            35 => Some(Self::Quadrilateral9),
+            36 => Some(Self::Triangle6),
+            37 => Some(Self::Quadrilateral8),
+            38 => Some(Self::Tetrahedron10),
+            39 => Some(Self::Pyramid13),
+            40 => Some(Self::Wedge15),
+            41 => Some(Self::Wedge18),
+            48 => Some(Self::Hexahedron20),
+            49 => Some(Self::Hexahedron24),
+            50 => Some(Self::Hexahedron27),
+            _ => None,
+        }
+    }
+
     /// The number of points for the given cell type.
     pub fn num_points(&self) -> usize {
         match self {
@@ -240,12 +269,12 @@ mod tests {
             "test_grid",
             geometry::Geometry {
                 geometry_type: geometry::GeometryType::XYZ,
-                data_item: data_item::DataItem {
+                data_items: vec![data_item::DataItem {
                     dimensions: Some(dimensions::Dimensions(vec![3])),
                     data: "1.0 2.0 3.0".into(),
                     number_type: Some(data_item::NumberType::Float),
                     ..Default::default()
-                },
+                }],
             },
             topology::Topology {
                 topology_type: topology::TopologyType::Triangle,
@@ -273,6 +302,42 @@ mod tests {
 
         domain.data_items.push(DataItem::default());
         assert_eq!(domain.data_items.len(), 1);
+    }
+
+    #[test]
+    fn cell_type_from_code_round_trips_every_variant() {
+        const ALL: [CellType; 19] = [
+            CellType::Vertex,
+            CellType::Edge,
+            CellType::Triangle,
+            CellType::Quadrilateral,
+            CellType::Tetrahedron,
+            CellType::Pyramid,
+            CellType::Wedge,
+            CellType::Hexahedron,
+            CellType::Edge3,
+            CellType::Quadrilateral9,
+            CellType::Triangle6,
+            CellType::Quadrilateral8,
+            CellType::Tetrahedron10,
+            CellType::Pyramid13,
+            CellType::Wedge15,
+            CellType::Wedge18,
+            CellType::Hexahedron20,
+            CellType::Hexahedron24,
+            CellType::Hexahedron27,
+        ];
+
+        for cell_type in ALL {
+            assert_eq!(CellType::from_code(cell_type as u8), Some(cell_type));
+        }
+    }
+
+    #[test]
+    fn cell_type_from_code_rejects_unknown() {
+        assert_eq!(CellType::from_code(0), None);
+        assert_eq!(CellType::from_code(3), None);
+        assert_eq!(CellType::from_code(255), None);
     }
 
     #[test]

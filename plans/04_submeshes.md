@@ -1,4 +1,89 @@
-# M4 — Submeshes (blocks)
+# M4 — Submeshes
+
+> **Status (2026-08-21): Stage A plus optimizations 1 and 2 are done.**
+> `TimeSeriesWriter::write_mesh_with_submeshes` is on the `submeshes` branch, with contiguous-run
+> collapsing, one reused gather buffer per element type for scattered submeshes, the full
+> validation set, 26 Rust tests, `examples/submeshes.rs`, the Python binding
+> (`TimeSeriesWriter.write_mesh_with_submeshes`) and a multi-block ParaView smoke fixture that CI
+> runs against 5.13.3 and 6.1.1 for every storage. **Optimization 3 landed on 2026-08-22, for the
+> HDF5 storages only — see [`09_submesh_references.md`](09_submesh_references.md), which supersedes
+> the "Optimization 3" section below: a step's data is written once and each submesh selects its
+> share, so optimizations 1 and 2 below now only serve the storages that cannot select. The reader
+> side is still open**, as is the allocation test, which needs M2's harness.
+>
+> Eight deviations from the plan as written below, each deliberate:
+>
+> 1. **"Block" became "submesh"** throughout the API, errors and heavy-data layout — the plan's own
+>    word was overloaded (block-structured grids, HDF5 hyperslab blocks) and collided with the
+>    HDF5 backend's real groups. `ParaView`'s Multi-block Inspector is still named in the docs,
+>    since that is where users find them.
+> 2. **`impl IntoIterator<Item = (N, B)>`** with `N: AsRef<str>, B: AsRef<[usize]>`, rather than
+>    `&[(&str, &[usize])]`. A caller can hand over a lazy iterator over their model parts and each
+>    index list is consumed and dropped as it is converted; contiguous ones then leave nothing
+>    behind at all. Considered and rejected: a closure-based gradual API mirroring `write_time_step`
+>    — it cannot save memory here, because the writer has to *retain* every submesh's cell indices
+>    for the whole run to slice cell data per step, so a reused caller buffer would just be copied
+>    into that retained storage.
+> 3. **`Error::InvalidMesh` rather than new variants.** The plan called for one variant per
+>    validation rule; `CLAUDE.md` asks for the enum to stay under 10 variants and to group by
+>    category. A submesh failure is a mesh-definition failure, and the "cells in no submesh" case
+>    names no single submesh, so a `name`-carrying variant would have needed an `Option` anyway.
+> 4. **`DataWriter::write_mesh` split into `write_points(Option<usize>, …)` +
+>    `write_connectivity(Option<usize>, …)`.** The draft called `write_mesh(points, &[])` and added
+>    a second `write_mesh_block` method; one path per array that each backend lays out itself is
+>    simpler and removes the empty-slice hack. Both take the submesh position since deviation 8,
+>    and every mesh array is now named the same way: `mesh/<array>` or `mesh/<array>/<index>`
+>    (HDF5), `<array>.{txt,bin}` or `<array>_<index>.{txt,bin}` (ascii/binary), for `points`,
+>    `cells`, `submesh_points` and `submesh_cells` alike.
+> 5. **Heavy data is numbered, not named.** Every backend names an array by its position rather
+>    than by the caller's field name and `Center` — `data_t_<time>_<index>.txt`,
+>    `/data/t_<time>/<index>`, `submesh_<index>` — and the per-center groups
+>    (`point_data`/`cell_data`) are gone with it. That is what lets a name be any printable string,
+>    which solvers need (`Quantity('SOOT DENSITY')`), and what keeps a submesh name off the
+>    filesystem. The cost is paid by every user, not just submesh ones: it is a breaking layout
+>    change, and an HDF5 file is no longer self-describing under `h5dump`/`h5py` — the
+>    field-to-index mapping is only recoverable from the XDMF file's `<Attribute Name=...>`.
+>    **Open:** writing the name back as an HDF5 attribute on each dataset would restore that
+>    cheaply.
+> 6. **A `Spatial` collection of one `Temporal` collection per submesh**, rather than this plan's
+>    `Temporal` collection of one `Spatial` collection per step. The plan's nesting names every
+>    submesh once per step, and `ParaView` makes a grid name unique across the whole document, so
+>    a block came back as `quad`, `quad[1]`, `quad[2]`, ... and changed identity as the animation
+>    ran — losing its visibility and colouring in the Multi-block Inspector, and failing the
+>    `submesh_fixtures` check from the second step on. Giving each submesh one grid that carries
+>    its name, holding that block's per-step grids, keeps the name stable. Measured on 5.13.3
+>    against both nestings and a third (the per-step collections sharing one name, which does not
+>    help); guarded by `write_xdmf_with_submeshes_names_each_block_once` as well as by the ParaView
+>    job. The per-step grids inside a block are named `<submesh>-t<time>` and carry the `<Time>`.
+> 7. **Which cells and which points a submesh holds are recorded for the reader**, as
+>    `<Information Name="submesh_cells" Value="0:1 1:2 submesh_cells_2"/>` and the matching
+>    `submesh_points`: per submesh in order, either `<start>:<len>` for a contiguous list or the
+>    name of an unreferenced `Domain`-level `DataItem` holding its indices
+>    (`DataWriter::write_submesh_cells`/`write_submesh_points`, at mesh-write time). Without it the
+>    file cannot be read back: a submesh's connectivity is indexed locally, submeshes may overlap,
+>    and the mesh's own connectivity is not written at all when submeshes are used, so nothing says
+>    which cell of the mesh a block cell was -- a reader could only return the cells permuted
+>    against the caller's own global indexing. Disallowing overlap does not avoid this (the
+>    permutation still has to be recorded, at the same cost) and would go against decision 5 in
+>    `ROADMAP.md`. Measured on 5.13.3: an unreferenced `DataItem` and an `Information` are ignored
+>    by `ParaView` -- same blocks, same cells, no extra cell array -- so this stays a side channel
+>    for a reader rather than a `global_cell_id` attribute users would see next to their own
+>    fields. Contiguous submeshes, the case mesh generators produce, write no array at all.
+> 8. **Each submesh carries its own points**, not the mesh's whole point set. The plan (and the
+>    branch draft) had every block reference one shared `coords` array, which is optimal on disk
+>    but makes `ParaView` build a full copy of the point set and of every point field per block:
+>    measured `blocks × mesh`, 2.8 MB at one block and 317.8 MB at 256 on a 40,401-point mesh, the
+>    same on 5.13.3 and 6.1.0. A block now holds the points its own cells use, ascending, with its
+>    connectivity renumbered against them (`submesh_points`/`renumber_connectivity`), which takes
+>    the same mesh to 4.8 MB at 256 blocks. The renumbering looks a point up by subtraction when
+>    the submesh's points are one run and through a `LocalPoints` array when they are not; a binary
+>    search of the point list, which allocates nothing, was measured 6-28% slower over the whole
+>    mesh write on a 4M-point mesh and never faster. Point data is cut per submesh from then on, exactly as
+>    cell data already was, so `write_shared_point_data` and the `Domain`-level point-data items
+>    are gone with it. The costs, measured on the same mesh at 256 blocks: +73% heavy data (points
+>    on a block boundary are written once per block touching them), +28% light data, and one file
+>    per block per array for the per-file storages. Nothing measurable at 64 blocks or fewer.
+
 
 `README.md`: *"Writing and reading of submeshes => a draft is in the 'multiple-features' branch, but
 this one needs to be done a bit nicer."*
@@ -104,6 +189,12 @@ selecting `start / stride 1 / count len` out of the shared `connectivity` `DataI
 separate dataset. Same for cell-data attributes. This removes the duplication entirely for the common
 case.
 
+> **Ran 2026-08-22 — see [`09_submesh_references.md`](09_submesh_references.md) for the result.**
+> Short version: stage B works, for `Format="HDF"` only. `Format="Binary"` honours `HyperSlab` but
+> silently ignores `Coordinates`, and `Format="XML"` ignores both and reads from the start of the
+> array. `Coordinates` generalizes it to scattered submeshes after all, and the win is bigger on
+> per-step *data* than on connectivity, which is what the recommendation is built around.
+
 Verification gate: write a throwaway fixture using hyperslab DataItems, open it in **both** ParaView
 5.13 and 6.1 (locally first, then in the CI matrix), and confirm the geometry and the attribute
 values are correct — not merely that the file opens. XDMF2's hyperslab support is exactly the kind of
@@ -159,8 +250,30 @@ follow-up to M5 rather than a change to it.
 
 ## Noted, not scheduled
 
-- **Node sets / point blocks.** Some callers want named node sets, not only cell sets. XDMF has `Set`
-  elements for this. No current caller; out of scope.
-- **Per-block point data.** Currently every block sees the full point array (correct, since geometry
-  is shared). A caller wanting per-block point fields would need per-block geometry, which defeats
-  the sharing. Not wanted.
+- **Compacted block geometry — measured, then implemented (2026-08-21).** See deviation 8 above:
+  every block now carries only the points its own cells use. What the measurement found, on a
+  40,401-point / 40,000-cell quad mesh, two steps, identical on ParaView 5.13.3 and 6.1.0
+  (`GetDataInformation().GetMemorySize()`), and what the implementation then reproduced exactly:
+
+  | blocks | points materialized | shared geometry | compacted | heavy data compacted |
+  |---|---|---|---|---|
+  | 1 | 40,401 / 40,401 | 2.8 MB | 2.8 MB | 2.26 MB |
+  | 4 | 161,604 / 41,004 | 6.5 MB | 2.8 MB | 2.28 MB |
+  | 16 | 646,416 / 43,424 | 21.3 MB | 2.9 MB | 2.38 MB |
+  | 64 | 2,585,664 / 53,120 | 80.6 MB | 3.3 MB | 2.78 MB |
+  | 256 | 10,342,656 / 80,896 | 317.8 MB | 4.8 MB | 4.25 MB |
+
+  The shared-geometry column is `blocks × mesh` exactly -- ~1.24 MB per block here whatever the
+  block holds, so a block of one cell cost as much as one of ten thousand.
+
+  **Superseded for the HDF5 storages (2026-08-22), without giving that back.** A block may
+  reference the mesh's coordinates *and* stay compact, by selecting the points it holds out of them
+  rather than taking the array whole: same blocks, same points materialized, same 4.9 MB at 64
+  blocks. The heavy data is then written once, and `submesh_points` -- the side channel this entry
+  ends by naming -- becomes the selector the geometry reads through, so the global identity is no
+  longer something the layout loses and an `<Information>` restores. See
+  `plans/09_submesh_references.md`; the ascii and binary storages keep the compacted copy described
+  above, since `ParaView` misreads a selection out of those.
+- **Node sets / point blocks.** Some callers want named *point* sets, not only cell sets. XDMF's
+  `Set` elements are the route; per-block point fields, which the compaction above would now make
+  natural to express, are the other. No current caller; out of scope.

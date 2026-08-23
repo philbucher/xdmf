@@ -7,8 +7,9 @@ use std::{
 };
 
 use crate::{
-    DataStorage, DataWriter, Error, Result,
+    CELLS, DataStorage, DataWriter, Error, POINTS, Result, SUBMESH_CELLS, SUBMESH_POINTS,
     error::io_ctx,
+    mesh_file_name,
     values::Values,
     xdmf_elements::data_item::{DataContent, Format},
 };
@@ -48,6 +49,21 @@ impl BinaryWriter {
     fn relative_path(&self, file_name: &str) -> String {
         format!("{}/{file_name}", self.folder_name.to_string_lossy())
     }
+
+    // Shared by the points and every connectivity array, which differ only in the file they go to.
+    fn write_mesh_file(&self, file_name: &str, values: &Values<'_>) -> Result<DataContent> {
+        let path = self.bin_files_dir.join(file_name);
+
+        let mut file =
+            BufWriter::new(File::create(&path).map_err(io_ctx("creating mesh file", &path))?);
+
+        values_to_writer(values, &mut file, &path)?;
+
+        // explicitly flush the buffer to ensure all data is written and errors are caught
+        file.flush().map_err(io_ctx("flushing mesh file", &path))?;
+
+        Ok(self.relative_path(file_name).into())
+    }
 }
 
 impl DataWriter for BinaryWriter {
@@ -59,38 +75,27 @@ impl DataWriter for BinaryWriter {
         DataStorage::Binary
     }
 
-    fn write_mesh(
+    fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_file(&mesh_file_name(POINTS, submesh, "bin"), points)
+    }
+
+    fn write_connectivity(
         &mut self,
-        points: &Values<'_>,
+        submesh: Option<usize>,
         cells: &Values<'_>,
-    ) -> Result<(DataContent, DataContent)> {
-        let points_file_name = "points.bin";
-        let cells_file_name = "cells.bin";
-        let points_path = self.bin_files_dir.join(points_file_name);
-        let cells_path = self.bin_files_dir.join(cells_file_name);
+    ) -> Result<DataContent> {
+        self.write_mesh_file(&mesh_file_name(CELLS, submesh, "bin"), cells)
+    }
 
-        let mut file_points = BufWriter::new(
-            File::create(&points_path).map_err(io_ctx("creating points file", &points_path))?,
-        );
-        let mut file_cells = BufWriter::new(
-            File::create(&cells_path).map_err(io_ctx("creating cells file", &cells_path))?,
-        );
+    fn write_submesh_cells(&mut self, submesh: usize, cells: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_file(&mesh_file_name(SUBMESH_CELLS, Some(submesh), "bin"), cells)
+    }
 
-        values_to_writer(points, &mut file_points, &points_path)?;
-        values_to_writer(cells, &mut file_cells, &cells_path)?;
-
-        // explicitly flush the buffers to ensure all data is written and errors are caught
-        file_points
-            .flush()
-            .map_err(io_ctx("flushing points file", &points_path))?;
-        file_cells
-            .flush()
-            .map_err(io_ctx("flushing cells file", &cells_path))?;
-
-        Ok((
-            self.relative_path(points_file_name).into(),
-            self.relative_path(cells_file_name).into(),
-        ))
+    fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_file(
+            &mesh_file_name(SUBMESH_POINTS, Some(submesh), "bin"),
+            points,
+        )
     }
 
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
@@ -331,8 +336,11 @@ mod tests {
 
         let points = vec![0.0_f64, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
-        let (points_content, cells_content) = writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+        let points_content = writer
+            .write_points(None, &points.as_slice().into())
+            .unwrap();
+        let cells_content = writer
+            .write_connectivity(None, &cells.as_slice().into())
             .unwrap();
         assert!(points_file.exists());
         assert!(cells_file.exists());
@@ -389,7 +397,10 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.5];
         let cells = vec![0_u64, 1, 2];
         writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+            .write_points(None, &points.as_slice().into())
+            .unwrap();
+        writer
+            .write_connectivity(None, &cells.as_slice().into())
             .unwrap();
 
         writer.write_data_initialize("0.1").unwrap();
@@ -426,20 +437,20 @@ mod tests {
         );
 
         let bin_dir = file_name.with_extension("bin");
-        let node_file = bin_dir.join("data_t_0.5_0.bin");
-        let cell_file = bin_dir.join("data_t_0.5_1.bin");
+        let first_file = bin_dir.join("data_t_0.5_0.bin");
+        let second_file = bin_dir.join("data_t_0.5_1.bin");
 
         writer.write_data_initialize("0.5").unwrap();
         writer.write_data(0, &vec![1.0, 2.0].into()).unwrap();
         writer.write_data(1, &vec![3.0].into()).unwrap();
-        assert!(node_file.exists());
-        assert!(cell_file.exists());
+        assert!(first_file.exists());
+        assert!(second_file.exists());
 
         writer.write_data_discard().unwrap();
 
         // every file written for the step is removed, not just the last one
-        assert!(!node_file.exists());
-        assert!(!cell_file.exists());
+        assert!(!first_file.exists());
+        assert!(!second_file.exists());
         assert!(writer.write_time.is_none());
         assert!(writer.step_files.is_empty());
 
@@ -450,7 +461,7 @@ mod tests {
         writer.write_data_finalize().unwrap();
 
         assert!(bin_dir.join("data_t_0.5_2.bin").exists());
-        assert!(!node_file.exists());
+        assert!(!first_file.exists());
     }
 
     #[test]

@@ -54,16 +54,231 @@ them. Revisit deliberately, not by drift.
   `OverflowError`; `xdmf.pyi` stubs ship with the wheel and a test fails if the module outgrows them.
   46 pytest tests, plus a CI job (`cargo clippy -p xdmf-python` + `pip install ./python[test]` +
   `pytest`), and the strict clippy list moved to `[workspace.lints]` so it covers the new crate.
-  A post-merge review then found nine issues, seven fixed on 2026-08-19 (transposed point arrays
+  A post-merge review then found nine issues, eight fixed on 2026-08-19 (transposed point arrays
   silently written as a wrong mesh, `int32` cell codes rejected, a rejected `write_mesh` burning the
-  writer, unhashable value types, and three smaller ones — 60 pytest tests now); the other two were
-  message polish not worth their plumbing, so the `deflate_level` range stays the core's alone. One
-  fix is a core-crate bug: `num_entities * DataAttribute::size()` was multiplied out unchecked, so
-  in a release build an absurd `Generic`/`Matrix` size could wrap back onto the real array length
+  writer, unhashable value types, the contiguity message not naming the offending array, and three
+  smaller ones); the `deflate_level` range check was written as an `i64` fix and then deliberately
+  reverted back to `u8`, so it stays the core's alone rather than duplicating its bound and message.
+  One fix is a core-crate bug: `num_entities * DataAttribute::size()` was multiplied out unchecked,
+  so in a release build an absurd `Generic`/`Matrix` size could wrap back onto the real array length
   and be written as a corrupt shape, and a zero one divided by zero — both now one `InvalidData`.
   **Open:** the reader bindings (M5 first), the wheels (Part 2), the pyvista re-run (Part 3) — and
   M2/M4/M5 will each move the Rust API this layer wraps. Details in `06_python_bindings.md`'s
   top-of-file status note.
+
+- **2026-08-19, M4 Stage A + optimizations 1 and 2.** `write_mesh_with_submeshes`: one shared
+  geometry, one uniform sub-grid per submesh inside a spatial collection, overlapping submeshes
+  allowed (decision 5), cell data still passed globally and sliced by the writer. Contiguous cell
+  index runs collapse to `{start, len}` so their share of a cell field is a borrow of the caller's
+  array; scattered ones gather into one reused buffer per element type. `DataWriter::write_mesh`
+  split into `write_points` + `write_connectivity`. Named "submesh", not "block". Verified in
+  ParaView 5.13.2 and 6.1.1 across all five storages. **Open:** hyperslab references (optimization
+  3), the allocation test (needs M2's harness), and the reader side — the ParaView smoke fixture
+  and the Python bindings followed on 2026-08-21, see below. Details in `04_submeshes.md`'s
+  top-of-file status note.
+
+- **2026-08-20, rebased onto `perf: support uniform topology` (#28) and `some python improvements`
+  (#27).** Main independently landed the same `checked_mul` fix for item 7 above (word-for-word,
+  so the rebase merged it without a conflict) and gained a uniform-`TopologyType` fast path in
+  `prepare_cells` that skips the per-cell type prefix when every cell shares one `CellType`. That
+  fast path changes the connectivity's byte layout, so `cell_offsets` (which slices a submesh's
+  share of it) needed a matching uniform-stride branch alongside its existing `Mixed` one, and
+  `nodes_per_element` is now computed once per mesh and reused for every submesh grid, since a
+  submesh's cells are always a subset of the same uniformly-typed connectivity. Covered by a new
+  `write_xdmf_with_submeshes_of_a_uniform_topology` test.
+
+- **2026-08-21, M4 finished off: Python bindings, the smoke fixture, and flat heavy-data naming.**
+  `TimeSeriesWriter.write_mesh_with_submeshes` is exposed to Python (cell indices as a numpy
+  integer array of any dtype or a sequence of `int`), and `paraview_smoke` gained a multi-block
+  fixture — a single-cell, a contiguous, a gathered and an overlapping submesh, plus a `Vector`
+  cell field — that CI verifies through `pvpython` against ParaView 5.13.3 and 6.1.1 for every
+  storage. Separately, the backends stopped naming heavy data after the caller's field name and
+  now number it (deviation 5 in `04_submeshes.md`), which is what allows solver-style names such as
+  `Quantity('SOOT DENSITY')` and is checked by a fixture of its own.
+
+- **2026-08-21, the review's code findings.** Two are fixed. Point data is now written once per
+  step into a named `Domain`-level `DataItem` that every block references, instead of each block
+  carrying a copy — for `DataStorage::AsciiInline`, where the item *is* the data, that turns one
+  copy of the field per block per step into one per step. Verified in ParaView 5.13.3: the
+  reference resolves inside an `<Attribute>`, but only carries its extent if the referencing
+  `DataItem` keeps its `Dimensions`, which the geometry and topology references do not need — the
+  reader logs `Dimensions of Attribute not set` and reads nothing otherwise. `prepare_submeshes`
+  no longer holds a mesh-sized `Vec<usize>` (8 bytes/cell) to answer its two membership questions:
+  two `CellBitSet`s cost a quarter of a byte per cell between them, the per-submesh one being
+  cleared by walking that submesh's own indices rather than the mesh.
+  `TimeSeriesDataWriter` also now keeps the `Xdmf` document as its state and appends one `<Grid>`
+  per completed step, rather than rebuilding the document from stored attributes on every rewrite.
+  **That is a simplification, not the speedup it was expected to be:** rewriting the file after
+  every step costs O(steps² × submeshes), and measurement puts that cost in serialization, not in
+  the cloning it removed — 50 submeshes over 400 steps still takes ~50 s, and the last step alone
+  spends 228 ms regenerating a 19 MB document of which ~48 KB is new. That is decision 6's territory
+  (`02_performance.md` part B), and the measurement sharpens it: the per-step cost has to drop by
+  not re-serializing the history, so each completed step's `<Grid>` wants caching as rendered bytes
+  that the rewrite splices in — which needs an escape hatch for pre-rendered markup in
+  `xdmf_elements`, since serde cannot emit raw XML. Submeshes multiply the constant by the block
+  count, so M4 makes this more pressing than it was. **Open.**
+
+- **2026-08-21, block names made stable across time steps.** ParaView's Xdmf2 reader makes a grid
+  name unique across the whole document, so the `Temporal`-of-`Spatial` nesting M4 first used —
+  which names every submesh once per step — gave back `quad`, `quad[1]`, `quad[2]`, ... as the
+  animation advanced. The block changed identity per step, losing its per-block visibility and
+  colouring in the Multi-block Inspector, and the `submesh_fixtures` check failed from the second
+  step on for every storage. Inverted to a `Spatial` collection of one `Temporal` collection per
+  submesh, so each block name occurs once in the document (deviation 6 in `04_submeshes.md`). The
+  full smoke suite now passes on 5.13.3 for all five storages, where the submesh fixture previously
+  failed on all five. Guarded in Rust by `write_xdmf_with_submeshes_names_each_block_once`, which
+  is cheap enough to run without ParaView.
+
+- **2026-08-21, the reader's `Grids` list is not a submesh selector.** Measured on 5.13.3: the
+  Properties panel's `Grids` checkboxes list the file's *uniform* grids, which for a time series is
+  one per (submesh, step) — `edge-t0.5`, `edge-t1.5`, ... — so a selection made there holds for one
+  step only, and the reader applies it shifted against time (keeping just `edge-t0.5` gives `edge`
+  at t=1.5 and everything *but* `edge` at t=0.5 and t=2.5). Not submesh-specific: a plain time
+  series lists `time_series-t0.5, ...` the same way. Two layouts that could shorten that list were
+  tested and are worse — naming every per-step grid after its submesh gives five uniquified entries
+  for nine grids, omitting the names gives `Grid_20, Grid_26, ...` — while block names and cell
+  counts stay correct in all three. Nothing to change in the writer: the Multi-block Inspector and
+  `Extract Block` select by block name and were measured stable across every step, so `README.md`
+  and `examples/submeshes.rs` now point at those and warn off the `Grids` list.
+
+- **2026-08-21, submeshes record which cells they hold.** Points keep their identity across blocks
+  (one shared array, indexed globally), cells did not: a block's connectivity is indexed locally,
+  blocks may overlap, and a mesh written with submeshes writes no connectivity of its own -- so
+  nothing in the file said which cell of the mesh a block cell was, and M5 could only have returned
+  the cells permuted against the caller's global indexing. `DataWriter::write_submesh_cells` now
+  writes a scattered submesh's global cell indices once, at mesh-write time, and one `<Information
+  Name="submesh_cells">` lists per submesh either `<start>:<len>` (contiguous -- no array at all,
+  which is what mesh generators produce) or that item's name. Kept a side channel rather than a
+  `global_cell_id` cell attribute: an unreferenced `DataItem` plus an `Information` was measured
+  ignored by ParaView 5.13.3 (same blocks, same cells, no extra array), so users do not get a field
+  they did not ask for next to their own. Disallowing overlap was considered and rejected -- it
+  would still need the permutation recorded, at the same cost, and decision 5 keeps overlap.
+
+- **2026-08-21, ParaView 6.1 renames gathered blocks, not selectable ones.** The submesh fixture
+  failed on 6.1 for every storage with `expected blocks ['both', ...], got ['Block 0_both', ...]`.
+  Measured on 5.13.3 and 6.1.0 side by side: `vtkXdmfReader` emits the same block names in both, and
+  so does the block hierarchy ParaView selects by (`/Root/quad`, what the Multi-block Inspector
+  lists and `BlockSelectors` takes) — only `servermanager.Fetch`'s client-side gather differs, 6.1
+  folding the outer collection's generated name into each leaf's. Nothing in the file or the writer
+  is version-dependent, and probing four other nestings (no spatial wrapper, unnamed wrapper, a
+  third level, `Temporal`-of-`Spatial`) changed nothing, so there is no layout that avoids it.
+  `verify_with_pvpython.py` strips the gather's `Block <n>_` prefix and, so that the stripping
+  cannot hide a real rename, now checks the block *paths* exactly, per time step — which is the
+  stronger assertion anyway, since those paths are what a user's block selection is made of.
+
+- **2026-08-21, what many small blocks cost in the viewer.** Every block references the whole
+  `coords` `DataItem`, so ParaView materializes the full point set and every point field once per
+  block: measured `blocks × mesh` exactly, ~1.24 MB per block on a 40,401-point mesh regardless of
+  what the block holds — 2.8 MB at one block, 317.8 MB at 256, identical on 5.13.3 and 6.1.0. A
+  hand-written compacted variant of the same mesh (each block carrying only the points its cells
+  touch) stays at 4.8 MB, at the price of +73% heavy data, +28% light data, 4× the files and 2×
+  the load time at 256 blocks, plus a per-block point gather per step and a `submesh_points` side
+  channel for the reader. **Implemented the same day** (deviation 8 in `04_submeshes.md`), which
+  reproduced the predicted numbers exactly: 4.8 MB at 256 blocks against 317.8 MB, with the writer's
+  own output. Point data is cut per submesh from now on, as cell data already was, so the shared
+  `Domain`-level point-data item is gone; `submesh_points` joins `submesh_cells` as the side channel
+  a reader needs, since a block's points are no longer the mesh's own. Verified against ParaView
+  5.13.3, 6.1.0 and 6.1.1 for all five storages, with the smoke fixture now checking each block's
+  points, its cells in that block's own numbering, and its share of the point data. The README's
+  "hundreds of tiny blocks are worth avoiding" is retired with it.
+
+- **2026-08-22, what a submesh may reference instead of copying — measured, nothing implemented.**
+  The gate `04_submeshes.md` left open for optimization 3, answered for the whole question behind it:
+  `ItemType="HyperSlab"` and `ItemType="Coordinates"` both work in `Geometry`, `Topology` and
+  `Attribute` — but **only for `Format="HDF"`**. `Format="Binary"` honours `HyperSlab` and silently
+  ignores `Coordinates`; `Format="XML"` ignores both and reads from the start of the array, which is
+  the `paraview.rs` class of defect and rules a selection out for the ascii storages entirely.
+  Crucially, a selection does *not* bring back the `submeshes × mesh` memory of the old shared
+  geometry: ParaView materializes only the selected values, so a referencing layout holds exactly
+  what the compacted one holds. Four layouts measured on the 40,401-point mesh at 16/64/256
+  submeshes over 10 steps, on 5.13.2 and 6.1.1 alike. Recommended: keep compacted geometry, write
+  each field **once per step** globally and let every submesh select its share — 18% less heavy data
+  at 64 contiguous submeshes, 41% at 256, 56% on a scattered split, with the per-step cost no longer
+  depending on the submesh count or on overlap, and no per-submesh gather left on the writer's hot
+  path. Not recommended: referencing the geometry too (the literal goal — works, smallest on disk,
+  but 2.4–4× the light data and up to 5× the read time for a few percent). Full support matrix,
+  numbers and the reproducible harness in
+  [`09_submesh_references.md`](09_submesh_references.md).
+
+- **2026-08-22, the recommendation implemented: HDF5 submeshes select, they no longer copy.** Each
+  field now goes to the heavy data once per step, exactly as the caller passed it, and every
+  submesh's `<Attribute>` selects its share -- a `HyperSlab` for a run of entities, a
+  `Coordinates` selection through the submesh's index list otherwise. Measured with the writer's
+  own output at 64 submeshes over 10 steps: 27.2 MB -> 18.4 MB of heavy data contiguous, 65.1 MB
+  -> 24.2 MB strided, for +60% light data and about a third longer to step through the animation;
+  same blocks, same values, same viewer memory on ParaView 5.13.2 and 6.1.1. Four things the
+  implementation had to settle beyond the measurement: the selection is one-dimensional whatever
+  shape the field has (`ParaView` matches its rank against the `HDF5` dataset's, and this crate
+  writes every array flat), which also halves the index arrays; a scalar field needs no new array
+  at all, since one index per entity is what `submesh_points`/`submesh_cells` already hold for the
+  reader; those lists are written signed now that `ParaView` reads them; and a submesh whose cells
+  are not ascending still gets a copy, because a `Coordinates` selection comes back in array order
+  rather than in the order it named. The ascii and binary storages are untouched -- a selection
+  there is silently wrong, and a test guards that none is emitted. Details in
+  [`09_submesh_references.md`](09_submesh_references.md)'s "As implemented".
+
+- **2026-08-22, the geometry too: HDF5 submeshes select their points out of the mesh's.** The one
+  layout that measurement had recommended against, adopted after all -- not for its few percent of
+  disk, but because it retires the side channel: the mesh's coordinates are written once, as one
+  array per direction, and a submesh's `<Geometry GeometryType="X_Y_Z">` selects the points it
+  holds through `submesh_points`, so the list of mesh points a block holds *is* part of its
+  geometry rather than an `<Information>` nothing references -- which that `<Information>` is no
+  longer written at all on this path, the geometry having taken its job. Split by direction because that is
+  what lets all three selections share one index list; a submesh whose points are a run needs no
+  array at all. At 64 submeshes over 10 steps: 18.4 MB -> 17.2 MB of heavy data contiguous, 24.2 MB
+  -> 20.2 MB strided (65.1 MB before any of this), for +10% light data and a further ~10% of read
+  time. Same blocks, same points materialized, same 4.9 / 10.6 MB in ParaView 5.13.2 and 6.1.1 --
+  referencing the mesh's coordinates through a selection does not bring back the memory blow-up
+  that referencing them whole caused. The ascii and binary storages keep their compacted copies.
+  See [`09_submesh_references.md`](09_submesh_references.md)'s "As implemented, geometry".
+
+- **2026-08-22, M5 Stage 1 landed: `TimeSeriesReader`/`TimeSeriesDataReader` for `Format="HDF"`.**
+  `src/reader/{mod.rs -> reader.rs, light_data, hdf5_reader, selection, topology}.rs`, per
+  `05_reader.md`. Risk 1 confirmed and fixed on day one: `quick-xml`'s serde cannot deserialize
+  `#[serde(flatten)]` combined with a `$value` variant (`"no variant of enum DataContent found in
+  flattened data"` on every shape), so `DataItem` keeps its derived `Serialize` but gained a
+  hand-written `Deserialize` against a non-flattened intermediate struct -- fixes every shape
+  except a nested `xi:include` (irrelevant to Stage 1, `Format="HDF"` never writes one; noted as a
+  stage 2 follow-up in `data_item.rs`). `CellType::from_code` added next to the existing
+  discriminants as the inverse of `prepare_cells`'s `as u8` cast. `Error` gained three variants
+  (`InvalidDocument`, `Unsupported`, `NumberTypeMismatch`) rather than the larger set
+  `01_error_type.md` originally sketched, following the grouped-by-category shape the error type
+  actually shipped with. Named consistently with the writer throughout ("submesh", not "block",
+  the plan's own API sketch used "block" and the first pass here followed it uncritically).
+  `TimeSeriesReader::new` eagerly computes `num_points`/`num_cells`/`times`/`submesh_names` (one
+  read of a scattered submesh's own `submesh_cells` array in the worst case) so those accessors
+  stay infallible, deviating from the plan's fallible-`Result`-free sketch only there. Reading a
+  mesh with submeshes follows the plan's reconstruction table exactly: global coordinates read
+  directly from `mesh/points/{0,1,2}`, submesh cell/point membership from `submesh_cells` and each
+  submesh's `<Geometry>` selector, connectivity scattered through both after decoding each
+  submesh's own topology. Per-step field reads prefer a submesh's selection source (the whole
+  field, written once) over scattering from every submesh's own share when one exists --
+  discovered during testing to be load-bearing, not just an optimization: it is the only path that
+  recovers a point no cell uses, which the scatter-only approach silently zeroed. `DataInfo`'s
+  `attribute: DataAttribute` collapses `Tensor6`/`Matrix(n, m)`/`Generic` back to `Generic(size)`
+  on read, since `AttributeType::Matrix` does not distinguish them in the file; documented as a
+  known lossy spot rather than guessed at. `tests/reader.rs` covers the Stage 1 test matrix (mesh
+  only, point cloud, all 19 `CellType`s, several steps of point/cell data, f32/u64 attributes,
+  every `DataAttribute` shape, contiguous/scattered/overlapping submeshes with an unused point, and
+  a submesh with deliberately unordered cells) across both `Hdf5SingleFile`/`Hdf5MultipleFiles`.
+  Stage 2 (`Format="XML"`/`"Binary"`) is open.
+
+- **2026-08-22, M5's reader API collapsed to one type.** Review question: does splitting
+  `TimeSeriesReader`/`TimeSeriesDataReader` (mirroring `TimeSeriesWriter`/`TimeSeriesDataWriter`)
+  actually earn its keep on the read side? No -- the writer's split is forced by writing the mesh
+  being a one-time, irreversible file mutation; `TimeSeriesReader::new` already parses the whole
+  document, so reading has no such phase to enforce, and the split only made per-step reads require
+  reading the mesh geometry first for no real reason. Collapsed into a single `TimeSeriesReader`:
+  submesh membership moved from `read_mesh` into `new` (the cell half was already computed there
+  for `num_cells`), every method takes `&self`, and `read_mesh` itself split into `read_points`
+  (fully independent of everything else) and `read_topology` (connectivity and cell types stay
+  paired -- decoding `Mixed` connectivity is one pass that produces both, and a submesh mesh can't
+  place connectivity before cell types are scattered first). `submesh_cells`/`submesh_points`
+  (recovering which mesh cells/points a submesh holds, symmetric with what
+  `write_mesh_with_submeshes` takes in) were added in the same pass -- the first cut of the reader
+  had reconstructed the merged mesh but left no way back to the split. `tests/reader.rs` and the
+  README's reading example updated to match; `05_reader.md`'s API section keeps the original
+  two-phase sketch alongside a note on why it changed.
 
 ## Sub-plans
 
@@ -74,10 +289,11 @@ them. Revisit deliberately, not by drift.
 | [`02_performance.md`](02_performance.md) | M2 | Benchmark harness, O(n²) light-data write, allocation elimination, HDF5 tuning |
 | [`03_values_and_f32.md`](03_values_and_f32.md) | M3 | `Values::F32`, f32-or-f64 points in `write_mesh`, opt-in f64→f32 downcast, ParaView verification |
 | [`04_submeshes.md`](04_submeshes.md) | M4 | `write_mesh_with_blocks`, zero-copy fast paths, block validation |
-| [`05_reader.md`](05_reader.md) | M5 | `TimeSeriesReader` / `TimeSeriesDataReader`, per-format `DataReader` backends |
+| [`05_reader.md`](05_reader.md) | M5 | `TimeSeriesReader` / `TimeSeriesDataReader`, per-format `DataReader` backends; split into stage 1 (`Format="HDF"`) and stage 2 (`XML`/`Binary`) |
 | [`06_python_bindings.md`](06_python_bindings.md) | M6 | Review of the vibe-coded bindings, GIL release, abi3 + static-HDF5 wheels on PyPI |
 | [`07_mpi.md`](07_mpi.md) | post-1.0 | API draft only: collective sizing, global node ids, verification strategy |
 | [`08_write_data_builder.md`](08_write_data_builder.md) | M7 (before M6 Part 2) | Per-attribute `TimeStep` builder replacing `write_data`'s tuple lists; intra-step buffer reuse; `Values` out of caller code |
+| [`09_submesh_references.md`](09_submesh_references.md) | M4b (after M4, before M5) | Submeshes referencing shared arrays: what ParaView's Xdmf2 reader supports per storage format, four layouts measured; `select` implemented, then its geometry half too |
 
 ### Historical records (not plans to execute)
 
@@ -113,6 +329,11 @@ The hard ordering constraints, each of which exists for a reason:
 
 M4 and M5 are independent of each other and can be done in either order or in parallel. The reader
 does need to grow block support once M4 exists; that is called out in `05_reader.md`.
+
+- **M4b before M5** (added 2026-08-22, now that M4b has landed). The HDF5 submesh layout is what the
+  reader reconstructs a mesh from, and it changed twice during M4b — writing it against the
+  pre-M4b layout would have been thrown away. It also decides where M5 starts: `05_reader.md`'s
+  stage 1 reads `Format="HDF"` only, because that is the storage whose output round-trips exactly.
 
 ## What to take from the `multiple-features` branch
 
@@ -192,7 +413,7 @@ Rules for the milestones below:
 | Risk | Milestone | Mitigation |
 |------|-----------|------------|
 | `quick-xml` cannot serialize a `Grid` fragment at a chosen indent depth | M2 | Spike this before committing to the design; fallback is manual indentation. See `02_performance.md`. |
-| `quick-xml` + serde `#[serde(flatten)]` on `DataContent` does not round-trip on deserialize | M5 | Test deserialization of one `DataItem` on day one; fallback is a hand-rolled event-loop parser for `DataItem` only. |
+| `quick-xml` + serde `#[serde(flatten)]` on `DataContent` does not round-trip on deserialize — now with a third variant, the nested `Items(Vec<DataItem>)` a selection carries | M5 | Test deserialization of one `DataItem` per shape, selections included, on day one; fallback is a hand-rolled event-loop parser for `DataItem` only. |
 | Static HDF5 build in manylinux/macOS/Windows wheels | M6 | Spike Linux-only first, before building out the platform matrix. |
 | `hdf5::File` may not be `Send`, blocking GIL release | M6 | Check early; if it is not, the Python HDF5 path keeps the GIL and only the other backends release it. |
 | ParaView misreading a new XML construct (hyperslab block references) | M4 | Two-stage plan with an explicit go/no-go: ship duplication first, add the hyperslab fast path only after CI proves it. |

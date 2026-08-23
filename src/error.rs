@@ -96,6 +96,38 @@ pub enum Error {
     /// `write_data_initialize`/`write_data_finalize` calls, or in this crate's own path handling.
     #[error("internal invariant violated: {0}")]
     Internal(&'static str),
+    /// An XDMF document does not describe a mesh this crate's reader can reconstruct: malformed or
+    /// unexpected XML, a missing element/attribute, an unresolvable `Reference="XML"` path, or a
+    /// heavy-data array whose declared size disagrees with what the light data says it holds.
+    #[error("invalid XDMF document: {reason}")]
+    InvalidDocument {
+        /// What is wrong with the document.
+        reason: String,
+    },
+    /// The document uses an XDMF construct or value this crate's reader does not (yet) support --
+    /// a `Format`, `ItemType`, `TopologyType` or `GeometryType` outside this crate's own output
+    /// and the common subset around it, or `Format="HDF"` data read by a build with the `hdf5`
+    /// feature disabled. Its own variant, rather than folded into
+    /// [`InvalidDocument`](Self::InvalidDocument), since a caller reading a foreign file has a
+    /// reasonable reason to catch this one specifically: falling back to another loader.
+    #[error("unsupported: {reason}")]
+    Unsupported {
+        /// What was found and why this reader cannot read it.
+        reason: String,
+    },
+    /// A [`TimeSeriesReader`](crate::TimeSeriesReader) read call requested a type the file's data
+    /// cannot be read as without losing precision (e.g. `u64` data read as `Vec<u32>`, or `f64`
+    /// data read as `Vec<f32>`) -- see the widening rules on
+    /// [`TimeSeriesReader::read_point_data`](crate::TimeSeriesReader::read_point_data). Its own
+    /// variant so a caller can catch it and retry with the widened type [`DataInfo`] reports, or
+    /// convert explicitly.
+    ///
+    /// [`DataInfo`]: crate::DataInfo
+    #[error("number type mismatch: {reason}")]
+    NumberTypeMismatch {
+        /// The type that was requested and the type the file actually holds.
+        reason: String,
+    },
 }
 
 /// Attach filesystem-operation context to a [`std::io::Error`], for use with `map_err`.
@@ -246,6 +278,39 @@ mod error_messages {
         assert_eq!(
             Error::Internal("writing data was not initialized").to_string(),
             "internal invariant violated: writing data was not initialized"
+        );
+    }
+
+    #[test]
+    fn invalid_document() {
+        assert_eq!(
+            Error::InvalidDocument {
+                reason: "DataItem has no Dimensions".to_string(),
+            }
+            .to_string(),
+            "invalid XDMF document: DataItem has no Dimensions"
+        );
+    }
+
+    #[test]
+    fn unsupported() {
+        assert_eq!(
+            Error::Unsupported {
+                reason: "ItemType \"Function\" is not supported".to_string(),
+            }
+            .to_string(),
+            "unsupported: ItemType \"Function\" is not supported"
+        );
+    }
+
+    #[test]
+    fn number_type_mismatch() {
+        assert_eq!(
+            Error::NumberTypeMismatch {
+                reason: "requested u32, but the file holds u64".to_string(),
+            }
+            .to_string(),
+            "number type mismatch: requested u32, but the file holds u64"
         );
     }
 

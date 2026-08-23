@@ -15,12 +15,12 @@ fn basic_grid() {
         "Grid_1",
         Geometry {
             geometry_type: GeometryType::XYZ,
-            data_item: DataItem {
+            data_items: vec![DataItem {
                 dimensions: Some(Dimensions(vec![4, 3])),
                 data: "0 0 0 0 1 0 1 1 0 1 0 0.5".into(),
                 number_type: Some(NumberType::Float),
                 ..Default::default()
-            },
+            }],
         },
         Topology {
             topology_type: TopologyType::Triangle,
@@ -76,12 +76,12 @@ fn hierarchical_tree_grid() {
                         "sub_grid_1",
                         Geometry {
                             geometry_type: GeometryType::XYZ,
-                            data_item: DataItem {
+                            data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![5, 3])),
                                 data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
-                            },
+                            }],
                         },
                         Topology {
                             topology_type: TopologyType::Triangle,
@@ -99,12 +99,12 @@ fn hierarchical_tree_grid() {
                         "sub_grid_2",
                         Geometry {
                             geometry_type: GeometryType::XYZ,
-                            data_item: DataItem {
+                            data_items: vec![DataItem {
                                 dimensions: Some(Dimensions(vec![6, 3])),
                                 data: "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".into(),
                                 number_type: Some(NumberType::Float),
                                 ..Default::default()
-                            },
+                            }],
                         },
                         Topology {
                             topology_type: TopologyType::Quadrilateral,
@@ -124,12 +124,12 @@ fn hierarchical_tree_grid() {
                 "Grid_1",
                 Geometry {
                     geometry_type: GeometryType::XYZ,
-                    data_item: DataItem {
+                    data_items: vec![DataItem {
                         dimensions: Some(Dimensions(vec![5, 3])),
                         data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
-                    },
+                    }],
                 },
                 Topology {
                     topology_type: TopologyType::Mixed,
@@ -204,12 +204,12 @@ fn mixed_grid() {
         "Grid_1",
         Geometry {
             geometry_type: GeometryType::XYZ,
-            data_item: DataItem {
+            data_items: vec![DataItem {
                 dimensions: Some(Dimensions(vec![5, 3])),
                 data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
                 number_type: Some(NumberType::Float),
                 ..Default::default()
-            },
+            }],
         },
         Topology {
             topology_type: TopologyType::Mixed,
@@ -263,12 +263,12 @@ fn spatial_collection_grid() {
                 "sub_grid_1",
                 Geometry {
                     geometry_type: GeometryType::XYZ,
-                    data_item: DataItem {
+                    data_items: vec![DataItem {
                         dimensions: Some(Dimensions(vec![5, 3])),
                         data: "0 1 0 0 1.5 0 0.5 1.5 0.5 1 1.5 0 1 1 0".into(),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
-                    },
+                    }],
                 },
                 Topology {
                     topology_type: TopologyType::Triangle,
@@ -286,12 +286,12 @@ fn spatial_collection_grid() {
                 "sub_grid_2",
                 Geometry {
                     geometry_type: GeometryType::XYZ,
-                    data_item: DataItem {
+                    data_items: vec![DataItem {
                         dimensions: Some(Dimensions(vec![6, 3])),
                         data: "1 1.5 0 1 1 0 1 0 0 1.3 1.5 0 1.3 1 0 1.3 0 0".into(),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
-                    },
+                    }],
                 },
                 Topology {
                     topology_type: TopologyType::Quadrilateral,
@@ -309,12 +309,12 @@ fn spatial_collection_grid() {
                 "Grid_1",
                 Geometry {
                     geometry_type: GeometryType::XYZ,
-                    data_item: DataItem {
+                    data_items: vec![DataItem {
                         dimensions: Some(Dimensions(vec![5, 3])),
                         data: "0 0 0 0 1 0 1 1 0 1 0 0 0.5 1.5 0.5".into(),
                         number_type: Some(NumberType::Float),
                         ..Default::default()
-                    },
+                    }],
                 },
                 Topology {
                     topology_type: TopologyType::Mixed,
@@ -409,7 +409,10 @@ fn temporal_collection_grid() {
                     name: "Grid_t1".into(),
                     geometry: Some(Geometry {
                         geometry_type: GeometryType::XYZ,
-                        data_item: DataItem::new_reference(&data_items[0], "/Xdmf/Domain/DataItem"),
+                        data_items: vec![DataItem::new_reference(
+                            &data_items[0],
+                            "/Xdmf/Domain/DataItem",
+                        )],
                     }),
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
@@ -452,7 +455,10 @@ fn temporal_collection_grid() {
                     name: "Grid_t2".into(),
                     geometry: Some(Geometry {
                         geometry_type: GeometryType::XYZ,
-                        data_item: DataItem::new_reference(&data_items[0], "/Xdmf/Domain/DataItem"),
+                        data_items: vec![DataItem::new_reference(
+                            &data_items[0],
+                            "/Xdmf/Domain/DataItem",
+                        )],
                     }),
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
@@ -495,7 +501,10 @@ fn temporal_collection_grid() {
                     name: "Grid_t3".into(),
                     geometry: Some(Geometry {
                         geometry_type: GeometryType::XYZ,
-                        data_item: DataItem::new_reference(&data_items[0], "/Xdmf/Domain/DataItem"),
+                        data_items: vec![DataItem::new_reference(
+                            &data_items[0],
+                            "/Xdmf/Domain/DataItem",
+                        )],
                     }),
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,

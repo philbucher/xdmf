@@ -114,6 +114,102 @@ impl Values<'_> {
             Self::U32(v) => v.len(),
         }
     }
+
+    /// Borrow `len` elements starting at `start`, without copying.
+    pub(crate) fn slice(&self, start: usize, len: usize) -> Values<'_> {
+        let end = start + len;
+
+        match self {
+            Self::F64(v) => Values::F64(Cow::Borrowed(&v[start..end])),
+            Self::F32(v) => Values::F32(Cow::Borrowed(&v[start..end])),
+            Self::I64(v) => Values::I64(Cow::Borrowed(&v[start..end])),
+            Self::I32(v) => Values::I32(Cow::Borrowed(&v[start..end])),
+            Self::U64(v) => Values::U64(Cow::Borrowed(&v[start..end])),
+            Self::U32(v) => Values::U32(Cow::Borrowed(&v[start..end])),
+        }
+    }
+}
+
+/// Scratch space for gathering a scattered submesh's share of a cell field out of the global array.
+#[derive(Debug, Default)]
+pub(crate) struct GatherBuffers {
+    f64: Vec<f64>,
+    f32: Vec<f32>,
+    i64: Vec<i64>,
+    i32: Vec<i32>,
+    u64: Vec<u64>,
+    u32: Vec<u32>,
+}
+
+impl GatherBuffers {
+    /// Collect the `stride`-sized tuples at `indices` into the buffer for this element type.
+    ///
+    /// The caller has already checked that `values` holds `stride` elements for every cell and
+    /// that each index names one of them, so the indexing below cannot go out of bounds.
+    pub(crate) fn gather<'b>(
+        &'b mut self,
+        values: &Values<'_>,
+        stride: usize,
+        indices: &[usize],
+    ) -> Values<'b> {
+        match values {
+            Values::F64(v) => Values::F64(gather_into(&mut self.f64, v, stride, indices)),
+            Values::F32(v) => Values::F32(gather_into(&mut self.f32, v, stride, indices)),
+            Values::I64(v) => Values::I64(gather_into(&mut self.i64, v, stride, indices)),
+            Values::I32(v) => Values::I32(gather_into(&mut self.i32, v, stride, indices)),
+            Values::U64(v) => Values::U64(gather_into(&mut self.u64, v, stride, indices)),
+            Values::U32(v) => Values::U32(gather_into(&mut self.u32, v, stride, indices)),
+        }
+    }
+
+    /// Collect every `stride`-th value starting at `offset` into the buffer for this element type.
+    ///
+    /// One coordinate direction of a mesh's interleaved points, which is how they are written for
+    /// a mesh whose submeshes select their own out of them.
+    pub(crate) fn component<'b>(
+        &'b mut self,
+        values: &Values<'_>,
+        stride: usize,
+        offset: usize,
+    ) -> Values<'b> {
+        match values {
+            Values::F64(v) => Values::F64(component_into(&mut self.f64, v, stride, offset)),
+            Values::F32(v) => Values::F32(component_into(&mut self.f32, v, stride, offset)),
+            Values::I64(v) => Values::I64(component_into(&mut self.i64, v, stride, offset)),
+            Values::I32(v) => Values::I32(component_into(&mut self.i32, v, stride, offset)),
+            Values::U64(v) => Values::U64(component_into(&mut self.u64, v, stride, offset)),
+            Values::U32(v) => Values::U32(component_into(&mut self.u32, v, stride, offset)),
+        }
+    }
+}
+
+fn gather_into<'b, T: Copy>(
+    buffer: &'b mut Vec<T>,
+    values: &[T],
+    stride: usize,
+    indices: &[usize],
+) -> Cow<'b, [T]> {
+    buffer.clear();
+    buffer.reserve(indices.len() * stride);
+
+    for &index in indices {
+        buffer.extend_from_slice(&values[index * stride..(index + 1) * stride]);
+    }
+
+    Cow::Borrowed(buffer)
+}
+
+fn component_into<'b, T: Copy>(
+    buffer: &'b mut Vec<T>,
+    values: &[T],
+    stride: usize,
+    offset: usize,
+) -> Cow<'b, [T]> {
+    buffer.clear();
+    buffer.reserve(values.len() / stride);
+    buffer.extend(values.iter().skip(offset).step_by(stride).copied());
+
+    Cow::Borrowed(buffer)
 }
 
 // Sealed so that `Coordinate` and `ConnectivityIndex` name exactly the types the XDMF geometry and
@@ -438,6 +534,59 @@ mod tests {
         std::assert_matches!(
             SealedIndex::as_values(&[0_i64, 1]),
             Values::I64(Cow::Borrowed(_))
+        );
+    }
+
+    #[test]
+    fn slice_borrows_a_run_of_values() {
+        let values: Values<'_> = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0].into();
+
+        // two vector tuples' worth, starting at the second
+        let sliced = values.slice(3, 3);
+
+        std::assert_matches!(sliced, Values::F64(Cow::Borrowed(v)) if v == [4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn gather_collects_scalars_in_the_given_order() {
+        let values: Values<'_> = vec![10_i32, 11, 12, 13].into();
+        let mut buffers = GatherBuffers::default();
+
+        let gathered = buffers.gather(&values, 1, &[2, 0]);
+
+        std::assert_matches!(gathered, Values::I32(v) if v.as_ref() == [12, 10]);
+    }
+
+    #[test]
+    fn gather_keeps_strided_tuples_together() {
+        // three points of xyz, of which the third and the first are wanted
+        let values: Values<'_> = vec![0.0_f32, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2].into();
+        let mut buffers = GatherBuffers::default();
+
+        let gathered = buffers.gather(&values, 3, &[2, 0]);
+
+        std::assert_matches!(
+            gathered,
+            Values::F32(v) if v.as_ref() == [2.0, 2.1, 2.2, 0.0, 0.1, 0.2]
+        );
+    }
+
+    #[test]
+    fn gather_reuses_the_buffer_of_its_element_type() {
+        let values: Values<'_> = vec![1_u64, 2, 3, 4].into();
+        let mut buffers = GatherBuffers::default();
+
+        // a long gather first, so the buffer has grown before the short one reuses it
+        let capacity = match buffers.gather(&values, 1, &[0, 1, 2, 3]) {
+            Values::U64(v) => v.len(),
+            other => panic!("expected U64, got {other:?}"),
+        };
+        assert_eq!(capacity, 4);
+
+        // the second gather must not see anything left over from the first
+        std::assert_matches!(
+            buffers.gather(&values, 1, &[3]),
+            Values::U64(v) if v.as_ref() == [4]
         );
     }
 

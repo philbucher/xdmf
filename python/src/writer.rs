@@ -16,7 +16,7 @@ use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 use crate::{
     arrays::{IndexArray, PointArray, ValueArray, contiguous_slice},
-    enums::{PyDataAttribute, PyDataStorage, extract_cell_types},
+    enums::{PyDataAttribute, PyDataStorage, extract_cell_types, extract_submesh_cells},
     error::to_py_err,
 };
 
@@ -25,6 +25,9 @@ const ALREADY_CLOSED: &str = "this TimeSeriesDataWriter has already been closed"
 
 /// One attribute of a time step: its name, what it describes, and the numpy array holding it.
 type NamedData<'py> = (String, PyDataAttribute, Bound<'py, PyAny>);
+
+/// One submesh: its name, and the numpy array or sequence of `int` naming its cells.
+type NamedSubmesh<'py> = (String, Bound<'py, PyAny>);
 
 /// Borrows a numpy array as the concrete slice type its dtype names, and evaluates `$body` with it.
 ///
@@ -86,10 +89,8 @@ impl PyTimeSeriesWriter {
             return Err(PyRuntimeError::new_err(ALREADY_CONSUMED));
         }
 
-        let points = PointArray::extract(points, "points")?;
-        points.validate_shape()?;
-        let connectivity = IndexArray::extract(connectivity, "connectivity")?;
-        let cell_types = extract_cell_types(cell_types)?;
+        let (points, connectivity, cell_types) =
+            extract_mesh_args(points, connectivity, cell_types)?;
 
         let inner = dispatch_dtype!(points, PointArray, [F64, F32], |point_slice| {
             dispatch_dtype!(
@@ -109,6 +110,73 @@ impl PyTimeSeriesWriter {
 
         Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
     }
+
+    /// Write the mesh split into named submeshes, returning the writer for the time step data, as
+    /// [`write_mesh`](Self::write_mesh) does.
+    ///
+    /// `submeshes` is a sequence of `(name, cells)` pairs, `cells` naming which cells (indices into
+    /// `cell_types`) belong to that submesh, as a numpy integer array or a sequence of `int`. Every
+    /// cell must be in at least one submesh; submeshes may overlap.
+    fn write_mesh_with_submeshes(
+        &mut self,
+        py: Python<'_>,
+        points: &Bound<'_, PyAny>,
+        connectivity: &Bound<'_, PyAny>,
+        cell_types: &Bound<'_, PyAny>,
+        submeshes: Vec<NamedSubmesh<'_>>,
+    ) -> PyResult<PyTimeSeriesDataWriter> {
+        if self.inner.is_none() {
+            return Err(PyRuntimeError::new_err(ALREADY_CONSUMED));
+        }
+
+        let (points, connectivity, cell_types) =
+            extract_mesh_args(points, connectivity, cell_types)?;
+        let submeshes = submeshes
+            .into_iter()
+            .map(|(name, cells)| Ok((name, extract_submesh_cells(&cells)?)))
+            .collect::<PyResult<Vec<_>>>()?;
+
+        let inner = dispatch_dtype!(points, PointArray, [F64, F32], |point_slice| {
+            dispatch_dtype!(
+                connectivity,
+                IndexArray,
+                [U64, U32, I64, I32],
+                |index_slice| {
+                    let writer = self
+                        .inner
+                        .take()
+                        .ok_or_else(|| PyRuntimeError::new_err(ALREADY_CONSUMED))?;
+                    py.detach(|| {
+                        writer.write_mesh_with_submeshes(
+                            point_slice,
+                            index_slice,
+                            &cell_types,
+                            submeshes
+                                .iter()
+                                .map(|(name, cells)| (name.as_str(), cells.as_slice())),
+                        )
+                    })
+                    .map_err(to_py_err)
+                }
+            )
+        })?;
+
+        Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
+    }
+}
+
+/// Extracts and validates the three arguments `write_mesh`/`write_mesh_with_submeshes` share,
+/// before either takes ownership of the writer -- so a call rejected here leaves it usable.
+fn extract_mesh_args<'py>(
+    points: &Bound<'py, PyAny>,
+    connectivity: &Bound<'py, PyAny>,
+    cell_types: &Bound<'py, PyAny>,
+) -> PyResult<(PointArray<'py>, IndexArray<'py>, Vec<xdmf::CellType>)> {
+    let points = PointArray::extract(points, "points")?;
+    points.validate_shape()?;
+    let connectivity = IndexArray::extract(connectivity, "connectivity")?;
+    let cell_types = extract_cell_types(cell_types)?;
+    Ok((points, connectivity, cell_types))
 }
 
 /// Writer for the per-step data, obtained from `TimeSeriesWriter.write_mesh`.
@@ -191,13 +259,18 @@ impl PyTimeSeriesDataWriter {
     }
 }
 
+/// Names an attribute's array in a rejection, the way `"points"` names the mesh's.
+fn data_role(name: &str) -> String {
+    format!("data of '{name}'")
+}
+
 /// Borrows every array of one category, keeping the borrows alive for the whole step.
 fn borrow_arrays<'py>(
     data: Vec<NamedData<'py>>,
 ) -> PyResult<Vec<(String, PyDataAttribute, ValueArray<'py>)>> {
     data.into_iter()
         .map(|(name, attribute, array)| {
-            let array = ValueArray::extract(&array, &format!("data of '{name}'"))?;
+            let array = ValueArray::extract(&array, &data_role(&name))?;
             Ok((name, attribute, array))
         })
         .collect()

@@ -18,6 +18,15 @@
 //! `NumberType`/`Precision` pair, which is what decides how large a mesh can be written. The
 //! verification script checks the cells come back with the right type and point ids for each.
 //!
+//! One further fixture per storage covers `write_mesh_with_submeshes`, which is a different grid
+//! structure rather than a different set of numbers: a `Spatial` collection of one `<Grid>` per
+//! submesh, each holding the points its own cells use and its own share of every field.
+//! `ParaView` reads that back as a multi-block dataset, so nothing about it is exercised by the
+//! fixtures above. Its submeshes deliberately cover all four cases the
+//! writer distinguishes -- a single cell, a contiguous run, an out-of-order (gathered) list, and
+//! two blocks overlapping on the same cell -- and its cell data includes a `Vector` field, since a
+//! per-cell component count is what the slicing and gathering multiply by.
+//!
 //! Usage: `cargo run --example paraview_smoke -- <output_dir> <storage>`
 //! `<storage>` is any string accepted by `xdmf::DataStorage::from_str` (e.g. `Hdf5SingleFile`).
 
@@ -66,6 +75,27 @@ const LEVEL_I64: [i64; NUM_CELLS] = [i32::MIN as i64, i32::MAX as i64];
 // so the writer refuses a `u64` beyond `u32::MAX` outright, for every storage. See the README.
 const LEVEL_I64_WIDE: [i64; NUM_CELLS] = [-9_007_199_254_740_991, 9_007_199_254_740_991];
 
+// The submeshes of the submesh fixture, as (name, cell indices). Between them they cover every
+// case the writer distinguishes: a single cell, a contiguous run of them, a list that is *not* an
+// ascending run (so the writer gathers rather than borrows), and two blocks claiming the same cell.
+const SUBMESHES: [(&str, &[usize]); 4] = [
+    ("quad", &[0]),
+    ("tri", &[1]),
+    ("both", &[0, 1]),
+    ("reversed", &[1, 0]),
+];
+
+// A per-cell `Vector` field for the submesh fixture: three components per cell, so a submesh's
+// share is a strided slice rather than one value per cell, which is what the writer's `stride`
+// arithmetic has to get right for ParaView to read back whole tuples.
+const CELL_VELOCITY: [[f64; 3]; NUM_CELLS] = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
+
+// A data name of the shape solvers actually hand over, rather than one made of the alphanumerics
+// the writer used to insist on. The heavy data is numbered, so this name reaches nothing but the
+// `<Attribute Name=...>`: ParaView finding the field under this exact spelling is what proves
+// quick-xml's escaping of it round-trips.
+const SOLVER_STYLE_NAME: &str = "Quantity('SOOT DENSITY'), U.component_0 [kg m-3]";
+
 /// One integer cell-data field, as `ParaView` must read it back. Every element type the writer
 /// supports gets one, since the light data's `NumberType`/`Precision` pair -- and, for
 /// `DataStorage::Binary`, the narrowing to 32 bits -- is what a reader has to agree with.
@@ -88,6 +118,10 @@ impl ExpectedIntegerField {
 struct ExpectedTimestep {
     time: f64,
     temperature: Vec<f64>,
+    /// Carried in the fixture rather than restated in the verification script, so the two cannot
+    /// disagree about the exact spelling that is under test.
+    solver_style_name: String,
+    solver_style_values: Vec<f64>,
     displacement: Vec<[f64; 3]>,
     velocity_gradient: Vec<[f64; 9]>,
     integers: Vec<ExpectedIntegerField>,
@@ -109,12 +143,43 @@ struct ExpectedFixture {
     timesteps: Vec<ExpectedTimestep>,
 }
 
+/// One block of the submesh fixture as `ParaView` must read it back: the points its cells use, the
+/// cells themselves in that block's own point numbering, and its share of every field.
+///
+/// A block carries only the points its cells touch, so both what it holds and how its cells index
+/// it differ per block -- which is what these expectations pin down.
+#[derive(Serialize)]
+struct ExpectedBlock {
+    name: String,
+    points: Vec<Vec<f64>>,
+    cells: Vec<ExpectedCell>,
+    temperature: Vec<f64>,
+    stress: Vec<[f64; 6]>,
+    level_i32: Vec<i32>,
+    cell_velocity: Vec<[f64; 3]>,
+}
+
+#[derive(Serialize)]
+struct ExpectedSubmeshTimestep {
+    time: f64,
+    blocks: Vec<ExpectedBlock>,
+}
+
+#[derive(Serialize)]
+struct ExpectedSubmeshFixture {
+    xdmf_file: String,
+    timesteps: Vec<ExpectedSubmeshTimestep>,
+}
+
 #[derive(Serialize)]
 struct Expected {
     /// Which storage wrote these, so the verification script knows how many fixtures to expect --
     /// `Binary` carries fewer, having no 64-bit integer types.
     storage: String,
     fixtures: Vec<ExpectedFixture>,
+    /// The multi-block fixture, kept apart from the ones above because it is read back as a
+    /// composite dataset and so is checked by a traversal of its own.
+    submesh_fixtures: Vec<ExpectedSubmeshFixture>,
 }
 
 /// Which width the coordinates and the float attributes of a fixture are written at.
@@ -243,6 +308,7 @@ fn main() -> IoResult<()> {
     let expected = Expected {
         storage: storage_arg.to_lowercase(),
         fixtures,
+        submesh_fixtures: vec![write_submesh_fixture(output_dir, storage_arg, storage)?],
     };
 
     let expected_json =
@@ -254,11 +320,18 @@ fn main() -> IoResult<()> {
         reason = "CLI progress output expected from an example binary"
     )]
     {
-        for fixture in &expected.fixtures {
-            println!(
-                "Wrote fixture to {}",
-                output_dir.join(&fixture.xdmf_file).display()
+        let fixture_files = expected
+            .fixtures
+            .iter()
+            .map(|fixture| &fixture.xdmf_file)
+            .chain(
+                expected
+                    .submesh_fixtures
+                    .iter()
+                    .map(|fixture| &fixture.xdmf_file),
             );
+        for xdmf_file in fixture_files {
+            println!("Wrote fixture to {}", output_dir.join(xdmf_file).display());
         }
     }
 
@@ -342,9 +415,16 @@ fn write_fixture(
             integers.push(ExpectedIntegerField::new("level_i64_wide", LEVEL_I64_WIDE));
         }
 
+        let mut solver_style: Vec<f64> = (0..NUM_POINTS)
+            .map(|point| (point as f64 + 0.5) * scale)
+            .collect();
+        precision.narrow_expected(&mut solver_style);
+
         timesteps.push(ExpectedTimestep {
             time: step as f64,
             temperature: temperature.clone(),
+            solver_style_name: SOLVER_STYLE_NAME.to_string(),
+            solver_style_values: solver_style.clone(),
             displacement: displacement.clone(),
             velocity_gradient: velocity_gradient.clone(),
             integers,
@@ -368,6 +448,11 @@ fn write_fixture(
                 "velocity_gradient",
                 DataAttribute::Tensor,
                 precision.values(velocity_gradient.as_flattened()),
+            )?;
+            time_step.point_data(
+                SOLVER_STYLE_NAME,
+                DataAttribute::Scalar,
+                precision.values(&solver_style),
             )?;
 
             // integer data is unaffected by the fixture's float precision
@@ -411,4 +496,141 @@ fn write_fixture(
             .collect(),
         timesteps,
     })
+}
+
+/// Writes the multi-block fixture: the same mesh as above, split into the submeshes of
+/// [`SUBMESHES`].
+///
+/// Only one is written per storage, at f64 precision with `u32` connectivity, because what is under
+/// test here is the grid *structure* -- a spatial collection nested in the temporal one -- and not
+/// the element types, which the fixtures above already cover for every storage across both
+/// precisions and every index type. `u32` because it is the one index type every storage carries,
+/// `Binary` included.
+fn write_submesh_fixture(
+    output_dir: &Path,
+    storage_arg: &str,
+    storage: DataStorage,
+) -> IoResult<ExpectedSubmeshFixture> {
+    let base_path = output_dir.join(format!("fixture_{}_submeshes", storage_arg.to_lowercase()));
+
+    let xdmf_writer = TimeSeriesWriter::new(&base_path, storage)?;
+    let mut xdmf_writer = xdmf_writer.write_mesh_with_submeshes(
+        &COORDS,
+        &CONNECTIVITY.map(|index| index as u32),
+        &CELL_TYPES,
+        SUBMESHES,
+    )?;
+
+    let mut timesteps = Vec::new();
+    for (step, scale) in [1.0, 2.0].into_iter().enumerate() {
+        let temperature: Vec<f64> = [10.0, 11.0, 12.0, 13.0, 14.0]
+            .into_iter()
+            .map(|value| value * scale)
+            .collect();
+        let cell_velocity: Vec<[f64; 3]> = CELL_VELOCITY
+            .iter()
+            .map(|tuple| tuple.map(|component| component * scale))
+            .collect();
+        // a point field of more than one value per point, which is what a submesh needs an index
+        // array of its own to select -- and the only shape written as a rank-3 `Dimensions`
+        let stress: Vec<[f64; 6]> = (0..NUM_POINTS)
+            .map(|point| std::array::from_fn(|component| (point * 6 + component) as f64 * scale))
+            .collect();
+
+        // Each block's expectations are the whole-mesh arrays taken at that submesh's cell
+        // indices, in the order the submesh names them -- which is what the writer is expected to
+        // hand ParaView, and what the "reversed" submesh exists to pin down.
+        let mut blocks = Vec::with_capacity(SUBMESHES.len());
+        for (name, cells) in SUBMESHES {
+            let points = submesh_points(cells);
+
+            let mut expected_cells = Vec::with_capacity(cells.len());
+            for &cell in cells {
+                // renumbered into the block's own points, as the writer renumbers them
+                let mut cell_points = Vec::with_capacity(EXPECTED_CELLS[cell].1.len());
+                for point in EXPECTED_CELLS[cell].1 {
+                    cell_points.push(local_index(&points, *point)?);
+                }
+
+                expected_cells.push(ExpectedCell {
+                    r#type: EXPECTED_CELLS[cell].0.to_string(),
+                    points: cell_points,
+                });
+            }
+
+            blocks.push(ExpectedBlock {
+                name: name.to_string(),
+                points: points
+                    .iter()
+                    .map(|&point| COORDS.as_chunks::<3>().0[point as usize].to_vec())
+                    .collect(),
+                cells: expected_cells,
+                temperature: points
+                    .iter()
+                    .map(|&point| temperature[point as usize])
+                    .collect(),
+                stress: points.iter().map(|&point| stress[point as usize]).collect(),
+                level_i32: cells.iter().map(|&cell| LEVEL_I32[cell]).collect(),
+                cell_velocity: cells.iter().map(|&cell| cell_velocity[cell]).collect(),
+            });
+        }
+
+        timesteps.push(ExpectedSubmeshTimestep {
+            time: step as f64,
+            blocks,
+        });
+
+        xdmf_writer.write_time_step(&step.to_string(), |time_step| {
+            // point and cell data are passed over the whole mesh, exactly as without submeshes --
+            // the writer gives each block its share
+            time_step.point_data("temperature", DataAttribute::Scalar, &temperature)?;
+            time_step.point_data("stress", DataAttribute::Tensor6, stress.as_flattened())?;
+            time_step.cell_data("level_i32", DataAttribute::Scalar, &LEVEL_I32)?;
+            time_step.cell_data(
+                "cell_velocity",
+                DataAttribute::Vector,
+                cell_velocity.as_flattened(),
+            )
+        })?;
+    }
+
+    let xdmf_file = base_path
+        .with_extension("xdmf2")
+        .file_name()
+        .ok_or_else(|| IoError::new(InvalidInput, "invalid output file name"))?
+        .to_string_lossy()
+        .into_owned();
+
+    Ok(ExpectedSubmeshFixture {
+        xdmf_file,
+        timesteps,
+    })
+}
+
+/// The mesh points one submesh's cells use, ascending -- exactly the points the writer gives that
+/// block, in the order it writes them.
+fn submesh_points(cells: &[usize]) -> Vec<u64> {
+    let mut points: Vec<u64> = cells
+        .iter()
+        .flat_map(|&cell| EXPECTED_CELLS[cell].1.iter().copied())
+        .collect();
+
+    points.sort_unstable();
+    points.dedup();
+
+    points
+}
+
+/// Where a mesh point sits in a block's own point list, which is how that block's cells index it.
+fn local_index(points: &[u64], point: u64) -> IoResult<u64> {
+    points
+        .iter()
+        .position(|&candidate| candidate == point)
+        .map(|index| index as u64)
+        .ok_or_else(|| {
+            IoError::new(
+                InvalidInput,
+                format!("point {point} is not in the block that uses it"),
+            )
+        })
 }

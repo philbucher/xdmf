@@ -48,6 +48,13 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
   `(3, N)` layout (separate x/y/z rows, which is C-contiguous too) raises instead of being read as
   interleaved coordinates. `cell_types` may be a numpy array of the raw VTK cell type codes, in any
   integer dtype, instead of a list.
+- `write_mesh_with_submeshes(points, connectivity, cell_types, submeshes)` splits the mesh into
+  named, independently selectable submeshes for ParaView's Multi-block Inspector — `submeshes` is a
+  sequence of `(name, cells)` pairs, `cells` a numpy integer array or a plain sequence of `int`
+  naming which cells belong to it. Point and cell data are still passed over the whole mesh in
+  `write_time_step`; the writer slices each submesh's share. Submeshes may overlap, but every cell
+  must belong to at least one, and no two names may differ only in case (a name becomes a file name
+  for the ascii and binary storages).
 - A time step is all-or-nothing, as in Rust: it is written when every attribute of it was accepted,
   and discarded — leaving no heavy data behind and the time still available — as soon as one is not.
 - The data writer is a context manager, so the HDF5 file is closed at the end of the `with` block

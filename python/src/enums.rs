@@ -2,7 +2,7 @@
 
 use std::fmt::Display;
 
-use numpy::{Element, PyReadonlyArrayDyn};
+use numpy::PyReadonlyArrayDyn;
 use pyo3::{exceptions::PyValueError, prelude::*};
 
 /// Heavy-data storage format. `Hdf5SingleFile`/`Hdf5MultipleFiles` are plain attributes for the
@@ -151,19 +151,19 @@ cell_types! {
     Hexahedron27 = 50,
 }
 
-/// The codes an integer array holds, rejecting a negative one by name.
-fn codes_of<T>(array: &PyReadonlyArrayDyn<'_, T>) -> PyResult<Vec<u64>>
+/// The non-negative codes an iterator of integers holds, rejecting the first negative one by name.
+/// `role` names what the codes represent ("cell type code", "submesh cell index"), since this backs
+/// more than one extraction and a bare "code" would not say which.
+fn non_negative_codes<T>(codes: impl IntoIterator<Item = T>, role: &str) -> PyResult<Vec<u64>>
 where
-    T: Element + Copy + Display,
+    T: Copy + Display,
     u64: TryFrom<T>,
 {
-    array
-        .as_array()
-        .iter()
-        .map(|&code| {
-            u64::try_from(code).map_err(|_negative| {
-                PyValueError::new_err(format!("cell type code {code} is negative"))
-            })
+    codes
+        .into_iter()
+        .map(|code| {
+            u64::try_from(code)
+                .map_err(|_negative| PyValueError::new_err(format!("{role} {code} is negative")))
         })
         .collect()
 }
@@ -176,13 +176,14 @@ where
 // identical source work on one platform and fail on another.
 macro_rules! code_dtypes {
     ($dtypes:literal, [$($ty:ty),+ $(,)?]) => {
-        const CELL_CODE_DTYPES: &str = $dtypes;
+        const INTEGER_ARRAY_DTYPES: &str = $dtypes;
 
-        /// The raw VTK codes `obj` holds, or `None` if it is not an integer numpy array at all.
-        fn extract_codes(obj: &Bound<'_, PyAny>) -> Option<PyResult<Vec<u64>>> {
+        /// The codes `obj` holds, or `None` if it is not an integer numpy array at all. `role` is
+        /// forwarded to `non_negative_codes`.
+        fn extract_codes(obj: &Bound<'_, PyAny>, role: &str) -> Option<PyResult<Vec<u64>>> {
             $(
                 if let Ok(array) = obj.extract::<PyReadonlyArrayDyn<'_, $ty>>() {
-                    return Some(codes_of(&array));
+                    return Some(non_negative_codes(array.as_array().iter().copied(), role));
                 }
             )+
             None
@@ -203,10 +204,10 @@ pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::C
         return Ok(list.into_iter().map(Into::into).collect());
     }
 
-    let Some(codes) = extract_codes(obj) else {
+    let Some(codes) = extract_codes(obj, "cell type code") else {
         return Err(PyValueError::new_err(format!(
             "cell_types must be a sequence of xdmf.CellType values, or a numpy array of dtype \
-             {CELL_CODE_DTYPES}"
+             {INTEGER_ARRAY_DTYPES}"
         )));
     };
 
@@ -215,6 +216,37 @@ pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::C
         .map(|code| {
             cell_type_from_code(code)
                 .ok_or_else(|| PyValueError::new_err(format!("unknown cell type code {code}")))
+        })
+        .collect()
+}
+
+/// The cell indices of one submesh: a Python sequence of `int`, or a numpy integer array of any
+/// dtype -- the same acceptance rule as `extract_cell_types` and for the same reason (`int32` is
+/// what `NumPy` 1.x defaults to on Windows and what mesh generators commonly hand back).
+pub(crate) fn extract_submesh_cells(obj: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    const ROLE: &str = "submesh cell index";
+
+    // The typed array path goes first: a numpy array satisfies `PySequence_Check`, so extracting
+    // it as a `Vec<i64>` also succeeds -- and would convert the whole index list one Python object
+    // at a time, which is exactly what reading the buffer through `PyReadonlyArrayDyn` avoids. The
+    // list arm is the fallback, for the plain sequences no dtype matches.
+    let codes = if let Some(codes) = extract_codes(obj, ROLE) {
+        codes?
+    } else if let Ok(list) = obj.extract::<Vec<i64>>() {
+        non_negative_codes(list, ROLE)?
+    } else {
+        return Err(PyValueError::new_err(format!(
+            "submesh cells must be a sequence of int, or a numpy array of dtype \
+             {INTEGER_ARRAY_DTYPES}"
+        )));
+    };
+
+    codes
+        .into_iter()
+        .map(|code| {
+            usize::try_from(code).map_err(|_too_large| {
+                PyValueError::new_err(format!("{ROLE} {code} does not fit usize"))
+            })
         })
         .collect()
 }

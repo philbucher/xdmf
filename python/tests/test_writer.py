@@ -8,6 +8,7 @@ in the core crate).
 
 import ast
 import inspect
+import re
 import struct
 import threading
 from pathlib import Path
@@ -364,6 +365,171 @@ def test_a_rejected_write_mesh_leaves_the_writer_usable(tmp_path):
             writer.write_mesh(points, connectivity, cell_types)
 
     writer.write_mesh(SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+
+
+def test_write_mesh_with_submeshes(tmp_path):
+    # each submesh becomes its own <Grid>, holding only the points its own cells use; point and
+    # cell data are passed for the whole mesh and the writer gives each submesh its own share.
+    # Once a step is written, a submesh's grid is a Temporal collection of one grid per step.
+    file_path = tmp_path / "submeshes"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.AsciiInline)
+    data_writer = writer.write_mesh_with_submeshes(
+        SQUARE_COORDS,
+        SQUARE_CONNECTIVITY,
+        SQUARE_CELL_TYPES,
+        [("tri0", [0]), ("tri1", [1])],
+    )
+    data_writer.write_time_step(
+        "0.0",
+        point_data=[("temperature", xdmf.DataAttribute.SCALAR, TEMPERATURE)],
+        cell_data=[("material", xdmf.DataAttribute.SCALAR, np.array([10.0, 20.0]))],
+    )
+
+    xml = file_path.with_suffix(".xdmf2").read_text()
+    assert 'GridType="Collection" CollectionType="Spatial"' in xml
+    assert '<Grid Name="tri0" GridType="Collection" CollectionType="Temporal">' in xml
+    assert '<Grid Name="tri1" GridType="Collection" CollectionType="Temporal">' in xml
+    assert '<Grid Name="tri0-t0.0" GridType="Uniform">' in xml
+    assert '<Grid Name="tri1-t0.0" GridType="Uniform">' in xml
+
+    tri0_xml = xml.split('<Grid Name="tri0-t0.0"')[1].split("</Grid>")[0]
+    tri1_xml = xml.split('<Grid Name="tri1-t0.0"')[1].split("</Grid>")[0]
+    assert attribute_value(tri0_xml, "material", "Cell") == "1e1"
+    assert attribute_value(tri1_xml, "material", "Cell") == "2e1"
+    # tri0 holds points 0, 1, 2 and tri1 points 0, 2, 3, so each gets that share of TEMPERATURE
+    assert attribute_value(tri0_xml, "temperature", "Node") == "1e1 1.1e1 1.2e1"
+    assert attribute_value(tri1_xml, "temperature", "Node") == "1e1 1.2e1 1.3e1"
+
+
+def attribute_value(grid_xml, name, center):
+    """The inline text of one Scalar Attribute's DataItem, within one <Grid>'s XML slice."""
+    match = re.search(
+        rf'<Attribute Name="{name}" AttributeType="Scalar" Center="{center}">\s*'
+        r"<DataItem[^>]*>([^<]+)</DataItem>",
+        grid_xml,
+    )
+    assert match, grid_xml
+    return match.group(1)
+
+
+@pytest.mark.parametrize(
+    "dtype", [np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64]
+)
+def test_submesh_cells_as_numpy_array(tmp_path, dtype):
+    file_path = tmp_path / f"submesh_codes_{np.dtype(dtype).name}"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Ascii)
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS,
+        SQUARE_CONNECTIVITY,
+        SQUARE_CELL_TYPES,
+        [("all", np.array([0, 1], dtype=dtype))],
+    )
+    assert '<Grid Name="all" GridType="Uniform">' in file_path.with_suffix(".xdmf2").read_text()
+
+
+def test_submesh_cells_as_a_plain_list(tmp_path):
+    file_path = tmp_path / "submesh_list"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Ascii)
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("all", [0, 1])]
+    )
+    assert '<Grid Name="all" GridType="Uniform">' in file_path.with_suffix(".xdmf2").read_text()
+
+
+def test_overlapping_submeshes_are_allowed(tmp_path):
+    file_path = tmp_path / "overlap"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Ascii)
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS,
+        SQUARE_CONNECTIVITY,
+        SQUARE_CELL_TYPES,
+        [("a", [0, 1]), ("b", [1])],
+    )
+    xml = file_path.with_suffix(".xdmf2").read_text()
+    assert '<Grid Name="a" GridType="Uniform">' in xml
+    assert '<Grid Name="b" GridType="Uniform">' in xml
+
+
+def test_empty_submesh_is_rejected(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "empty_submesh"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("empty", [])]
+        )
+    assert "must contain at least one cell" in str(exc_info.value)
+
+
+def test_duplicate_submesh_name_is_rejected(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "dup_submesh"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS,
+            SQUARE_CONNECTIVITY,
+            SQUARE_CELL_TYPES,
+            [("part", [0]), ("part", [1])],
+        )
+    assert "used more than once" in str(exc_info.value)
+
+
+def test_out_of_range_submesh_cell_is_rejected(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "oob_submesh"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("part", [0, 2])]
+        )
+    assert "but the mesh only has" in str(exc_info.value)
+
+
+def test_a_cell_in_no_submesh_is_rejected(tmp_path):
+    # a cell in none of the submeshes would silently vanish from the visualization
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "uncovered"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("part", [0])]
+        )
+    assert "belong to no submesh" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("as_numpy", [False, True])
+def test_negative_submesh_cell_index_is_rejected(tmp_path, as_numpy):
+    cells = np.array([-1], dtype=np.int64) if as_numpy else [-1]
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / f"neg_submesh_{as_numpy}"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("part", cells)]
+        )
+    assert str(exc_info.value) == "submesh cell index -1 is negative"
+
+
+def test_a_rejected_write_mesh_with_submeshes_leaves_the_writer_usable(tmp_path):
+    # only python-layer-detectable rejections (dtype, shape, cell type) leave the writer usable, the
+    # same asymmetry as plain write_mesh: a submesh validation failure (empty, duplicate name,
+    # out-of-range, uncovered cell) happens inside the core crate's own self-consuming
+    # write_mesh_with_submeshes, so retrying after one of those raises RuntimeError instead -- the
+    # writer is genuinely gone, just as it is when write_mesh's own mesh validation rejects a call
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "submesh_retry"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError):
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS.astype(np.uint64),
+            SQUARE_CONNECTIVITY,
+            SQUARE_CELL_TYPES,
+            [("all", [0, 1])],
+        )
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("all", [0, 1])]
+    )
+
+
+def test_write_mesh_with_submeshes_twice_raises(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "submesh_twice"), xdmf.DataStorage.Ascii)
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("all", [0, 1])]
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("all", [0, 1])]
+        )
+    assert str(exc_info.value) == "write_mesh was already called on this TimeSeriesWriter"
 
 
 def test_a_numpy_scalar_is_not_described_as_an_array(tmp_path):

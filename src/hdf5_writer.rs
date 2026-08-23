@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use hdf5::{File as H5File, Group as H5Group, H5Type};
 
 use crate::{
-    DataStorage, DataWriter, Error, Result, Values,
+    CELLS, DataStorage, DataWriter, Error, POINTS, Result, SELECTIONS, SUBMESH_CELLS,
+    SUBMESH_POINTS, Values,
     error::io_ctx,
     xdmf_elements::data_item::{DataContent, Format},
 };
@@ -18,8 +19,6 @@ fn hdf5_ctx(operation: &'static str) -> impl FnOnce(hdf5::Error) -> Error {
 
 const MESH: &str = "mesh";
 const DATA: &str = "data";
-const POINTS: &str = "points";
-const CELLS: &str = "cells";
 
 // zlib/deflate level used when `deflate_level` is `None`. Benchmarked 3, 6 (zlib's default)
 // and 9 (max) on a 10M-element CFD case: 9 gains ~0.1% size over 6 for up to 5x slower writes
@@ -58,6 +57,30 @@ impl SingleFileHdf5Writer {
             deflate_level,
         })
     }
+
+    /// Write one of the mesh's arrays into the file's `mesh` group, which the first array written
+    /// creates.
+    fn write_mesh_array(
+        &mut self,
+        array: &str,
+        submesh: Option<usize>,
+        values: &Values<'_>,
+    ) -> Result<DataContent> {
+        if !self.h5_file.link_exists(MESH) {
+            self.h5_file
+                .create_group(MESH)
+                .map_err(hdf5_ctx("creating mesh group"))?;
+        }
+
+        let mesh_group = self
+            .h5_file
+            .group(MESH)
+            .map_err(hdf5_ctx("opening mesh group"))?;
+
+        let data_name = write_array(&mesh_group, array, submesh, values, self.deflate_level)?;
+
+        Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_name).into())
+    }
 }
 
 impl DataWriter for SingleFileHdf5Writer {
@@ -71,30 +94,60 @@ impl DataWriter for SingleFileHdf5Writer {
         }
     }
 
-    fn write_mesh(
-        &mut self,
-        points: &Values<'_>,
-        cells: &Values<'_>,
-    ) -> Result<(DataContent, DataContent)> {
-        if self.h5_file.link_exists(MESH) {
+    fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent> {
+        // The points are the first array of any mesh, so this is where writing a second one into
+        // the same file is caught -- by the dataset this call would create, since with submeshes
+        // the `mesh` group is created by the first submesh and then found by every later one.
+        if self.h5_file.link_exists(&mesh_path(POINTS, submesh)) {
             return Err(Error::InvalidMesh {
                 reason: "mesh was already written".to_string(),
             });
         }
 
-        let mesh_group = self
+        self.write_mesh_array(POINTS, submesh, points)
+    }
+
+    // The three components share the `mesh/points` group a plain mesh writes a single array into,
+    // numbered as a submesh's own points would be -- a mesh written this way has none of those.
+    fn write_point_component(
+        &mut self,
+        component: usize,
+        coordinates: &Values<'_>,
+    ) -> Result<DataContent> {
+        if self
             .h5_file
-            .create_group(MESH)
-            .map_err(hdf5_ctx("creating mesh group"))?;
+            .link_exists(&mesh_path(POINTS, Some(component)))
+        {
+            return Err(Error::InvalidMesh {
+                reason: "mesh was already written".to_string(),
+            });
+        }
 
-        let (data_name_points, data_name_cells) =
-            write_mesh(&mesh_group, points, cells, self.deflate_level)?;
+        self.write_mesh_array(POINTS, Some(component), coordinates)
+    }
 
-        let h5_file_name = self.h5_file_name.to_string_lossy();
-        Ok((
-            full_path(&h5_file_name, &data_name_points).into(),
-            full_path(&h5_file_name, &data_name_cells).into(),
-        ))
+    fn write_connectivity(
+        &mut self,
+        submesh: Option<usize>,
+        cells: &Values<'_>,
+    ) -> Result<DataContent> {
+        self.write_mesh_array(CELLS, submesh, cells)
+    }
+
+    fn write_submesh_cells(&mut self, submesh: usize, cells: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_array(SUBMESH_CELLS, Some(submesh), cells)
+    }
+
+    fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_array(SUBMESH_POINTS, Some(submesh), points)
+    }
+
+    fn supports_selections(&self) -> bool {
+        true
+    }
+
+    fn write_selection(&mut self, index: usize, indices: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_array(SELECTIONS, Some(index), indices)
     }
 
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
@@ -191,6 +244,31 @@ impl MultipleFilesHdf5Writer {
             deflate_level,
         })
     }
+
+    fn mesh_file_name(&self) -> PathBuf {
+        self.h5_files_dir.join(format!("{MESH}.h5"))
+    }
+
+    /// Write one of the mesh's arrays into `mesh.h5`, which the points create.
+    fn write_mesh_array(
+        &self,
+        array: &str,
+        submesh: Option<usize>,
+        values: &Values<'_>,
+    ) -> Result<DataContent> {
+        let file_name = self.mesh_file_name();
+        let h5_file = H5File::append(&file_name).map_err(hdf5_ctx("opening mesh file"))?;
+
+        let data_name = write_array(&h5_file, array, submesh, values, self.deflate_level)?;
+
+        Ok(full_path(&mesh_file_rel_name(&file_name)?, &data_name).into())
+    }
+}
+
+fn mesh_file_rel_name(file_name: &Path) -> Result<String> {
+    parent_and_filename(file_name).ok_or(Error::Internal(
+        "could not resolve parent directory and file name for an HDF5 path",
+    ))
 }
 
 impl DataWriter for MultipleFilesHdf5Writer {
@@ -204,25 +282,56 @@ impl DataWriter for MultipleFilesHdf5Writer {
         }
     }
 
-    fn write_mesh(
+    fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent> {
+        // the mesh file is created by the first array written into it -- the mesh's own points, or
+        // the first submesh's -- and appended to by every one after it
+        let file_name = self.mesh_file_name();
+        if submesh.unwrap_or(0) == 0 {
+            H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
+        }
+
+        self.write_mesh_array(POINTS, submesh, points)
+    }
+
+    fn write_point_component(
         &mut self,
-        points: &Values<'_>,
+        component: usize,
+        coordinates: &Values<'_>,
+    ) -> Result<DataContent> {
+        if component == 0 {
+            H5File::create(self.mesh_file_name()).map_err(hdf5_ctx("creating mesh file"))?;
+        }
+
+        self.write_mesh_array(POINTS, Some(component), coordinates)
+    }
+
+    // Reopened rather than kept open between the points and the connectivity arrays: holding the
+    // handle for the writer's lifetime would keep `mesh.h5` locked long after the mesh is done,
+    // and this runs once per mesh array at mesh-write time only, never per time step.
+    fn write_connectivity(
+        &mut self,
+        submesh: Option<usize>,
         cells: &Values<'_>,
-    ) -> Result<(DataContent, DataContent)> {
-        let file_name = self.h5_files_dir.join(format!("{MESH}.h5"));
-        let h5_file = H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
+    ) -> Result<DataContent> {
+        self.write_mesh_array(CELLS, submesh, cells)
+    }
 
-        let (data_name_points, data_name_cells) =
-            write_mesh(&h5_file, points, cells, self.deflate_level)?;
+    fn write_submesh_cells(&mut self, submesh: usize, cells: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_array(SUBMESH_CELLS, Some(submesh), cells)
+    }
 
-        let rel_file_name = parent_and_filename(&file_name).ok_or(Error::Internal(
-            "could not resolve parent directory and file name for an HDF5 path",
-        ))?;
+    fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_array(SUBMESH_POINTS, Some(submesh), points)
+    }
 
-        Ok((
-            full_path(&rel_file_name, &data_name_points).into(),
-            full_path(&rel_file_name, &data_name_cells).into(),
-        ))
+    fn supports_selections(&self) -> bool {
+        true
+    }
+
+    // Into `mesh.h5`, not into the step's own file: a selection written for one step is
+    // referenced by every step after it, and a discarded step takes its whole file with it.
+    fn write_selection(&mut self, index: usize, indices: &Values<'_>) -> Result<DataContent> {
+        self.write_mesh_array(SELECTIONS, Some(index), indices)
     }
 
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
@@ -231,8 +340,6 @@ impl DataWriter for MultipleFilesHdf5Writer {
             .as_ref()
             .ok_or(Error::Internal("writing data was not initialized"))?;
 
-        // Written directly at the file's root: the whole file already belongs to one time step,
-        // so there is nothing left to group by.
         let data_path = write_values(data_file, &index.to_string(), data, self.deflate_level)?;
 
         let rel_file_name = parent_and_filename(data_file.filename()).ok_or(Error::Internal(
@@ -282,18 +389,43 @@ impl DataWriter for MultipleFilesHdf5Writer {
     }
 }
 
-// Points and cells go through `write_values` like any other data, so the dataset type follows the
-// `Values` variant (f32 or f64 coordinates) and the filter pipeline is shared with everything else.
-fn write_mesh(
-    group: &H5Group,
-    points: &Values<'_>,
-    cells: &Values<'_>,
-    deflate_level: u8,
-) -> Result<(String, String)> {
-    let data_name_points = write_values(group, POINTS, points, deflate_level)?;
-    let data_name_cells = write_values(group, CELLS, cells, deflate_level)?;
+// A mesh's own connectivity sits next to the points, while submesh connectivity is collected in
+// one group of its own, so the mesh group stays browsable however many submeshes there are. The
+// submeshes are numbered rather than named, as attribute data is -- the `<Grid>` elements of the
+// XDMF file, in this same order, are what say which is which.
+/// Where one of a mesh's arrays lives inside the file: `mesh/<array>` for the mesh's own,
+/// `mesh/<array>/<index>` for the one belonging to the submesh at that position.
+fn mesh_path(array: &str, submesh: Option<usize>) -> String {
+    match submesh {
+        Some(index) => format!("{MESH}/{array}/{index}"),
+        None => format!("{MESH}/{array}"),
+    }
+}
 
-    Ok((data_name_points, data_name_cells))
+/// Write one of a mesh's arrays into the group holding them, creating the per-array group a
+/// submesh's copy goes into on first use.
+fn write_array(
+    group: &H5Group,
+    array: &str,
+    submesh: Option<usize>,
+    values: &Values<'_>,
+    deflate_level: u8,
+) -> Result<String> {
+    let Some(index) = submesh else {
+        return write_values(group, array, values, deflate_level);
+    };
+
+    if !group.link_exists(array) {
+        group
+            .create_group(array)
+            .map_err(hdf5_ctx("creating a mesh array group"))?;
+    }
+
+    let per_submesh = group
+        .group(array)
+        .map_err(hdf5_ctx("opening a mesh array group"))?;
+
+    write_values(&per_submesh, &index.to_string(), values, deflate_level)
 }
 
 fn write_values(
@@ -402,13 +534,9 @@ mod tests {
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
 
-        let (data_name_points, data_name_cells) = write_mesh(
-            &group,
-            &points.as_slice().into(),
-            &cells.as_slice().into(),
-            6,
-        )
-        .unwrap();
+        let data_name_points = write_values(&group, POINTS, &points.as_slice().into(), 6).unwrap();
+        let data_name_cells =
+            write_array(&group, CELLS, None, &cells.as_slice().into(), 6).unwrap();
         assert_eq!(data_name_points, "/test_group/points");
         assert_eq!(data_name_cells, "/test_group/cells");
 
@@ -446,13 +574,8 @@ mod tests {
         let points = vec![0.0_f32, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
 
-        write_mesh(
-            &group,
-            &points.as_slice().into(),
-            &cells.as_slice().into(),
-            6,
-        )
-        .unwrap();
+        write_values(&group, POINTS, &points.as_slice().into(), 6).unwrap();
+        write_array(&group, CELLS, None, &cells.as_slice().into(), 6).unwrap();
 
         let h5_file_read = H5File::open(&file_name).unwrap();
         let dataset = h5_file_read
@@ -694,8 +817,8 @@ mod tests {
         assert!(!writer.h5_file.link_exists("data/t_0.5"));
         assert!(writer.write_time.is_none());
 
-        // the time can be written again afterwards. A different array number, so the dataset it
-        // keeps is distinguishable from the discarded one
+        // the time can be written again afterwards. A different array number, so what the rewrite
+        // kept is distinguishable from what the discard removed
         writer.write_data_initialize("0.5").unwrap();
         writer
             .write_data(1, &Values::F64(vec![3.0, 4.0].into()))
@@ -811,8 +934,11 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
-        let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+        let points_path = writer
+            .write_points(None, &points.as_slice().into())
+            .unwrap();
+        let cells_path = writer
+            .write_connectivity(None, &cells.as_slice().into())
             .unwrap();
 
         assert_eq!(points_path, ("test.h5:mesh/points").into());
@@ -851,8 +977,11 @@ mod tests {
 
         let points = vec![0.0, 1.0, 2.0];
         let cells = vec![0_u64, 1, 2];
-        let (points_path, cells_path) = writer
-            .write_mesh(&points.as_slice().into(), &cells.as_slice().into())
+        let points_path = writer
+            .write_points(None, &points.as_slice().into())
+            .unwrap();
+        let cells_path = writer
+            .write_connectivity(None, &cells.as_slice().into())
             .unwrap();
         assert!(mesh_file.exists());
 
