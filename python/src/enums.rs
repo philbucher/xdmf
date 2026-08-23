@@ -1,6 +1,6 @@
 //! Python-facing enums mirroring the core crate's `DataStorage`, `CellType`, `DataAttribute`.
 
-use std::fmt::Display;
+use std::{fmt::Display, ops::Range};
 
 use numpy::PyReadonlyArrayDyn;
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -220,11 +220,21 @@ pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::C
         .collect()
 }
 
-/// The cell indices of one submesh: a Python sequence of `int`, or a numpy integer array of any
-/// dtype -- the same acceptance rule as `extract_cell_types` and for the same reason (`int32` is
-/// what `NumPy` 1.x defaults to on Windows and what mesh generators commonly hand back).
-pub(crate) fn extract_submesh_cells(obj: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+/// The cells of one submesh: a `range`, a Python sequence of `int`, or a numpy integer array of
+/// any dtype -- the same acceptance rule as `extract_cell_types` and for the same reason (`int32`
+/// is what `NumPy` 1.x defaults to on Windows and what mesh generators commonly hand back).
+///
+/// A `range` becomes the contiguous form of [`xdmf::SubmeshCells`] without its indices ever being
+/// materialised, which is the whole point of it: a submesh covering a block of a 100M-cell mesh
+/// costs two numbers here rather than the ~800 MB list of every index in it.
+pub(crate) fn extract_submesh_cells(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<xdmf::SubmeshCells<'static>> {
     const ROLE: &str = "submesh cell index";
+
+    if let Some(range) = extract_cell_range(obj, ROLE)? {
+        return Ok(xdmf::SubmeshCells::Range(range));
+    }
 
     // The typed array path goes first: a numpy array satisfies `PySequence_Check`, so extracting
     // it as a `Vec<i64>` also succeeds -- and would convert the whole index list one Python object
@@ -236,19 +246,55 @@ pub(crate) fn extract_submesh_cells(obj: &Bound<'_, PyAny>) -> PyResult<Vec<usiz
         non_negative_codes(list, ROLE)?
     } else {
         return Err(PyValueError::new_err(format!(
-            "submesh cells must be a sequence of int, or a numpy array of dtype \
+            "submesh cells must be a range, a sequence of int, or a numpy array of dtype \
              {INTEGER_ARRAY_DTYPES}"
         )));
     };
 
-    codes
+    let indices = codes
         .into_iter()
         .map(|code| {
             usize::try_from(code).map_err(|_too_large| {
                 PyValueError::new_err(format!("{ROLE} {code} does not fit usize"))
             })
         })
-        .collect()
+        .collect::<PyResult<Vec<usize>>>()?;
+
+    Ok(xdmf::SubmeshCells::from(indices))
+}
+
+/// A `range(start, stop)` of step 1, as the half-open range the core crate takes.
+///
+/// `None` for anything else: a non-`range` object, or a `range` with any other step -- which is
+/// not a block of consecutive cells, so it reads as the plain index sequence it also is, through
+/// the path above. An empty range (`range(5, 3)`) is passed on as such, so that it is rejected as
+/// an empty submesh exactly as an empty list is.
+fn extract_cell_range(obj: &Bound<'_, PyAny>, role: &str) -> PyResult<Option<Range<usize>>> {
+    let range_type = obj.py().import("builtins")?.getattr("range")?;
+
+    if !obj.is_instance(&range_type)? {
+        return Ok(None);
+    }
+
+    if obj.getattr("step")?.extract::<i64>()? != 1 {
+        return Ok(None);
+    }
+
+    let start = obj.getattr("start")?.extract::<i64>()?;
+    let stop = obj.getattr("stop")?.extract::<i64>()?;
+
+    if start < 0 {
+        return Err(PyValueError::new_err(format!("{role} {start} is negative")));
+    }
+
+    let to_usize = |value: i64| {
+        usize::try_from(value).map_err(|_too_large| {
+            PyValueError::new_err(format!("{role} {value} does not fit usize"))
+        })
+    };
+
+    // a stop below the start is an empty range whatever it is, so it needs no check of its own
+    Ok(Some(to_usize(start)?..to_usize(stop.max(start))?))
 }
 
 /// Type of the data (scalar, vector, tensor, etc.). `matrix`/`generic` carry a size, so this is a

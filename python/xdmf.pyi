@@ -1,5 +1,8 @@
 """Type stubs for the `xdmf` extension module (pyo3/maturin), hand-written since the API surface
 is small. Keep in sync with `src/{enums,writer}.rs`.
+
+These bindings expose the crate's writing interface only; its `TimeSeriesReader` is deliberately
+not bound, so reading an XDMF file back is Rust-only for now.
 """
 
 from collections.abc import Sequence
@@ -14,7 +17,9 @@ IndexArray = (
 )
 ValueArray = PointArray | IndexArray
 NamedData = Sequence[tuple[str, "DataAttribute", ValueArray]]
-SubmeshCells = Sequence[int] | npt.NDArray[np.integer]
+# a `range` of step 1 is passed straight through as the block it names, without its indices being
+# built; any other range reads as the plain sequence of ints it also is
+SubmeshCells = range | Sequence[int] | npt.NDArray[np.integer]
 NamedSubmesh = Sequence[tuple[str, SubmeshCells]]
 
 def is_hdf5_enabled() -> bool:
@@ -139,14 +144,16 @@ class TimeSeriesWriter:
     ) -> TimeSeriesDataWriter:
         """Write the mesh split into named submeshes, returning the writer for the time step data.
 
-        `submeshes` is a sequence of `(name, cells)` pairs, `cells` being a numpy integer array or a
-        sequence of `int` naming which cells (indices into `cell_types`) belong to that submesh. Each
-        submesh becomes its own selectable block in ParaView's Multi-block Inspector
-        (`View -> Multi-block Inspector`); every cell must belong to at least one submesh, but
-        submeshes may overlap. Each submesh is written with the points its own cells use, so a
-        viewer holds the mesh about once however many submeshes it is split into. Point and cell
-        data are still written over the whole mesh in `TimeSeriesDataWriter.write_time_step`,
-        exactly as for `write_mesh`.
+        `submeshes` is a sequence of `(name, cells)` pairs, `cells` being a `range`, a numpy integer
+        array or a sequence of `int` naming which cells (indices into `cell_types`) belong to that
+        submesh. A submesh that is one block of consecutive cells is best given as
+        `range(start, stop)`, which is taken as the two numbers it is stored as without its indices
+        being built at all. Each submesh becomes its own selectable block in ParaView's Multi-block
+        Inspector (`View -> Multi-block Inspector`); every cell must belong to at least one
+        submesh, but submeshes may overlap. Each submesh is written with the points its own cells
+        use, so a viewer holds the mesh about once however many submeshes it is split into. Point
+        and cell data are still written over the whole mesh in
+        `TimeSeriesDataWriter.write_time_step`, exactly as for `write_mesh`.
 
         Raises `ValueError` for a bad submesh (empty, a duplicate or out-of-range cell index, a name
         used twice, or a cell in no submesh at all).

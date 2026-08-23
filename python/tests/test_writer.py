@@ -436,6 +436,69 @@ def test_submesh_cells_as_a_plain_list(tmp_path):
     assert '<Grid Name="all" GridType="Uniform">' in file_path.with_suffix(".xdmf2").read_text()
 
 
+def test_submesh_cells_as_a_range(tmp_path):
+    # a range of consecutive cells is taken as the block it names, without its indices ever being
+    # built -- the file records it as the "<start>:<len>" pair such a submesh is stored as
+    file_path = tmp_path / "submesh_range"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Ascii)
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS,
+        SQUARE_CONNECTIVITY,
+        SQUARE_CELL_TYPES,
+        [("lower", range(1)), ("upper", range(1, 2))],
+    )
+
+    xml = file_path.with_suffix(".xdmf2").read_text()
+    assert '<Grid Name="lower" GridType="Uniform">' in xml
+    assert '<Grid Name="upper" GridType="Uniform">' in xml
+    assert '<Information Name="submesh_cells" Value="0:1 1:1"/>' in xml
+
+
+def test_submesh_cells_as_a_strided_range(tmp_path):
+    # a range that is not a block of consecutive cells is read as the plain sequence it also is,
+    # so it lands in the scattered form, with an index array per submesh
+    file_path = tmp_path / "submesh_strided_range"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Ascii)
+    writer.write_mesh_with_submeshes(
+        SQUARE_COORDS,
+        np.array([0, 1, 2, 3], dtype=np.uint32),
+        [xdmf.CellType.Vertex] * 4,
+        [("even", range(0, 4, 2)), ("odd", range(1, 4, 2))],
+    )
+
+    xml = file_path.with_suffix(".xdmf2").read_text()
+    assert (
+        '<Information Name="submesh_cells" Value="submesh_cells_0 submesh_cells_1"/>' in xml
+    )
+
+
+def test_empty_range_submesh_is_rejected(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "empty_range"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("empty", range(1, 1))]
+        )
+    assert "must contain at least one cell" in str(exc_info.value)
+
+
+def test_out_of_range_submesh_range_is_rejected(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "oob_range"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("part", range(0, 3))]
+        )
+    assert "references cell 2" in str(exc_info.value)
+
+
+def test_negative_range_start_is_rejected(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "negative_range"), xdmf.DataStorage.Ascii)
+    with pytest.raises(ValueError) as exc_info:
+        writer.write_mesh_with_submeshes(
+            SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES, [("part", range(-1, 2))]
+        )
+    assert "is negative" in str(exc_info.value)
+
+
 def test_overlapping_submeshes_are_allowed(tmp_path):
     file_path = tmp_path / "overlap"
     writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Ascii)

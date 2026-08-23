@@ -77,6 +77,18 @@ impl Values<'_> {
         }
     }
 
+    /// The Rust type name of the values held, for the reader's type-mismatch messages.
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            Self::F64(_) => "f64",
+            Self::F32(_) => "f32",
+            Self::I64(_) => "i64",
+            Self::I32(_) => "i32",
+            Self::U64(_) => "u64",
+            Self::U32(_) => "u32",
+        }
+    }
+
     // Only the number of values matters here, never their type, so the length is taken once and
     // the match is on the attribute alone -- matching on both would be one arm per (attribute,
     // variant) pair for the same `Dimensions`.
@@ -219,22 +231,52 @@ pub(crate) mod sealed {
     use std::borrow::Cow;
 
     use super::Values;
+    use crate::{Error, Result};
 
     /// Conversion backing [`Coordinate`](super::Coordinate), not nameable outside the crate
-    pub trait SealedCoordinate: Sized {
+    pub trait SealedCoordinate: Copy + Sized {
         /// Borrow a slice of coordinates as [`Values`]
         fn as_values(points: &[Self]) -> Values<'_>;
+
+        /// Take a read coordinate array as this type, widening `f32` to `f64` but rejecting the
+        /// narrowing direction rather than silently losing precision -- the same rule
+        /// [`ValueType`](crate::ValueType) states for field data.
+        fn from_values(values: Values<'_>) -> Result<Vec<Self>>;
+    }
+
+    fn not_floating_point(requested: &str, found: &Values<'_>) -> Error {
+        Error::NumberTypeMismatch {
+            reason: format!(
+                "requested coordinates as {requested}, but the file holds {}",
+                found.type_name()
+            ),
+        }
     }
 
     impl SealedCoordinate for f64 {
         fn as_values(points: &[Self]) -> Values<'_> {
             Values::F64(Cow::Borrowed(points))
         }
+
+        fn from_values(values: Values<'_>) -> Result<Vec<Self>> {
+            match values {
+                Values::F64(v) => Ok(v.into_owned()),
+                Values::F32(v) => Ok(v.iter().map(|&value| Self::from(value)).collect()),
+                other => Err(not_floating_point("f64", &other)),
+            }
+        }
     }
 
     impl SealedCoordinate for f32 {
         fn as_values(points: &[Self]) -> Values<'_> {
             Values::F32(Cow::Borrowed(points))
+        }
+
+        fn from_values(values: Values<'_>) -> Result<Vec<Self>> {
+            match values {
+                Values::F32(v) => Ok(v.into_owned()),
+                other => Err(not_floating_point("f32", &other)),
+            }
         }
     }
 
@@ -297,6 +339,9 @@ pub(crate) mod sealed {
 }
 
 /// A type usable as a point coordinate: `f32` or `f64`
+///
+/// Also what [`TimeSeriesReader::read_points`](crate::TimeSeriesReader::read_points) fills a
+/// buffer of, so a mesh written as `f32` can be read back at that width.
 pub trait Coordinate: sealed::SealedCoordinate {}
 
 impl Coordinate for f64 {}
@@ -307,7 +352,10 @@ impl Coordinate for f32 {}
 ///
 /// The connectivity is written as the type it is passed in, so this choice is what sets the
 /// largest mesh that can be written -- see
-/// [`TimeSeriesWriter::write_mesh`](crate::TimeSeriesWriter::write_mesh).
+/// [`TimeSeriesWriter::write_mesh`](crate::TimeSeriesWriter::write_mesh). It is equally what
+/// [`TimeSeriesReader::read_topology`](crate::TimeSeriesReader::read_topology) fills a buffer of,
+/// and there it caps what can be read back: an index the type cannot hold is
+/// [`Error::IntegerOutOfRange`](crate::Error::IntegerOutOfRange).
 pub trait ConnectivityIndex: sealed::SealedIndex {}
 
 impl ConnectivityIndex for u32 {}

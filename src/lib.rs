@@ -26,7 +26,7 @@ pub mod xdmf_elements;
 // Re-export types used in the public API
 pub use error::{Error, Result};
 pub use reader::{DataInfo, TimeSeriesReader, ValueType};
-pub use time_series_writer::{TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
+pub use time_series_writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use values::{ConnectivityIndex, Coordinate, Values};
 pub use xdmf_elements::CellType;
 
@@ -375,6 +375,11 @@ pub(crate) const SUBMESH_CELLS: &str = "submesh_cells";
 /// [`DataWriter::write_selection`]. Numbered like a submesh's own arrays, but by the order they
 /// were needed rather than by submesh -- one submesh needs one per shape of field it carries.
 pub(crate) const SELECTIONS: &str = "selections";
+
+/// Name of the `Information` element recording which [`DataStorage`] wrote the document. The
+/// reader takes it to reject a file it cannot read when the file is opened, rather than at the
+/// first read call that reaches heavy data.
+pub(crate) const DATA_STORAGE: &str = "data_storage";
 
 /// Name of the file one of a mesh's arrays goes into, for the backends that write one file per
 /// array: `<array>.<extension>` for the mesh's own, `<array>_<index>.<extension>` for the one

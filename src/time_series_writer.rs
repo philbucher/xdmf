@@ -6,15 +6,17 @@
 //! The concept is inspired by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fmt,
     io::{BufWriter, Write},
+    ops::Range,
     path::{Path, PathBuf},
 };
 
 use crate::{
-    CellType, ConnectivityIndex, Coordinate, DataAttribute, DataStorage, DataWriter, Error, Result,
-    SELECTIONS, SUBMESH_CELLS, SUBMESH_POINTS, Values, create_writer,
+    CellType, ConnectivityIndex, Coordinate, DATA_STORAGE, DataAttribute, DataStorage, DataWriter,
+    Error, Result, SELECTIONS, SUBMESH_CELLS, SUBMESH_POINTS, Values, create_writer,
     error::io_ctx,
     mpi_safe_create_dir_all, paraview,
     values::GatherBuffers,
@@ -204,12 +206,36 @@ impl TimeSeriesWriter {
     /// # std::fs::remove_file("xdmf_write_submeshes.xdmf2").expect("the example writes this file");
     /// ```
     ///
+    /// A submesh that is one block of consecutive cells can be given as a [`Range`] rather than as
+    /// an index list -- see [`SubmeshCells`], which is what the second half of each pair converts
+    /// into:
+    ///
+    /// ```rust
+    /// # use xdmf::TimeSeriesWriter;
+    /// # let xdmf_writer = TimeSeriesWriter::new("xdmf_write_submesh_ranges", xdmf::DataStorage::AsciiInline)
+    /// #     .expect("failed to create XDMF writer");
+    /// # let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+    /// # let connectivity = [0_u32, 1, 0, 2, 1, 1, 2, 3];
+    /// # let cell_types = [
+    /// #     xdmf::CellType::Edge,
+    /// #     xdmf::CellType::Triangle,
+    /// #     xdmf::CellType::Triangle,
+    /// # ];
+    /// let mut ts_writer = xdmf_writer
+    ///     .write_mesh_with_submeshes(&coords, &connectivity, &cell_types, [
+    ///         ("edge", 0..1),
+    ///         ("surface", 1..3),
+    ///     ])
+    ///     .expect("failed to write mesh");
+    /// # std::fs::remove_file("xdmf_write_submesh_ranges.xdmf2").expect("the example writes this file");
+    /// ```
+    ///
     /// The submeshes are taken as an iterator so that a caller who has them in any shape can pass
     /// it without first building a slice of them. They are not consumed lazily, though: the whole
     /// list is read and validated before anything is written, and a submesh whose cells -- or
     /// whose points -- are not one ascending run keeps that index list for the writer's lifetime,
     /// since every time step needs it to cut up that submesh's share of the data.
-    pub fn write_mesh_with_submeshes<C, I, N, B>(
+    pub fn write_mesh_with_submeshes<'c, C, I, N, B>(
         mut self,
         points: &[C],
         connectivity: &[I],
@@ -220,7 +246,7 @@ impl TimeSeriesWriter {
         C: Coordinate,
         I: ConnectivityIndex,
         N: AsRef<str>,
-        B: AsRef<[usize]>,
+        B: Into<SubmeshCells<'c>>,
     {
         validate_points_and_cells(points.len(), connectivity, cell_types)?;
 
@@ -479,6 +505,11 @@ impl TimeSeriesWriter {
     /// Only the cell list needs one. Where a submesh selects its points out of the mesh's
     /// coordinates, its `<Geometry>` already says which points it holds, in those same two forms,
     /// and the file would be stating it twice.
+    ///
+    /// The point *arrays* are still written for such a storage, though, and only because
+    /// [`selected_coordinates`] has already emitted a reference to `submesh_points_<k>` for every
+    /// scattered submesh -- dropping them here would leave those references dangling. The two
+    /// agree by name alone; keep them in step.
     fn write_submesh_index_lists(
         &mut self,
         submeshes: &[Submesh],
@@ -623,7 +654,7 @@ fn append_to_collection(collection: &mut Grid, grids: Vec<Grid>) {
 fn new_document(grid: Grid, data_items: Vec<DataItem>, data_storage: DataStorage) -> Xdmf {
     let mut xdmf = Xdmf {
         information: vec![
-            Information::new("data_storage", format!("{data_storage:?}")),
+            Information::new(DATA_STORAGE, format!("{data_storage:?}")),
             Information::new("version", env!("CARGO_PKG_VERSION")),
         ],
         ..Default::default()
@@ -693,6 +724,13 @@ struct PreparedMesh<I> {
 /// submesh whose points are one run, the start and count that say the same thing in three
 /// numbers. That list is `submesh_points`, which the mesh already carries for a reader; nothing is
 /// written here that was not written anyway.
+///
+/// The link to it is by name alone: a scattered submesh's selector is a reference to
+/// `submesh_points_<k>`, and the `DataItem` of that name is written afterwards, by
+/// [`TimeSeriesWriter::write_submesh_index_lists`] -- which writes the point lists for a
+/// selecting storage *because* of this reference and nothing else. Neither end can be changed
+/// without the other, so change both together or the geometry references an item that is not
+/// there.
 ///
 /// Named and `Domain`-level for the same reason the connectivity is: the grid carrying them is
 /// cloned once per time step, and a reference is short where a selection is not.
@@ -844,8 +882,89 @@ impl IndexList {
     }
 }
 
+/// The cells of one submesh, as [`TimeSeriesWriter::write_mesh_with_submeshes`] takes them.
+///
+/// Built with `.into()` from the shapes a caller usually holds an index list in -- a slice, a
+/// `Vec`, an array -- and from a [`Range`], so a submesh that is one block of consecutive cells
+/// can be given as `start..end`. Element blocks, material zones and boundary patches normally come
+/// out of a mesh generator grouped like that, and the writer stores such a submesh as those two
+/// numbers either way; passing the range keeps a caller splitting a 100M-cell mesh into blocks
+/// from first materialising ~800 MB of index lists for it to fold back up.
+#[derive(Clone, Debug)]
+pub enum SubmeshCells<'a> {
+    /// A block of consecutive cells, `start..end`.
+    Range(Range<usize>),
+    /// One index per cell, in the order the submesh holds them -- borrowed from the caller, or
+    /// owned when the caller hands over its own `Vec`.
+    Indices(Cow<'a, [usize]>),
+}
+
+impl SubmeshCells<'_> {
+    /// The cheapest internal form that holds these cells, taking the caller's own allocation
+    /// where it is already the right shape.
+    fn into_index_list(self) -> IndexList {
+        match self {
+            Self::Range(range) => IndexList::Contiguous {
+                start: range.start,
+                len: range.end.saturating_sub(range.start),
+            },
+            Self::Indices(Cow::Borrowed(indices)) => collapse_indices(indices),
+            Self::Indices(Cow::Owned(indices)) => {
+                if is_contiguous(&indices) {
+                    return IndexList::Contiguous {
+                        start: indices.first().copied().unwrap_or(0),
+                        len: indices.len(),
+                    };
+                }
+
+                IndexList::Scattered(indices)
+            }
+        }
+    }
+}
+
+impl From<Range<usize>> for SubmeshCells<'_> {
+    fn from(range: Range<usize>) -> Self {
+        Self::Range(range)
+    }
+}
+
+impl<'a> From<&'a [usize]> for SubmeshCells<'a> {
+    fn from(indices: &'a [usize]) -> Self {
+        Self::Indices(Cow::Borrowed(indices))
+    }
+}
+
+// The `&Vec<usize>` and `&[usize; N]` impls are not redundant with the `&[usize]` one, for the
+// same reason `Values`' are not: an `impl Into<...>` argument is resolved by trait matching, which
+// does not deref-coerce.
+impl<'a> From<&'a Vec<usize>> for SubmeshCells<'a> {
+    fn from(indices: &'a Vec<usize>) -> Self {
+        Self::Indices(Cow::Borrowed(indices))
+    }
+}
+
+impl<'a, const N: usize> From<&'a [usize; N]> for SubmeshCells<'a> {
+    fn from(indices: &'a [usize; N]) -> Self {
+        Self::Indices(Cow::Borrowed(indices))
+    }
+}
+
+/// Moves the caller's own index list in, so a scattered submesh needs no copy of it.
+impl From<Vec<usize>> for SubmeshCells<'_> {
+    fn from(indices: Vec<usize>) -> Self {
+        Self::Indices(Cow::Owned(indices))
+    }
+}
+
+impl<const N: usize> From<[usize; N]> for SubmeshCells<'_> {
+    fn from(indices: [usize; N]) -> Self {
+        Self::Indices(Cow::Owned(indices.to_vec()))
+    }
+}
+
 /// Validate the submeshes and collapse each one's index list to the cheapest form that holds it.
-fn prepare_submeshes<N: AsRef<str>, B: AsRef<[usize]>>(
+fn prepare_submeshes<'c, N: AsRef<str>, B: Into<SubmeshCells<'c>>>(
     submeshes: impl IntoIterator<Item = (N, B)>,
     num_cells: usize,
 ) -> Result<Vec<PreparedSubmesh>> {
@@ -861,7 +980,7 @@ fn prepare_submeshes<N: AsRef<str>, B: AsRef<[usize]>>(
 
     for (name, cells) in submeshes {
         let name = name.as_ref();
-        let cells = cells.as_ref();
+        let cells = cells.into().into_index_list();
 
         if !is_valid_data_name(name) {
             return Err(Error::InvalidMesh {
@@ -880,39 +999,67 @@ fn prepare_submeshes<N: AsRef<str>, B: AsRef<[usize]>>(
             });
         }
 
-        if cells.is_empty() {
+        if cells.len() == 0 {
             return Err(Error::InvalidMesh {
                 reason: format!("submesh '{name}' is empty, it must contain at least one cell"),
             });
         }
 
-        for &index in cells {
-            if index >= num_cells {
-                return Err(Error::InvalidMesh {
-                    reason: format!(
-                        "submesh '{name}' references cell {index}, but the mesh only has \
-                         {num_cells} cells"
-                    ),
-                });
+        match &cells {
+            // A run needs neither the duplicate check (it has none by construction) nor a walk
+            // over its own indices to bound it -- which is what lets a caller hand over a block of
+            // a huge mesh as a range without ever materialising one index per cell.
+            IndexList::Contiguous { start, len } => {
+                let end = start.checked_add(*len).ok_or(Error::Internal(
+                    "a submesh's cell range does not fit a usize",
+                ))?;
+
+                if end > num_cells {
+                    return Err(Error::InvalidMesh {
+                        reason: format!(
+                            "submesh '{name}' references cell {}, but the mesh only has \
+                             {num_cells} cells",
+                            end - 1
+                        ),
+                    });
+                }
+
+                for index in *start..end {
+                    covered.insert(index);
+                }
             }
+            IndexList::Scattered(indices) => {
+                for &index in indices {
+                    if index >= num_cells {
+                        return Err(Error::InvalidMesh {
+                            reason: format!(
+                                "submesh '{name}' references cell {index}, but the mesh only has \
+                                 {num_cells} cells"
+                            ),
+                        });
+                    }
 
-            if claimed_here.contains(index) {
-                return Err(Error::InvalidMesh {
-                    reason: format!("submesh '{name}' contains cell {index} more than once"),
-                });
+                    if claimed_here.contains(index) {
+                        return Err(Error::InvalidMesh {
+                            reason: format!(
+                                "submesh '{name}' contains cell {index} more than once"
+                            ),
+                        });
+                    }
+
+                    claimed_here.insert(index);
+                    covered.insert(index);
+                }
+
+                for &index in indices {
+                    claimed_here.remove(index);
+                }
             }
-
-            claimed_here.insert(index);
-            covered.insert(index);
-        }
-
-        for &index in cells {
-            claimed_here.remove(index);
         }
 
         prepared.push(PreparedSubmesh {
             name: name.to_string(),
-            cells: collapse_indices(cells),
+            cells,
         });
     }
 
@@ -967,17 +1114,22 @@ impl CellBitSet {
     }
 }
 
-/// Recognize an ascending run of consecutive indices, which needs no per-index storage.
-fn collapse_indices(cells: &[usize]) -> IndexList {
-    let start = cells[0]; // never empty, the caller rejects that first
+/// Whether an index list is one ascending run of consecutive indices, which needs no per-index
+/// storage. An empty list counts, and [`prepare_submeshes`] rejects it right after.
+fn is_contiguous(cells: &[usize]) -> bool {
+    cells.first().is_none_or(|&start| {
+        cells
+            .iter()
+            .enumerate()
+            .all(|(offset, &index)| index == start + offset)
+    })
+}
 
-    if cells
-        .iter()
-        .enumerate()
-        .all(|(offset, &index)| index == start + offset)
-    {
+/// Recognize such a run, borrowing the indices only if it is not one.
+fn collapse_indices(cells: &[usize]) -> IndexList {
+    if is_contiguous(cells) {
         IndexList::Contiguous {
-            start,
+            start: cells.first().copied().unwrap_or(0),
             len: cells.len(),
         }
     } else {
@@ -2790,6 +2942,50 @@ mod tests {
         // descending, so it is a permutation of a run rather than one: the order the caller gave
         // is the order the submesh's cells (and its share of every cell field) are written in
         let prepared = prepare_submeshes(submeshes(&[("all", &[2, 0, 1])]), 3).unwrap();
+
+        std::assert_matches!(
+            &prepared[0].cells,
+            IndexList::Scattered(indices) if indices == &[2, 0, 1]
+        );
+    }
+
+    #[test]
+    fn prepare_submeshes_takes_a_range_without_materialising_its_indices() {
+        let prepared = prepare_submeshes([("lower", 0..2), ("upper", 2..3)], 3).unwrap();
+
+        std::assert_matches!(
+            prepared[0].cells,
+            IndexList::Contiguous { start: 0, len: 2 }
+        );
+        std::assert_matches!(
+            prepared[1].cells,
+            IndexList::Contiguous { start: 2, len: 1 }
+        );
+    }
+
+    #[test]
+    fn prepare_submeshes_rejects_a_range_past_the_end_of_the_mesh() {
+        let res = prepare_submeshes([("all", 0..4)], 3);
+
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason } if reason.contains("references cell 3")
+        );
+    }
+
+    #[test]
+    fn prepare_submeshes_rejects_an_empty_range() {
+        let res = prepare_submeshes([("all", 0..3), ("none", 1..1)], 3);
+
+        std::assert_matches!(
+            res.unwrap_err(),
+            Error::InvalidMesh { reason } if reason.contains("submesh 'none' is empty")
+        );
+    }
+
+    #[test]
+    fn prepare_submeshes_moves_an_owned_scattered_list_in() {
+        let prepared = prepare_submeshes([("all", vec![2, 0, 1])], 3).unwrap();
 
         std::assert_matches!(
             &prepared[0].cells,

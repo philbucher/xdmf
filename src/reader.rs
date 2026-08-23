@@ -1,6 +1,7 @@
 //! Reading XDMF time series written with the `Hdf5SingleFile`/`Hdf5MultipleFiles` storages, i.e.
-//! every `DataItem` with `Format="HDF"`. `Format="XML"`/`"Binary"` are not supported yet and
-//! reading one is [`Error::Unsupported`].
+//! every `DataItem` with `Format="HDF"`. `Format="XML"`/`"Binary"` are not supported yet: a
+//! document that says which storage wrote it is rejected as [`Error::Unsupported`] when it is
+//! opened, and a foreign one whose `DataItem`s turn out to hold either as it is read.
 //!
 //! [`TimeSeriesReader::new`] parses the whole document up front -- mesh/time-step metadata and,
 //! for a mesh with submeshes, which points and cells each one holds -- so every read call after it
@@ -23,13 +24,14 @@ mod light_data;
 mod selection;
 mod topology;
 
-use std::path::Path;
+use std::{path::Path, str::FromStr};
 
 use light_data::{Analysis, Document};
 use selection::Membership;
 
 use crate::{
-    CellType, DataAttribute, DataStorage, Error, Result, SUBMESH_CELLS, Values,
+    CellType, ConnectivityIndex, Coordinate, DATA_STORAGE, DataAttribute, DataStorage, Error,
+    Result, SUBMESH_CELLS, Values,
     xdmf_elements::{
         Domain,
         attribute::{self, AttributeType},
@@ -73,7 +75,7 @@ impl ValueType for u64 {}
 impl ValueType for u32 {}
 
 pub(crate) mod sealed {
-    use super::{Error, Result, Values, value_type_name};
+    use super::{Error, Result, Values};
 
     pub trait SealedValueType: Sized {
         fn from_values(values: Values<'static>) -> Result<Vec<Self>>;
@@ -83,7 +85,7 @@ pub(crate) mod sealed {
         Error::NumberTypeMismatch {
             reason: format!(
                 "requested {requested}, but the file holds {}",
-                value_type_name(found)
+                found.type_name()
             ),
         }
     }
@@ -146,21 +148,54 @@ pub(crate) mod sealed {
     }
 }
 
-fn value_type_name(values: &Values<'_>) -> &'static str {
-    match values {
-        Values::F64(_) => "f64",
-        Values::F32(_) => "f32",
-        Values::I64(_) => "i64",
-        Values::I32(_) => "i32",
-        Values::U64(_) => "u64",
-        Values::U32(_) => "u32",
-    }
-}
-
 /// Reads an XDMF time series: the parsed light data, the mesh's metadata (including, for a mesh
 /// with submeshes, which points and cells each one holds), and every read call against it.
+///
+/// ```rust,no_run
+/// use xdmf::TimeSeriesReader;
+///
+/// // open a file written with one of the two HDF5 storages
+/// let reader = TimeSeriesReader::new("xdmf_writing.xdmf2").expect("failed to open XDMF file");
+///
+/// // points and topology (connectivity + cell types) are independent reads, each filling a
+/// // buffer of whichever element type the caller wants it at
+/// let mut points: Vec<f64> = Vec::new();
+/// reader
+///     .read_points(&mut points)
+///     .expect("failed to read points");
+///
+/// let mut connectivity: Vec<u64> = Vec::new();
+/// let mut cell_types = Vec::new();
+/// reader
+///     .read_topology(&mut connectivity, &mut cell_types)
+///     .expect("failed to read topology");
+///
+/// // if the mesh was written with submeshes, each one's own cells (and points) can be recovered,
+/// // as indices into the buffers above -- empty for a mesh with no submeshes
+/// for (index, name) in reader.submesh_names().iter().enumerate() {
+///     let cells = reader
+///         .submesh_cells(index)
+///         .expect("failed to read submesh cells");
+///     println!("{name}: {} cells", cells.len());
+/// }
+///
+/// // then read each step's data, reusing the same buffers
+/// let mut point_data = Vec::new();
+/// let mut cell_data = Vec::new();
+/// for step in 0..reader.num_steps() {
+///     reader
+///         .read_point_data::<f64>(step, "point_data", &mut point_data)
+///         .expect("failed to read point data");
+///     reader
+///         .read_cell_data::<f64>(step, "cell_data", &mut cell_data)
+///         .expect("failed to read cell data");
+/// }
+/// ```
 pub struct TimeSeriesReader {
     document: Document,
+    /// How the document's grids break down, as positions rather than references, so that it can
+    /// be built once here rather than rebuilt by every read call.
+    analysis: Analysis,
     num_points: usize,
     num_cells: usize,
     times: Vec<String>,
@@ -185,40 +220,48 @@ impl TimeSeriesReader {
     /// Parse the light data (XML) of an XDMF file and report the mesh's metadata, without
     /// touching any heavy data -- except for a mesh with submeshes, where each submesh's point
     /// and cell membership is being parsed eagerly
+    ///
+    /// A document written with a storage this reader cannot read is rejected here, rather than at
+    /// the first call that reaches heavy data.
     pub fn new(file_name: impl AsRef<Path>) -> Result<Self> {
         let document = Document::open(file_name.as_ref())?;
+        check_readable(&document)?;
+
         let domain = document.domain()?;
         let analysis = Analysis::build(domain)?;
 
-        let submesh_names = analysis.submesh_names.clone();
-        let times = analysis.times()?;
+        let submesh_names = analysis.submesh_names().to_vec();
+        let times = analysis.times(domain)?;
 
-        let (num_points, num_cells, points_membership, cells_membership) =
-            if submesh_names.is_empty() {
-                let (num_points, num_cells) = mesh_size_plain(analysis.submeshes[0][0], domain)?;
-                (num_points, num_cells, Vec::new(), Vec::new())
-            } else {
-                let num_points = mesh_num_points_with_submeshes(analysis.submeshes[0][0], domain)?;
-                let points_membership =
-                    submesh_points_membership(&analysis, domain, &document.base_dir)?;
-                let cells_membership = parse_submesh_cells(&document, domain)?;
+        let (num_points, num_cells, points_membership, cells_membership) = if submesh_names
+            .is_empty()
+        {
+            let (num_points, num_cells) = mesh_size_plain(analysis.mesh_grid(0, domain)?, domain)?;
+            (num_points, num_cells, Vec::new(), Vec::new())
+        } else {
+            let num_points =
+                mesh_num_points_with_submeshes(analysis.mesh_grid(0, domain)?, domain)?;
+            let points_membership =
+                submesh_points_membership(&analysis, domain, &document.base_dir)?;
+            let cells_membership = parse_submesh_cells(&document, domain)?;
 
-                if cells_membership.len() != submesh_names.len() {
-                    return Err(Error::InvalidDocument {
-                        reason: format!(
-                            "'{SUBMESH_CELLS}' lists {} submeshes, but the document has {}",
-                            cells_membership.len(),
-                            submesh_names.len()
-                        ),
-                    });
-                }
+            if cells_membership.len() != submesh_names.len() {
+                return Err(Error::InvalidDocument {
+                    reason: format!(
+                        "'{SUBMESH_CELLS}' lists {} submeshes, but the document has {}",
+                        cells_membership.len(),
+                        submesh_names.len()
+                    ),
+                });
+            }
 
-                let num_cells = mesh_num_cells_from_membership(&cells_membership);
-                (num_points, num_cells, points_membership, cells_membership)
-            };
+            let num_cells = mesh_num_cells_from_membership(&cells_membership);
+            (num_points, num_cells, points_membership, cells_membership)
+        };
 
         Ok(Self {
             document,
+            analysis,
             num_points,
             num_cells,
             times,
@@ -287,13 +330,17 @@ impl TimeSeriesReader {
         }
     }
 
-    /// Read the mesh's points. The buffer is cleared first, so its existing capacity is reused.
-    pub fn read_points(&self, points: &mut Vec<f64>) -> Result<()> {
+    /// Read the mesh's points into a buffer of `f32` or `f64` (see [`Coordinate`]). The buffer is
+    /// cleared first, so its existing capacity is reused.
+    ///
+    /// Reading `f32` coordinates into a `Vec<f64>` is allowed; the narrowing direction is
+    /// [`Error::NumberTypeMismatch`] rather than a silent loss of precision, the same rule
+    /// [`ValueType`] states for field data.
+    pub fn read_points<C: Coordinate>(&self, points: &mut Vec<C>) -> Result<()> {
         points.clear();
 
         let domain = self.document.domain()?;
-        let analysis = Analysis::build(domain)?;
-        let first_grid = analysis.submeshes[0][0];
+        let first_grid = self.analysis.mesh_grid(0, domain)?;
 
         if self.submesh_names.is_empty() {
             read_points_plain(&self.document, domain, first_grid, points)
@@ -302,37 +349,47 @@ impl TimeSeriesReader {
         }
     }
 
-    /// Read the mesh's connectivity and cell types. The buffers are cleared first, so their
+    /// Read the mesh's connectivity into a buffer of `u32`, `u64`, `i32` or `i64` (see
+    /// [`ConnectivityIndex`]), and its cell types. Both buffers are cleared first, so their
     /// existing capacity is reused.
-    pub fn read_topology(
+    ///
+    /// Unlike the widening rule the field data follows, the index type is checked against the
+    /// *values*: what comes back is a position in the mesh this reader put back together, not the
+    /// file's own array, so an index the requested type cannot hold is
+    /// [`Error::IntegerOutOfRange`] whatever the file was written as.
+    pub fn read_topology<I: ConnectivityIndex>(
         &self,
-        connectivity: &mut Vec<u64>,
+        connectivity: &mut Vec<I>,
         cell_types: &mut Vec<CellType>,
     ) -> Result<()> {
         connectivity.clear();
         cell_types.clear();
 
         let domain = self.document.domain()?;
-        let analysis = Analysis::build(domain)?;
 
-        if self.submesh_names.is_empty() {
+        let indices = if self.submesh_names.is_empty() {
             read_topology_plain(
                 &self.document,
                 domain,
-                analysis.submeshes[0][0],
-                connectivity,
+                self.analysis.mesh_grid(0, domain)?,
                 cell_types,
-            )
+            )?
         } else {
             read_topology_with_submeshes(
                 &self.document,
-                &analysis,
+                &self.analysis,
                 &self.points_membership,
                 &self.cells_membership,
-                connectivity,
                 cell_types,
-            )
+            )?
+        };
+
+        connectivity.reserve(indices.len());
+        for index in indices {
+            connectivity.push(to_connectivity_index::<I>(index)?);
         }
+
+        Ok(())
     }
 
     /// What point data is present at `step`, so a caller can size a buffer and pick a type before
@@ -489,24 +546,56 @@ impl TimeSeriesReader {
             });
         }
 
-        let domain = self.document.domain()?;
-        let analysis = Analysis::build(domain)?;
+        self.analysis
+            .step_grid(submesh, step, self.document.domain()?)
+    }
+}
 
-        let grids = analysis.submeshes.get(submesh).ok_or(Error::Internal(
-            "step_grid called with a submesh index out of range",
-        ))?;
+/// Reject a document written with a storage this reader cannot read.
+///
+/// The `data_storage` `Information` is written with the `Debug` formatting (`new_document`,
+/// `time_series_writer.rs`), so the HDF5 variants are followed by the `deflate_level` they were
+/// written with; only the variant name matters here. A document that names no storage, or names
+/// one this crate does not know, is a foreign file and is let through -- its `DataItem`s are
+/// checked for `Format="HDF"` one by one as they are read.
+fn check_readable(document: &Document) -> Result<()> {
+    let Some(name) = document
+        .information(DATA_STORAGE)
+        .and_then(|value| value.split_whitespace().next())
+    else {
+        return Ok(());
+    };
 
-        grids
-            .get(step)
-            .copied()
-            .ok_or_else(|| Error::InvalidDocument {
+    let Ok(storage) = DataStorage::from_str(name) else {
+        return Ok(());
+    };
+
+    match storage {
+        DataStorage::Hdf5SingleFile { .. } | DataStorage::Hdf5MultipleFiles { .. } => Ok(()),
+        DataStorage::Ascii | DataStorage::AsciiInline | DataStorage::Binary => {
+            Err(Error::Unsupported {
                 reason: format!(
-                    "the document has {} steps, but submesh {submesh} has only {} of them",
-                    self.times.len(),
-                    grids.len()
+                    "the document was written with the {name} storage, which this reader cannot \
+                     read -- only Hdf5SingleFile and Hdf5MultipleFiles can be"
                 ),
             })
+        }
     }
+}
+
+/// One reconstructed connectivity index as the type the caller asked for.
+fn to_connectivity_index<I: ConnectivityIndex>(index: u64) -> Result<I> {
+    usize::try_from(index)
+        .ok()
+        .and_then(I::from_index)
+        .ok_or_else(|| Error::IntegerOutOfRange {
+            value: i128::from(index),
+            reason: format!(
+                "the connectivity index does not fit the requested index type, whose largest is \
+                 {}",
+                I::MAX_INDEX
+            ),
+        })
 }
 
 fn attribute_item(attribute: &attribute::Attribute) -> Result<&DataItem> {
@@ -589,11 +678,11 @@ fn reconstruct_data_attribute(
 }
 
 /// Points for a mesh with no submeshes: a plain, non-selection `DataItem`.
-fn read_points_plain(
+fn read_points_plain<C: Coordinate>(
     document: &Document,
     domain: &Domain,
     grid: &Grid,
-    points: &mut Vec<f64>,
+    points: &mut Vec<C>,
 ) -> Result<()> {
     let geometry = grid
         .geometry
@@ -609,7 +698,7 @@ fn read_points_plain(
         })?;
 
     let values = selection::read_data_item(points_item, &document.base_dir, domain)?;
-    *points = values_to_f64(&values)?;
+    *points = C::from_values(values)?;
 
     Ok(())
 }
@@ -619,9 +708,8 @@ fn read_topology_plain(
     document: &Document,
     domain: &Domain,
     grid: &Grid,
-    connectivity: &mut Vec<u64>,
     cell_types: &mut Vec<CellType>,
-) -> Result<()> {
+) -> Result<Vec<u64>> {
     let topology = grid
         .topology
         .as_ref()
@@ -631,20 +719,19 @@ fn read_topology_plain(
     let raw = selection::read_data_item(&topology.data_item, &document.base_dir, domain)?;
     let decoded = topology::decode(topology, &raw)?;
 
-    *connectivity = decoded.connectivity;
     *cell_types = decoded.cell_types;
 
-    Ok(())
+    Ok(decoded.connectivity)
 }
 
 /// The mesh's own points, for a mesh with submeshes: read directly out of the source each
 /// submesh's `<Geometry>` selects from -- the global, per-direction coordinate arrays, written
 /// once regardless of how many submeshes there are.
-fn read_points_with_submeshes(
+fn read_points_with_submeshes<C: Coordinate>(
     document: &Document,
     domain: &Domain,
     first_grid: &Grid,
-    points: &mut Vec<f64>,
+    points: &mut Vec<C>,
 ) -> Result<()> {
     let base_dir = &document.base_dir;
 
@@ -664,12 +751,12 @@ fn read_points_with_submeshes(
         });
     }
 
-    let mut directions: Vec<Vec<f64>> = Vec::with_capacity(3);
+    let mut directions: Vec<Vec<C>> = Vec::with_capacity(3);
     for item in &geometry.data_items {
         let selection_item = light_data::resolve_reference(item, domain)?;
         let (_selector, source) = selection::selection_parts(selection_item)?;
         let values = selection::read_data_item(source, base_dir, domain)?;
-        directions.push(values_to_f64(&values)?);
+        directions.push(C::from_values(values)?);
     }
 
     let num_points_total = directions[0].len();
@@ -695,12 +782,11 @@ fn read_points_with_submeshes(
 /// each submesh's own point membership.
 fn read_topology_with_submeshes(
     document: &Document,
-    analysis: &Analysis<'_>,
+    analysis: &Analysis,
     points_membership: &[Membership],
     cells_membership: &[Membership],
-    connectivity: &mut Vec<u64>,
     cell_types: &mut Vec<CellType>,
-) -> Result<()> {
+) -> Result<Vec<u64>> {
     let domain = document.domain()?;
     let base_dir = &document.base_dir;
     let num_cells = mesh_num_cells_from_membership(cells_membership);
@@ -714,8 +800,9 @@ fn read_topology_with_submeshes(
     }
 
     let mut decoded = Vec::with_capacity(analysis.num_submeshes());
-    for submesh_grids in &analysis.submeshes {
-        decoded.push(decode_submesh_topology(submesh_grids[0], domain, base_dir)?);
+    for submesh in 0..analysis.num_submeshes() {
+        let grid = analysis.mesh_grid(submesh, domain)?;
+        decoded.push(decode_submesh_topology(grid, domain, base_dir)?);
     }
 
     let mut global_cell_types = vec![CellType::Vertex; num_cells];
@@ -751,7 +838,7 @@ fn read_topology_with_submeshes(
     }
     offsets.push(offset);
 
-    connectivity.resize(offset, 0);
+    let mut connectivity = vec![0_u64; offset];
 
     for ((submesh, cells), points) in decoded.iter().zip(cells_membership).zip(points_membership) {
         let mut local_offset = 0_usize;
@@ -780,7 +867,7 @@ fn read_topology_with_submeshes(
 
     *cell_types = global_cell_types;
 
-    Ok(())
+    Ok(connectivity)
 }
 
 /// The mesh position of a submesh's `local_cell`, rejecting a `Topology` that holds more cells
@@ -812,14 +899,14 @@ fn decode_submesh_topology(
 
 /// Which mesh points each submesh holds, read from its `<Geometry>` selector.
 fn submesh_points_membership(
-    analysis: &Analysis<'_>,
+    analysis: &Analysis,
     domain: &Domain,
     base_dir: &Path,
 ) -> Result<Vec<Membership>> {
-    analysis
-        .submeshes
-        .iter()
-        .map(|grids| submesh_geometry_membership(grids[0], domain, base_dir))
+    (0..analysis.num_submeshes())
+        .map(|submesh| {
+            submesh_geometry_membership(analysis.mesh_grid(submesh, domain)?, domain, base_dir)
+        })
         .collect()
 }
 
@@ -1075,47 +1162,4 @@ fn scatter_typed<T: Copy + Default>(
     }
 
     buffer
-}
-
-fn values_to_f64(values: &Values<'_>) -> Result<Vec<f64>> {
-    match values {
-        Values::F64(v) => Ok(v.to_vec()),
-        Values::F32(v) => Ok(v.iter().map(|&value| f64::from(value)).collect()),
-        other => Err(Error::InvalidDocument {
-            reason: format!(
-                "geometry data must be floating-point, found {}",
-                value_type_name(other)
-            ),
-        }),
-    }
-}
-
-fn parse_data_storage(value: &str) -> Option<DataStorage> {
-    match value {
-        "Ascii" => return Some(DataStorage::Ascii),
-        "AsciiInline" => return Some(DataStorage::AsciiInline),
-        "Binary" => return Some(DataStorage::Binary),
-        _ => {}
-    }
-
-    if let Some(rest) = value.strip_prefix("Hdf5SingleFile") {
-        return Some(DataStorage::Hdf5SingleFile {
-            deflate_level: parse_deflate_level(rest),
-        });
-    }
-    if let Some(rest) = value.strip_prefix("Hdf5MultipleFiles") {
-        return Some(DataStorage::Hdf5MultipleFiles {
-            deflate_level: parse_deflate_level(rest),
-        });
-    }
-
-    None
-}
-
-/// Best-effort parse of `{ deflate_level: Some(3) }`/`{ deflate_level: None }` out of the `Debug`
-/// formatting `new_document` (`time_series_writer.rs`) writes the `Information` with.
-fn parse_deflate_level(rest: &str) -> Option<u8> {
-    let after_some = rest.split("Some(").nth(1)?;
-    let digits = after_some.split(')').next()?;
-    digits.trim().parse().ok()
 }

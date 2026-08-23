@@ -26,7 +26,7 @@ const ALREADY_CLOSED: &str = "this TimeSeriesDataWriter has already been closed"
 /// One attribute of a time step: its name, what it describes, and the numpy array holding it.
 type NamedData<'py> = (String, PyDataAttribute, Bound<'py, PyAny>);
 
-/// One submesh: its name, and the numpy array or sequence of `int` naming its cells.
+/// One submesh: its name, and the `range`, numpy array or sequence of `int` naming its cells.
 type NamedSubmesh<'py> = (String, Bound<'py, PyAny>);
 
 /// Borrows a numpy array as the concrete slice type its dtype names, and evaluates `$body` with it.
@@ -115,8 +115,10 @@ impl PyTimeSeriesWriter {
     /// [`write_mesh`](Self::write_mesh) does.
     ///
     /// `submeshes` is a sequence of `(name, cells)` pairs, `cells` naming which cells (indices into
-    /// `cell_types`) belong to that submesh, as a numpy integer array or a sequence of `int`. Every
-    /// cell must be in at least one submesh; submeshes may overlap.
+    /// `cell_types`) belong to that submesh, as a `range`, a numpy integer array or a sequence of
+    /// `int`. A `range(start, stop)` is taken as the block of cells it names without its indices
+    /// ever being built, so a submesh covering part of a huge mesh costs two numbers. Every cell
+    /// must be in at least one submesh; submeshes may overlap.
     fn write_mesh_with_submeshes(
         &mut self,
         py: Python<'_>,
@@ -151,9 +153,7 @@ impl PyTimeSeriesWriter {
                             point_slice,
                             index_slice,
                             &cell_types,
-                            submeshes
-                                .iter()
-                                .map(|(name, cells)| (name.as_str(), cells.as_slice())),
+                            submeshes,
                         )
                     })
                     .map_err(to_py_err)

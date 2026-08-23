@@ -9,6 +9,7 @@ use crate::{
 
 /// One submesh's decoded topology: its cells' types and its connectivity with any `Mixed` type
 /// codes stripped out, indices still local to whatever point list the submesh was written against.
+#[derive(Debug)]
 pub(super) struct DecodedTopology {
     pub cell_types: Vec<CellType>,
     pub connectivity: Vec<u64>,
@@ -67,9 +68,28 @@ fn decode_mixed(values: &[u64]) -> Result<DecodedTopology> {
             reason: format!("Mixed connectivity has an unknown cell type code {code}"),
         })?;
 
-        // Vertex/Edge poly-cells carry their point count next; it is redundant (always the type's
-        // own fixed count) but still has to be consumed from the stream.
-        if poly_cell_points(cell_type).is_some() {
+        // Vertex/Edge poly-cells carry their point count next. For this crate's own files it is
+        // redundant -- always the type's own fixed count -- but a foreign file may state another,
+        // and taking it on trust would desynchronise the stream and surface as an "unknown cell
+        // type code" further along. Rejected here instead, as `cell_type_of` rejects the
+        // equivalent `NodesPerElement` for a uniform topology.
+        if let Some(expected) = poly_cell_points(cell_type) {
+            let stated = *values.get(position).ok_or_else(|| Error::InvalidDocument {
+                reason: format!(
+                    "Mixed connectivity ends after a {cell_type:?} cell's type code, before its \
+                     point count"
+                ),
+            })?;
+
+            if stated != u64::from(expected) {
+                return Err(Error::Unsupported {
+                    reason: format!(
+                        "a Mixed connectivity's {cell_type:?} cell states {stated} points, only \
+                         {expected} is supported"
+                    ),
+                });
+            }
+
             position += 1;
         }
 
@@ -173,5 +193,50 @@ fn widen_to_u64(values: &Values<'_>) -> Result<Vec<u64>> {
             .iter()
             .map(|&value| widen_signed(i64::from(value)))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xdmf_elements::data_item::DataItem;
+
+    fn mixed(values: &[u64]) -> Result<DecodedTopology> {
+        let topology = Topology {
+            topology_type: TopologyType::Mixed,
+            nodes_per_element: None,
+            number_of_elements: "1".to_string(),
+            data_item: DataItem::default(),
+        };
+
+        decode(&topology, &Values::from(values))
+    }
+
+    #[test]
+    fn a_poly_cells_point_count_is_consumed() {
+        // a Vertex (code 1, 1 point) and an Edge (code 2, 2 points), each stating its own count
+        let decoded = mixed(&[1, 1, 7, 2, 2, 3, 4]).unwrap();
+
+        assert_eq!(decoded.cell_types, [CellType::Vertex, CellType::Edge]);
+        assert_eq!(decoded.connectivity, [7, 3, 4]);
+    }
+
+    /// Taking the stated count on trust would consume one value too few and read the rest of the
+    /// stream shifted, which surfaces as a confusing "unknown cell type code" further along.
+    #[test]
+    fn a_poly_cell_stating_another_point_count_is_rejected() {
+        std::assert_matches!(
+            mixed(&[1, 3, 7, 8, 9]).unwrap_err(),
+            Error::Unsupported { reason }
+                if reason.contains("Vertex cell states 3 points, only 1 is supported")
+        );
+    }
+
+    #[test]
+    fn a_poly_cell_without_its_point_count_is_rejected() {
+        std::assert_matches!(
+            mixed(&[1]).unwrap_err(),
+            Error::InvalidDocument { reason } if reason.contains("before its point count")
+        );
     }
 }

@@ -51,7 +51,10 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
 - `write_mesh_with_submeshes(points, connectivity, cell_types, submeshes)` splits the mesh into
   named, independently selectable submeshes for ParaView's Multi-block Inspector — `submeshes` is a
   sequence of `(name, cells)` pairs, `cells` a numpy integer array or a plain sequence of `int`
-  naming which cells belong to it. Point and cell data are still passed over the whole mesh in
+  naming which cells belong to it. A submesh that is one block of consecutive cells is better given
+  as a `range` — `("fluid", range(0, 1_000_000))` costs the two numbers it is stored as, where the
+  equivalent list would first build a million Python ints. Any other `range` (a step of 2, say) is
+  read as the plain sequence it also is. Point and cell data are still passed over the whole mesh in
   `write_time_step`; the writer slices each submesh's share. Submeshes may overlap, but every cell
   must belong to at least one, and no two names may differ only in case (a name becomes a file name
   for the ascii and binary storages).
@@ -73,4 +76,8 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
   the [integer data](https://github.com/philbucher/xdmf#can-integer-data-be-written) section,
   whose limits apply here too),
   `OSError` for a failing write, and `RuntimeError` for using a consumed writer.
+- These bindings are a **writing** interface only. The crate's `TimeSeriesReader` is deliberately
+  not bound: reading is Rust-only for now, and Python code that needs to read an XDMF file back is
+  better served by `h5py` on the heavy data plus an XML parser on the `.xdmf2` file, or by ParaView's
+  own `paraview.simple`.
 - Type stubs (`xdmf.pyi`) ship with the package, so editors and type checkers see the full interface.

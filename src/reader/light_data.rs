@@ -61,6 +61,46 @@ impl Document {
     }
 }
 
+/// Where one grid sits under the `Domain`: the `grids` indices to follow from the `Domain`'s
+/// single root grid, so an empty path is the root grid itself.
+///
+/// Positions rather than `&Grid` references: [`Analysis`] is built once, in
+/// [`TimeSeriesReader::new`](crate::TimeSeriesReader::new), and kept next to the [`Document`] it
+/// describes -- which a borrow of that same document could not be.
+#[derive(Clone, Debug)]
+pub(super) struct GridPath(Vec<usize>);
+
+impl GridPath {
+    fn root() -> Self {
+        Self(Vec::new())
+    }
+
+    fn child(&self, index: usize) -> Self {
+        let mut path = self.0.clone();
+        path.push(index);
+
+        Self(path)
+    }
+
+    /// The grid this path names. Every path was produced by walking the same document, so a
+    /// missing step means the document changed underneath the reader.
+    pub(super) fn resolve<'a>(&self, domain: &'a Domain) -> Result<&'a Grid> {
+        let mut grid = domain.grids.first().ok_or_else(|| Error::InvalidDocument {
+            reason: "the Domain has no Grid".to_string(),
+        })?;
+
+        for &index in &self.0 {
+            grid = grid
+                .grids
+                .as_deref()
+                .and_then(|children| children.get(index))
+                .ok_or(Error::Internal("a grid path no longer resolves"))?;
+        }
+
+        Ok(grid)
+    }
+}
+
 /// How the document's single root `Grid` breaks down: which grids carry the mesh (one per named
 /// submesh, or a single unnamed one without submeshes), and, for each, its grids in step order.
 ///
@@ -68,16 +108,16 @@ impl Document {
 /// `Attribute`s -- the shape [`crate::TimeSeriesWriter::write_mesh`]/
 /// [`crate::TimeSeriesWriter::write_mesh_with_submeshes`] themselves write, before any
 /// [`crate::TimeSeriesDataWriter::write_time_step`] call.
-pub(super) struct Analysis<'a> {
+pub(super) struct Analysis {
     /// Empty when the mesh has no submeshes.
-    pub(super) submesh_names: Vec<String>,
+    submesh_names: Vec<String>,
     /// One entry per submesh (or a single entry without submeshes), each the grids of that
     /// submesh in step order.
-    pub(super) submeshes: Vec<Vec<&'a Grid>>,
+    submeshes: Vec<Vec<GridPath>>,
 }
 
-impl<'a> Analysis<'a> {
-    pub(super) fn build(domain: &'a Domain) -> Result<Self> {
+impl Analysis {
+    pub(super) fn build(domain: &Domain) -> Result<Self> {
         if domain.grids.len() > 1 {
             return Err(Error::Unsupported {
                 reason: "multiple root Grids in one Domain are not supported".to_string(),
@@ -87,28 +127,29 @@ impl<'a> Analysis<'a> {
         let root = domain.grids.first().ok_or_else(|| Error::InvalidDocument {
             reason: "the Domain has no Grid".to_string(),
         })?;
+        let root_path = GridPath::root();
 
         match (root.grid_type, root.collection_type) {
             (GridType::Uniform, _) => Ok(Self {
                 submesh_names: Vec::new(),
-                submeshes: vec![vec![root]],
+                submeshes: vec![vec![root_path]],
             }),
             (GridType::Collection, Some(CollectionType::Temporal)) => {
-                let steps = collection_children(root)?;
+                let steps = collection_children(root, &root_path)?;
                 Ok(Self {
                     submesh_names: Vec::new(),
-                    submeshes: vec![steps],
+                    submeshes: vec![steps.into_iter().map(|(_grid, path)| path).collect()],
                 })
             }
             (GridType::Collection, Some(CollectionType::Spatial)) => {
-                let children = collection_children(root)?;
+                let children = collection_children(root, &root_path)?;
 
                 let mut submesh_names = Vec::with_capacity(children.len());
                 let mut submeshes = Vec::with_capacity(children.len());
 
-                for child in children {
+                for (child, path) in children {
                     submesh_names.push(child.name.clone());
-                    submeshes.push(submesh_steps(child)?);
+                    submeshes.push(submesh_steps(child, &path)?);
                 }
 
                 Ok(Self {
@@ -125,21 +166,60 @@ impl<'a> Analysis<'a> {
         }
     }
 
+    /// Empty when the mesh has no submeshes.
+    pub(super) fn submesh_names(&self) -> &[String] {
+        &self.submesh_names
+    }
+
     pub(super) fn num_submeshes(&self) -> usize {
         self.submeshes.len()
     }
 
-    pub(super) fn times(&self) -> Result<Vec<String>> {
+    /// The grid a submesh's mesh itself is described by: its first, which every step's grid
+    /// repeats the geometry and topology of.
+    pub(super) fn mesh_grid<'a>(&self, submesh: usize, domain: &'a Domain) -> Result<&'a Grid> {
+        self.grid_path(submesh, 0)?.resolve(domain)
+    }
+
+    /// The grid of one submesh's `step`-th time step.
+    pub(super) fn step_grid<'a>(
+        &self,
+        submesh: usize,
+        step: usize,
+        domain: &'a Domain,
+    ) -> Result<&'a Grid> {
+        self.grid_path(submesh, step)?.resolve(domain)
+    }
+
+    fn grid_path(&self, submesh: usize, step: usize) -> Result<&GridPath> {
+        let grids = self.submeshes.get(submesh).ok_or(Error::Internal(
+            "a grid was asked for with a submesh index out of range",
+        ))?;
+
+        grids.get(step).ok_or_else(|| Error::InvalidDocument {
+            reason: format!(
+                "submesh {submesh} has only {} grids, so it has no step {step}",
+                grids.len()
+            ),
+        })
+    }
+
+    pub(super) fn times(&self, domain: &Domain) -> Result<Vec<String>> {
         let Some(first_submesh) = self.submeshes.first() else {
             return Ok(Vec::new());
         };
 
+        let grids = first_submesh
+            .iter()
+            .map(|path| path.resolve(domain))
+            .collect::<Result<Vec<_>>>()?;
+
         // no step has been written yet: the single grid carries no `Time`
-        if first_submesh.len() == 1 && first_submesh[0].time.is_none() {
+        if grids.len() == 1 && grids[0].time.is_none() {
             return Ok(Vec::new());
         }
 
-        first_submesh
+        grids
             .iter()
             .map(|grid| {
                 grid.time
@@ -155,10 +235,15 @@ impl<'a> Analysis<'a> {
 
 /// A submesh's own grid holding one step (a plain submesh, before any step was written) or the
 /// per-submesh `Temporal` collection wrapping its steps.
-fn submesh_steps(child: &Grid) -> Result<Vec<&Grid>> {
+fn submesh_steps(child: &Grid, path: &GridPath) -> Result<Vec<GridPath>> {
     match (child.grid_type, child.collection_type) {
-        (GridType::Uniform, _) => Ok(vec![child]),
-        (GridType::Collection, Some(CollectionType::Temporal)) => collection_children(child),
+        (GridType::Uniform, _) => Ok(vec![path.clone()]),
+        (GridType::Collection, Some(CollectionType::Temporal)) => {
+            Ok(collection_children(child, path)?
+                .into_iter()
+                .map(|(_grid, child_path)| child_path)
+                .collect())
+        }
         _ => Err(Error::Unsupported {
             reason: format!(
                 "submesh Grid '{}' has an unexpected shape (GridType {:?}, CollectionType {:?})",
@@ -168,8 +253,14 @@ fn submesh_steps(child: &Grid) -> Result<Vec<&Grid>> {
     }
 }
 
-fn collection_children(grid: &Grid) -> Result<Vec<&Grid>> {
-    let children: Vec<&Grid> = grid.grids.iter().flatten().collect();
+fn collection_children<'a>(grid: &'a Grid, path: &GridPath) -> Result<Vec<(&'a Grid, GridPath)>> {
+    let children: Vec<(&Grid, GridPath)> = grid
+        .grids
+        .iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, child)| (child, path.child(index)))
+        .collect();
 
     if children.is_empty() {
         return Err(Error::InvalidDocument {

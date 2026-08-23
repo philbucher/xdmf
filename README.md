@@ -67,6 +67,11 @@ Yes — `write_mesh_with_submeshes` takes named subsets of the mesh's cells alon
 and each becomes a separately selectable block in ParaView's Multi-block Inspector
 (`View -> Multi-block Inspector`). Submeshes may overlap: a cell can belong to any number of them.
 
+A submesh's cells are given either as an index list or, when it is one block of consecutive cells
+(as element blocks and material zones usually are), as a range — `("fluid", 0..1_000_000)` rather
+than a million-entry `Vec`. Both are stored as the same two numbers; the range just skips building
+the list. See `SubmeshCells` for every shape accepted.
+
 Time step data is still written over the whole mesh, exactly as above — point data over all points,
 cell data over all cells — and the writer gives each submesh its share, so submeshes can be added to
 existing code without changing how it produces its field data.
@@ -193,7 +198,9 @@ The xdmf format allows to separate the storing of light and heavy data. Differen
 `TimeSeriesReader::new` parses the whole file up front, so every read call after it is a plain,
 independent, repeatable query -- there is no phase to pass through first, unlike the writer (which
 writes the mesh once and irreversibly before any time step). Only the two HDF5 storages
-(`Hdf5SingleFile`/`Hdf5MultipleFiles`) can be read so far; `Ascii`/`AsciiInline`/`Binary` are not yet.
+(`Hdf5SingleFile`/`Hdf5MultipleFiles`) can be read so far; opening a file written with
+`Ascii`/`AsciiInline`/`Binary` fails right there, rather than at the first call that reaches the
+heavy data.
 
 ~~~rs
 use xdmf::TimeSeriesReader;
@@ -201,11 +208,12 @@ use xdmf::TimeSeriesReader;
 // open the file the writer example above produced
 let reader = TimeSeriesReader::new("xdmf_writing.xdmf2").expect("failed to open XDMF file");
 
-// points and topology (connectivity + cell types) are independent reads
-let mut points = Vec::new();
+// points and topology (connectivity + cell types) are independent reads, each filling a buffer
+// of whichever element type the caller wants it at
+let mut points: Vec<f64> = Vec::new();
 reader.read_points(&mut points).expect("failed to read points");
 
-let mut connectivity = Vec::new();
+let mut connectivity: Vec<u64> = Vec::new();
 let mut cell_types = Vec::new();
 reader
     .read_topology(&mut connectivity, &mut cell_types)
@@ -234,7 +242,10 @@ for step in 0..reader.num_steps() {
 `point_data_info`/`cell_data_info` report a field's shape and element type before it is read, so a
 caller can size a buffer and pick a type without guessing. Reading a field into a wider type than it
 was written as is allowed (e.g. `f32` file data read into a `Vec<f64>`); narrowing is rejected
-instead of silently losing precision.
+instead of silently losing precision. `read_points` follows the same rule (`f32`/`f64`, see
+`Coordinate`). `read_topology` takes any of `u32`/`u64`/`i32`/`i64` (see `ConnectivityIndex`) and
+checks the *values* instead: what it hands back are positions in the mesh it reassembled, not the
+file's own array, so any type that holds every index works whatever the file was written as.
 
 A mesh written with `write_mesh_with_submeshes` reads back as the single, whole mesh it started from
 — `read_points`/`read_topology` put it back together from the submeshes' own points, cells and

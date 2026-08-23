@@ -43,7 +43,7 @@ fn round_trip_mesh_only() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut read_connectivity = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -56,7 +56,7 @@ fn round_trip_mesh_only() {
 }
 
 /// `write_mesh` with no cells at all writes a `Polyvertex` topology with identity connectivity
-/// (required for ParaView to show bare points); the reader does not try to tell that apart from a
+/// (required for `ParaView` to show bare points); the reader does not try to tell that apart from a
 /// caller-supplied mesh of that many `Vertex` cells in that order, since the file doesn't either --
 /// it reads back as such a mesh, not as empty `connectivity`/`cell_types`.
 #[test]
@@ -81,7 +81,7 @@ fn write_mesh_with_no_cells_reads_back_as_vertex_cells() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut connectivity = Vec::new();
+        let mut connectivity: Vec<u64> = Vec::new();
         let mut cell_types = Vec::new();
         reader
             .read_topology(&mut connectivity, &mut cell_types)
@@ -136,7 +136,7 @@ fn round_trip_every_cell_type() {
             .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
 
         let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
-        let mut read_connectivity = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -426,7 +426,7 @@ fn round_trip_contiguous_submeshes() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut read_connectivity = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -509,7 +509,7 @@ fn round_trip_scattered_overlapping_submeshes_with_an_unused_point() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut read_connectivity = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -574,7 +574,7 @@ fn round_trip_a_submesh_with_deliberately_unordered_cells() {
 
         let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
 
-        let mut read_connectivity = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -620,7 +620,7 @@ fn write_mesh_with_no_cells_and_submeshes_reads_back_as_vertex_cells() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut connectivity = Vec::new();
+        let mut connectivity: Vec<u64> = Vec::new();
         let mut cell_types = Vec::new();
         reader
             .read_topology(&mut connectivity, &mut cell_types)
@@ -659,7 +659,7 @@ fn round_trip_vertex_cells_with_submeshes() {
         assert_eq!(reader.num_points(), 4, "{storage:?}");
         assert_eq!(reader.num_cells(), 3, "{storage:?}");
 
-        let mut read_connectivity = Vec::new();
+        let mut read_connectivity: Vec<u64> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -780,5 +780,176 @@ fn a_step_index_on_a_mesh_without_steps_is_rejected() {
                 "{label}"
             );
         }
+    }
+}
+
+/// The reader answers nothing at all about a document written with a storage it cannot read:
+/// `new` is where that is reported, rather than the first call that reaches heavy data.
+#[test]
+fn opening_a_document_written_with_a_non_hdf5_storage_is_rejected() {
+    let (coords, _, cell_types) = quad_mesh();
+    // 32-bit, since `Binary` refuses to hold a 64-bit connectivity at all
+    let connectivity = [0_u32, 1, 0, 2, 1, 1, 2, 3];
+
+    for storage in [
+        DataStorage::Ascii,
+        DataStorage::AsciiInline,
+        DataStorage::Binary,
+    ] {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh(&coords, &connectivity, &cell_types)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
+
+        std::assert_matches!(
+            TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap_err(),
+            xdmf::Error::Unsupported { reason }
+                if reason.contains(&format!("written with the {storage:?} storage")),
+            "{storage:?}"
+        );
+    }
+}
+
+/// A document that names no storage at all is a foreign file: it is opened, and its `DataItem`s
+/// are checked for `Format="HDF"` one by one as they are read.
+#[test]
+fn a_document_without_a_data_storage_information_is_opened() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    let information = document
+        .lines()
+        .find(|line| line.contains("data_storage"))
+        .unwrap();
+    std::fs::write(&document_path, document.replace(information, "")).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    assert_eq!(reader.num_points(), 4);
+
+    let mut points: Vec<f64> = Vec::new();
+    std::assert_matches!(
+        reader.read_points(&mut points).unwrap_err(),
+        xdmf::Error::Unsupported { reason } if reason.contains("is not supported by this reader")
+    );
+}
+
+/// The element type a mesh is read back at is the caller's choice, independently of what it was
+/// written as: `f32` coordinates widen into a `Vec<f64>`, and a `u64` connectivity comes back as
+/// `u32` when every index fits one.
+#[test]
+fn points_and_connectivity_are_read_at_the_requested_width() {
+    for storage in STORAGES {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        let coords: [f32; 12] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+        let connectivity = [0_u64, 1, 0, 2, 1, 1, 2, 3];
+        let cell_types = [CellType::Edge, CellType::Triangle, CellType::Triangle];
+
+        TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh(&coords, &connectivity, &cell_types)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+
+        // written as f32, read back at both widths
+        let mut narrow: Vec<f32> = Vec::new();
+        reader.read_points(&mut narrow).unwrap();
+        assert_approx_eq!(&[f32], &narrow, &coords);
+
+        let mut wide: Vec<f64> = Vec::new();
+        reader.read_points(&mut wide).unwrap();
+        let expected: Vec<f64> = coords.iter().map(|&value| f64::from(value)).collect();
+        assert_approx_eq!(&[f64], &wide, &expected);
+
+        // written as u64, read back as u32 -- an index check, not a type check
+        let mut cell_types_read = Vec::new();
+        let mut narrow_connectivity: Vec<u32> = Vec::new();
+        reader
+            .read_topology(&mut narrow_connectivity, &mut cell_types_read)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
+
+        assert_eq!(
+            narrow_connectivity,
+            [0_u32, 1, 0, 2, 1, 1, 2, 3],
+            "{storage:?}"
+        );
+        assert_eq!(cell_types_read, cell_types, "{storage:?}");
+    }
+}
+
+/// Narrowing the *coordinates* is refused, unlike the connectivity: they are the file's own
+/// values, so the widening rule that governs field data governs them too.
+#[test]
+fn reading_f64_points_as_f32_is_rejected() {
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    let (coords, connectivity, cell_types) = quad_mesh();
+    TimeSeriesWriter::new(&file_name, STORAGES[0])
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+    let mut points: Vec<f32> = Vec::new();
+
+    std::assert_matches!(
+        reader.read_points(&mut points).unwrap_err(),
+        xdmf::Error::NumberTypeMismatch { reason } if reason.contains("the file holds f64")
+    );
+}
+
+/// A mesh split by ranges is the same file as one split by the equivalent index lists, and reads
+/// back as such.
+#[test]
+fn submeshes_given_as_ranges_round_trip() {
+    for storage in STORAGES {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        let (coords, connectivity, cell_types) = submesh_test_mesh();
+
+        TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh_with_submeshes(
+                &coords,
+                &connectivity,
+                &cell_types,
+                [("edge", 0..1), ("surface", 1..3)],
+            )
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+
+        assert_eq!(reader.submesh_names(), ["edge", "surface"], "{storage:?}");
+        assert_eq!(reader.submesh_cells(0).unwrap(), [0], "{storage:?}");
+        assert_eq!(reader.submesh_cells(1).unwrap(), [1, 2], "{storage:?}");
+
+        let mut points: Vec<f64> = Vec::new();
+        reader.read_points(&mut points).unwrap();
+
+        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_cell_types = Vec::new();
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
+
+        assert_approx_eq!(&[f64], &points, &coords);
+        assert_eq!(read_connectivity, connectivity, "{storage:?}");
+        assert_eq!(read_cell_types, cell_types, "{storage:?}");
     }
 }
