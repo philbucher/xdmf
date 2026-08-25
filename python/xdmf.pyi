@@ -49,7 +49,11 @@ class DataStorage:
         """
 
 class CellType:
-    """Cell types as defined in the VTK file format. The values are the raw VTK codes."""
+    """Cell types, mirroring the XDMF topology types.
+
+    The values are the raw XDMF topology type codes, *not* the VTK cell codes -- a hexahedron is
+    9 here and 12 in VTK. What follows VTK is the node ordering within a cell.
+    """
 
     Vertex: "CellType"
     Edge: "CellType"
