@@ -114,107 +114,79 @@ impl Domain {
     }
 }
 
-/// Cell types as defined in the VTK file format.
-///
-/// See <https://vtk.org/wp-content/uploads/2015/04/file-formats.pdf> for details.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum CellType {
-    #[doc(hidden)]
-    Vertex = 1,
-    #[doc(hidden)]
-    Edge = 2,
-    #[doc(hidden)]
-    Triangle = 4,
-    #[doc(hidden)]
-    Quadrilateral = 5,
-    #[doc(hidden)]
-    Tetrahedron = 6,
-    #[doc(hidden)]
-    Pyramid = 7,
-    #[doc(hidden)]
-    Wedge = 8,
-    #[doc(hidden)]
-    Hexahedron = 9,
-    #[doc(hidden)]
-    Edge3 = 34,
-    #[doc(hidden)]
-    Quadrilateral9 = 35,
-    #[doc(hidden)]
-    Triangle6 = 36,
-    #[doc(hidden)]
-    Quadrilateral8 = 37,
-    #[doc(hidden)]
-    Tetrahedron10 = 38,
-    #[doc(hidden)]
-    Pyramid13 = 39,
-    #[doc(hidden)]
-    Wedge15 = 40,
-    #[doc(hidden)]
-    Wedge18 = 41,
-    #[doc(hidden)]
-    Hexahedron20 = 48,
-    #[doc(hidden)]
-    Hexahedron24 = 49,
-    #[doc(hidden)]
-    Hexahedron27 = 50,
+// Declares the cell types, their XDMF codes and their point counts as one list, so that a type
+// added to the crate cannot reach `ALL`, `from_code` or `num_points` as an omission — unlike
+// `define_values!`, where the methods are left out on purpose, `from_code` maps a code *to* a
+// variant and so cannot be made exhaustive by hand. The one decision still left to the compiler
+// is `From<CellType> for TopologyType` (`xdmf_elements/topology.rs`), whose exhaustive match asks
+// which XDMF name a new type serialises as.
+macro_rules! define_cell_types {
+    ($($variant:ident = $code:literal => $num_points:literal),+ $(,)?) => {
+        /// The cell types this crate can write, i.e. the XDMF topology types it supports.
+        ///
+        /// The discriminants are the XDMF topology type codes, which is what a `Mixed` topology's
+        /// connectivity carries per cell — they are *not* the VTK cell codes, which differ (a
+        /// hexahedron is 9 here and 12 in VTK). What follows VTK is the node *ordering* within a
+        /// cell, see <https://vtk.org/wp-content/uploads/2015/04/file-formats.pdf>.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum CellType {
+            $(
+                #[doc(hidden)]
+                $variant = $code,
+            )+
+        }
+
+        impl CellType {
+            /// Every cell type this crate knows, in the order they are declared.
+            ///
+            /// A slice rather than a sized array, so that adding a cell type is not a breaking
+            /// change for a caller naming the type. Consumers mapping these onto their own cell
+            /// types use it to check they have covered all of them.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None`
+            /// for a code this crate does not know. The inverse of the `as u8` cast
+            /// `prepare_cells` (`time_series_writer.rs`) writes with.
+            pub(crate) fn from_code(code: u8) -> Option<Self> {
+                match code {
+                    $($code => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            /// The number of points for the given cell type.
+            pub fn num_points(&self) -> usize {
+                match self {
+                    $(Self::$variant => $num_points,)+
+                }
+            }
+        }
+    };
 }
 
-impl CellType {
-    /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None` for a code
-    /// this crate does not know. The inverse of the `as u8` cast `prepare_cells`
-    /// (`time_series_writer.rs`) writes with -- kept next to the discriminants themselves so the
-    /// write and read directions cannot drift apart.
-    pub(crate) fn from_code(code: u8) -> Option<Self> {
-        match code {
-            1 => Some(Self::Vertex),
-            2 => Some(Self::Edge),
-            4 => Some(Self::Triangle),
-            5 => Some(Self::Quadrilateral),
-            6 => Some(Self::Tetrahedron),
-            7 => Some(Self::Pyramid),
-            8 => Some(Self::Wedge),
-            9 => Some(Self::Hexahedron),
-            34 => Some(Self::Edge3),
-            35 => Some(Self::Quadrilateral9),
-            36 => Some(Self::Triangle6),
-            37 => Some(Self::Quadrilateral8),
-            38 => Some(Self::Tetrahedron10),
-            39 => Some(Self::Pyramid13),
-            40 => Some(Self::Wedge15),
-            41 => Some(Self::Wedge18),
-            48 => Some(Self::Hexahedron20),
-            49 => Some(Self::Hexahedron24),
-            50 => Some(Self::Hexahedron27),
-            _ => None,
-        }
-    }
-
-    /// The number of points for the given cell type.
-    pub fn num_points(&self) -> usize {
-        match self {
-            Self::Vertex => 1,
-            Self::Edge => 2,
-            Self::Triangle => 3,
-            Self::Quadrilateral => 4,
-            Self::Tetrahedron => 4,
-            Self::Pyramid => 5,
-            Self::Wedge => 6,
-            Self::Hexahedron => 8,
-            Self::Edge3 => 3,
-            Self::Quadrilateral9 => 9,
-            Self::Triangle6 => 6,
-            Self::Quadrilateral8 => 8,
-            Self::Tetrahedron10 => 10,
-            Self::Pyramid13 => 13,
-            Self::Wedge15 => 15,
-            Self::Wedge18 => 18,
-            Self::Hexahedron20 => 20,
-            Self::Hexahedron24 => 24,
-            Self::Hexahedron27 => 27,
-        }
-    }
-}
+// `variant = XDMF topology type code => points per cell`
+define_cell_types!(
+    Vertex         =  1 =>  1,
+    Edge           =  2 =>  2,
+    Triangle       =  4 =>  3,
+    Quadrilateral  =  5 =>  4,
+    Tetrahedron    =  6 =>  4,
+    Pyramid        =  7 =>  5,
+    Wedge          =  8 =>  6,
+    Hexahedron     =  9 =>  8,
+    Edge3          = 34 =>  3,
+    Quadrilateral9 = 35 =>  9,
+    Triangle6      = 36 =>  6,
+    Quadrilateral8 = 37 =>  8,
+    Tetrahedron10  = 38 => 10,
+    Pyramid13      = 39 => 13,
+    Wedge15        = 40 => 15,
+    Wedge18        = 41 => 18,
+    Hexahedron20   = 48 => 20,
+    Hexahedron24   = 49 => 24,
+    Hexahedron27   = 50 => 27,
+);
 
 #[cfg(test)]
 mod tests {
@@ -306,30 +278,28 @@ mod tests {
 
     #[test]
     fn cell_type_from_code_round_trips_every_variant() {
-        const ALL: [CellType; 19] = [
-            CellType::Vertex,
-            CellType::Edge,
-            CellType::Triangle,
-            CellType::Quadrilateral,
-            CellType::Tetrahedron,
-            CellType::Pyramid,
-            CellType::Wedge,
-            CellType::Hexahedron,
-            CellType::Edge3,
-            CellType::Quadrilateral9,
-            CellType::Triangle6,
-            CellType::Quadrilateral8,
-            CellType::Tetrahedron10,
-            CellType::Pyramid13,
-            CellType::Wedge15,
-            CellType::Wedge18,
-            CellType::Hexahedron20,
-            CellType::Hexahedron24,
-            CellType::Hexahedron27,
-        ];
-
-        for cell_type in ALL {
+        for &cell_type in CellType::ALL {
             assert_eq!(CellType::from_code(cell_type as u8), Some(cell_type));
+        }
+    }
+
+    /// Two variants sharing a code would make `from_code` return the first of them for both, and
+    /// a `Mixed` connectivity would read back as the wrong cell type.
+    #[test]
+    fn every_cell_type_has_its_own_code() {
+        let mut codes: Vec<u8> = CellType::ALL.iter().map(|&c| c as u8).collect();
+        let declared = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), declared);
+    }
+
+    /// A cell has at least one point, and a point count is what the connectivity is walked in
+    /// strides of — a zero would make a mesh of such cells read as an endless one.
+    #[test]
+    fn every_cell_type_has_points() {
+        for cell_type in CellType::ALL {
+            assert!(cell_type.num_points() > 0, "{cell_type:?}");
         }
     }
 

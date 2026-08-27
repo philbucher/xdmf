@@ -70,6 +70,12 @@ impl TimeSeriesWriter {
         })
     }
 
+    /// The XDMF file this writer writes: the name it was given, with the XDMF extension on it.
+    /// The heavy data takes the same base and its own storage's extension.
+    pub fn file_name(&self) -> &Path {
+        &self.xdmf_file_name
+    }
+
     /// Writes the mesh to the XDMF file, returning a `TimeSeriesDataWriter` for writing time steps.
     ///
     /// Sizes of the inputs are validated to ensure consistency with the mesh and defined cell types.
@@ -230,6 +236,8 @@ impl TimeSeriesWriter {
     /// # std::fs::remove_file("xdmf_write_submesh_ranges.xdmf2").expect("the example writes this file");
     /// ```
     ///
+    /// Each submesh is written with the topology *its own* cells share
+    ///
     /// The submeshes are taken as an iterator so that a caller who has them in any shape can pass
     /// it without first building a slice of them. They are not consumed lazily, though: the whole
     /// list is read and validated before anything is written, and a submesh whose cells -- or
@@ -293,12 +301,25 @@ impl TimeSeriesWriter {
                 mesh.topology_type,
                 &submesh.cells,
             )?;
-            let mut cells = extract_connectivity(&mesh.cells, &offsets, &submesh.cells);
-            renumber_connectivity(
-                &mut cells,
+            let (topology_type, nodes_per_element) = submesh_topology(
+                cell_types,
+                mesh.topology_type,
+                mesh.nodes_per_element,
+                &submesh.cells,
+            );
+
+            let mut cells = extract_connectivity(
+                &mesh.cells,
                 &offsets,
                 cell_types,
                 mesh.topology_type,
+                topology_type,
+                &submesh.cells,
+            );
+            renumber_connectivity(
+                &mut cells,
+                cell_types,
+                topology_type,
                 &submesh.cells,
                 &points_of_submesh,
                 &mut local_points,
@@ -332,8 +353,8 @@ impl TimeSeriesWriter {
             let connectivity_item = self.connectivity_data_item(Some(index), &cells)?;
 
             let topology = Topology {
-                topology_type: mesh.topology_type,
-                nodes_per_element: mesh.nodes_per_element,
+                topology_type,
+                nodes_per_element,
                 number_of_elements: submesh.cells.len().to_string(),
                 data_item: DataItem::new_reference(&connectivity_item, DOMAIN_DATA_ITEMS),
             };
@@ -373,8 +394,8 @@ impl TimeSeriesWriter {
 
         // only `Polyvertex`/`Polyline` carry a per-element node count. `topology_type` is only ever
         // non-`Mixed` when every cell shares one type (see `prepare_cells`), so this one value is
-        // correct for the whole mesh and every submesh alike -- a submesh's cells are always a
-        // subset of the same uniformly-typed connectivity.
+        // correct for the whole mesh, and for every submesh of a mesh that has one -- a submesh of
+        // a `Mixed` mesh decides both for itself, see `submesh_topology`.
         let nodes_per_element = (topology_type != TopologyType::Mixed)
             .then(|| poly_cell_points(cell_types.first().copied().unwrap_or(CellType::Vertex)))
             .flatten();
@@ -1196,48 +1217,96 @@ fn cell_offsets(
     let mut offsets = Vec::with_capacity(num_cells + 1);
     let mut offset = 0;
 
-    if cell_types.is_empty() {
-        // the polyvertex fallback numbers the points one index each
-        offsets.extend(0..=num_cells);
-        return offsets;
-    }
-
-    for cell_type in cell_types {
+    for cell in 0..num_cells {
         offsets.push(offset);
-        offset += if topology_type == TopologyType::Mixed {
-            // the cell type, the point count for poly-cells, then the points themselves
-            1 + usize::from(poly_cell_points(*cell_type).is_some()) + cell_type.num_points()
-        } else {
-            // uniform topology: every cell shares this type, so only the points are stored
-            cell_type.num_points()
-        };
+        offset += cell_span(cell_types, topology_type, cell);
     }
     offsets.push(offset);
 
     offsets
 }
 
+/// How many entries one cell takes in a connectivity written as `topology_type`: its point ids,
+/// behind whatever `Mixed` puts in front of them (see `leading_entries`).
+fn cell_span(cell_types: &[CellType], topology_type: TopologyType, cell: usize) -> usize {
+    // the polyvertex fallback for a mesh of points only numbers each point one entry
+    let Some(cell_type) = cell_types.get(cell) else {
+        return 1;
+    };
+
+    leading_entries(cell_types, topology_type, cell) + cell_type.num_points()
+}
+
 /// A submesh's share of the prepared connectivity, in the order it lists its cells.
 ///
 /// Owned rather than borrowed even for one contiguous run, because the copy is renumbered into the
 /// submesh's own points afterwards -- see `renumber_connectivity`.
+///
+/// A submesh written uniformly is cut out of a `Mixed` mesh without the per-cell type codes that
+/// mesh carries: its own `<Topology>` says once what those said per cell (see `submesh_topology`).
 fn extract_connectivity<I: ConnectivityIndex>(
     cells: &[I],
     offsets: &[usize],
+    cell_types: &[CellType],
+    mesh_topology: TopologyType,
+    submesh_topology: TopologyType,
     submesh: &IndexList,
 ) -> Vec<I> {
-    // the exact size is one pass over `offsets` away, cheaper than growing while gathering
+    // the exact size is one pass over the cells away, cheaper than growing while gathering
     let size = submesh
         .iter()
-        .map(|index| offsets[index + 1] - offsets[index])
+        .map(|cell| cell_span(cell_types, submesh_topology, cell))
         .sum();
 
     let mut extracted = Vec::with_capacity(size);
-    for index in submesh.iter() {
-        extracted.extend_from_slice(&cells[offsets[index]..offsets[index + 1]]);
+    for cell in submesh.iter() {
+        // what the mesh puts ahead of this cell's points, less what the submesh keeps of it. A
+        // submesh is `Mixed` only where the mesh is, and then keeps all of it, so this never
+        // underflows.
+        let dropped = leading_entries(cell_types, mesh_topology, cell)
+            - leading_entries(cell_types, submesh_topology, cell);
+
+        extracted.extend_from_slice(&cells[offsets[cell] + dropped..offsets[cell + 1]]);
     }
 
     extracted
+}
+
+/// The topology one submesh's own cells are written as: the [`CellType`] all of them share, or the
+/// mesh's own where they do not.
+///
+/// Decided per submesh rather than taken from the mesh, because the split that makes a mesh
+/// `Mixed` in the first place is usually the one that leaves each block uniform: a volume of
+/// hexahedra beside a boundary of quadrilaterals. Written uniformly, that block states its cell
+/// type once in its `<Topology>` instead of once per cell in its connectivity -- on a
+/// 4.3M-hexahedron volume block, 4.3M indices, about 11% of the block's connectivity.
+///
+/// The second half of the pair is the per-element node count only `Polyvertex`/`Polyline` carry,
+/// as in `prepare_mesh`.
+fn submesh_topology(
+    cell_types: &[CellType],
+    mesh_topology: TopologyType,
+    mesh_nodes_per_element: Option<u8>,
+    cells: &IndexList,
+) -> (TopologyType, Option<u8>) {
+    let mesh = (mesh_topology, mesh_nodes_per_element);
+
+    // every cell of the mesh already shares one type, so every submesh's cells share that one too
+    if mesh_topology != TopologyType::Mixed {
+        return mesh;
+    }
+
+    let mut cells = cells.iter();
+    // `prepare_submeshes` rejects an empty submesh, so the mesh's own is only a fallback here
+    let Some(first) = cells.next().map(|cell| cell_types[cell]) else {
+        return mesh;
+    };
+
+    if cells.any(|cell| cell_types[cell] != first) {
+        return mesh;
+    }
+
+    (TopologyType::from(first), poly_cell_points(first))
 }
 
 /// How many entries of a cell's span in the prepared connectivity come before its point ids: the
@@ -1312,9 +1381,8 @@ impl LocalPoints {
 /// Renumber a submesh's connectivity from the mesh's point ids to its own, in place.
 fn renumber_connectivity<I: ConnectivityIndex>(
     cells: &mut [I],
-    offsets: &[usize],
     cell_types: &[CellType],
-    topology_type: TopologyType,
+    submesh_topology: TopologyType,
     submesh: &IndexList,
     points: &IndexList,
     local_points: &mut LocalPoints,
@@ -1326,8 +1394,10 @@ fn renumber_connectivity<I: ConnectivityIndex>(
     let mut position = 0;
 
     for cell in submesh.iter() {
-        let leading = leading_entries(cell_types, topology_type, cell);
-        let span = offsets[cell + 1] - offsets[cell];
+        // the extracted array's own layout, not the mesh's: `extract_connectivity` already
+        // dropped whatever the submesh's topology does not carry
+        let leading = leading_entries(cell_types, submesh_topology, cell);
+        let span = cell_span(cell_types, submesh_topology, cell);
 
         for entry in &mut cells[position + leading..position + span] {
             let point = index_as_usize(*entry)?;
@@ -1554,6 +1624,12 @@ impl fmt::Debug for TimeSeriesDataWriter {
 }
 
 impl TimeSeriesDataWriter {
+    /// The XDMF file this writer writes, as
+    /// [`TimeSeriesWriter::file_name`](crate::TimeSeriesWriter::file_name) reported it.
+    pub fn file_name(&self) -> &Path {
+        &self.xdmf_file_name
+    }
+
     /// Attach a completed step to the document.
     ///
     /// Without submeshes that is one `<Grid>` in the file's temporal collection. With them the
@@ -3201,11 +3277,17 @@ mod tests {
     const QUAD_CELLS: [u32; 15] = [5, 0, 1, 2, 3, 5, 4, 5, 6, 7, 5, 8, 9, 10, 11];
     const QUAD_OFFSETS: [usize; 4] = [0, 5, 10, 15];
 
+    /// The three cell types `QUAD_CELLS` is laid out for.
+    const QUAD_TYPES: [CellType; 3] = [CellType::Quadrilateral; 3];
+
     #[test]
     fn extract_connectivity_takes_a_contiguous_submesh() {
         let extracted = extract_connectivity(
             &QUAD_CELLS,
             &QUAD_OFFSETS,
+            &QUAD_TYPES,
+            TopologyType::Mixed,
+            TopologyType::Mixed,
             &IndexList::Contiguous { start: 1, len: 2 },
         );
 
@@ -3217,11 +3299,104 @@ mod tests {
         let extracted = extract_connectivity(
             &QUAD_CELLS,
             &QUAD_OFFSETS,
+            &QUAD_TYPES,
+            TopologyType::Mixed,
+            TopologyType::Mixed,
             &IndexList::Scattered(vec![2, 0]),
         );
 
         // gathered in the order the submesh names its cells, not in ascending order
         assert_eq!(extracted, &[5, 8, 9, 10, 11, 5, 0, 1, 2, 3]);
+    }
+
+    /// A submesh whose cells all share one type is written uniformly, so the type code the mesh's
+    /// `Mixed` connectivity prepends to each of them is dropped on the way out -- its
+    /// `<Topology>` says the same thing once.
+    #[test]
+    fn extract_connectivity_drops_the_type_codes_of_a_uniform_submesh() {
+        let contiguous = extract_connectivity(
+            &QUAD_CELLS,
+            &QUAD_OFFSETS,
+            &QUAD_TYPES,
+            TopologyType::Mixed,
+            TopologyType::Quadrilateral,
+            &IndexList::Contiguous { start: 1, len: 2 },
+        );
+
+        assert_eq!(contiguous, &[4, 5, 6, 7, 8, 9, 10, 11]);
+
+        let scattered = extract_connectivity(
+            &QUAD_CELLS,
+            &QUAD_OFFSETS,
+            &QUAD_TYPES,
+            TopologyType::Mixed,
+            TopologyType::Quadrilateral,
+            &IndexList::Scattered(vec![2, 0]),
+        );
+
+        assert_eq!(scattered, &[8, 9, 10, 11, 0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn submesh_topology_is_the_type_its_own_cells_share() {
+        let cell_types = [
+            CellType::Hexahedron,
+            CellType::Quadrilateral,
+            CellType::Quadrilateral,
+        ];
+
+        // the block of quads is uniform even though the mesh it is cut out of is not
+        assert_eq!(
+            submesh_topology(
+                &cell_types,
+                TopologyType::Mixed,
+                None,
+                &IndexList::Contiguous { start: 1, len: 2 }
+            ),
+            (TopologyType::Quadrilateral, None)
+        );
+
+        // one that spans both types stays Mixed, as does one cell of each
+        assert_eq!(
+            submesh_topology(
+                &cell_types,
+                TopologyType::Mixed,
+                None,
+                &IndexList::Contiguous { start: 0, len: 3 }
+            ),
+            (TopologyType::Mixed, None)
+        );
+        assert_eq!(
+            submesh_topology(
+                &cell_types,
+                TopologyType::Mixed,
+                None,
+                &IndexList::Scattered(vec![2, 0])
+            ),
+            (TopologyType::Mixed, None)
+        );
+
+        // a poly-cell block carries its node count, as the mesh's own topology would
+        assert_eq!(
+            submesh_topology(
+                &[CellType::Hexahedron, CellType::Edge],
+                TopologyType::Mixed,
+                None,
+                &IndexList::Contiguous { start: 1, len: 1 }
+            ),
+            (TopologyType::Polyline, Some(2))
+        );
+
+        // and a mesh that is uniform to begin with hands its own topology to every submesh
+        assert_eq!(
+            submesh_topology(
+                &[CellType::Edge; 2],
+                TopologyType::Polyline,
+                Some(2),
+                &IndexList::Contiguous { start: 0, len: 1 }
+            ),
+            (TopologyType::Polyline, Some(2))
+        );
     }
 
     #[test]
@@ -3991,7 +4166,7 @@ mod tests {
         </Grid>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
         let xdmf_file = xdmf_file_path.with_extension("xdmf2");

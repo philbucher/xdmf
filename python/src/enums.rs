@@ -85,15 +85,15 @@ impl From<PyDataStorage> for xdmf::DataStorage {
 // Declares `PyCellType`, its `From` impl and the code lookup off one variant list, so a cell type
 // added to `xdmf::CellType` is a single edit here -- and the two `const` blocks make it a required
 // one: the first pins the discriminants to the core enum's (`eq_int` exposes them to Python as the
-// raw VTK codes, and they are otherwise restated here with nothing tying the two lists together),
+// raw codes, and they are otherwise restated here with nothing tying the two lists together),
 // the second matches exhaustively over the core enum so a variant missing from the list is a
 // compile error rather than a silent gap.
 macro_rules! cell_types {
     ($($variant:ident = $code:literal,)+) => {
-        /// Cell types as defined in the VTK file format, mirroring `xdmf::CellType`. Values match
-        /// the VTK/XDMF discriminants exactly, so a raw numpy array of codes (see
-        /// `extract_cell_types`) is an equivalent, cheaper-to-produce alternative to a list of
-        /// these.
+        /// Cell types, mirroring `xdmf::CellType`. The values are the XDMF topology type codes,
+        /// *not* the VTK cell codes (a hexahedron is 9 here and 12 in VTK); they match the core
+        /// enum's discriminants exactly, so a raw numpy array of codes (see `extract_cell_types`)
+        /// is an equivalent, cheaper-to-produce alternative to a list of these.
         #[pyclass(name = "CellType", module = "xdmf", eq, eq_int, frozen, hash, from_py_object)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         #[repr(u8)]
@@ -119,7 +119,7 @@ macro_rules! cell_types {
             }
         }
 
-        /// The cell type with this VTK code, `None` if no cell type has it.
+        /// The cell type with this XDMF topology type code, `None` if no cell type has it.
         fn cell_type_from_code(code: u64) -> Option<xdmf::CellType> {
             match code {
                 $($code => Some(xdmf::CellType::$variant),)+
@@ -196,9 +196,9 @@ code_dtypes!(
     [u8, u16, u32, u64, i8, i16, i32, i64]
 );
 
-/// Accepts either a Python sequence of `CellType` values or a numpy integer array of raw VTK cell
-/// codes (copied into a `Vec` either way, since this runs once per mesh rather than per time step,
-/// unlike the attribute data path in `arrays.rs`).
+/// Accepts either a Python sequence of `CellType` values or a numpy integer array of raw XDMF
+/// topology type codes (copied into a `Vec` either way, since this runs once per mesh rather than
+/// per time step, unlike the attribute data path in `arrays.rs`).
 pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::CellType>> {
     if let Ok(list) = obj.extract::<Vec<PyCellType>>() {
         return Ok(list.into_iter().map(Into::into).collect());

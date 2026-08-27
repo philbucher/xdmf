@@ -219,8 +219,8 @@ def test_accepts_2d_point_and_vector_shapes(tmp_path):
     "dtype", [np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64]
 )
 def test_cell_types_as_numpy_codes(tmp_path, dtype):
-    # the CellType values are the raw VTK codes (Triangle == 4), so an array of codes is an
-    # equivalent, cheaper-to-produce alternative to a list of CellType
+    # the CellType values are the XDMF topology type codes, so an array of codes is an equivalent,
+    # cheaper-to-produce alternative to a list of CellType
     assert int(xdmf.CellType.Triangle) == 4
 
     file_path = tmp_path / f"codes_{np.dtype(dtype).name}"
@@ -848,3 +848,27 @@ def test_type_stubs_cover_the_module_surface():
                 name for name in dir(getattr(xdmf, node.name)) if not name.startswith("_")
             }
             assert members - stub_names(node.body) == set(), node.name
+
+
+@pytest.mark.parametrize(
+    ("given", "base"),
+    [
+        ("plain", "plain"),
+        # an XDMF extension the caller spelled out is replaced rather than doubled
+        ("spelled.xdmf2", "spelled"),
+    ],
+)
+def test_file_name_reports_what_is_written(tmp_path, given, base):
+    # a pathlib.Path both ways: `os.fspath` on the way in, so a plain str works too (every other
+    # test here passes one)
+    writer = xdmf.TimeSeriesWriter(tmp_path / given, xdmf.DataStorage.Hdf5SingleFile)
+    assert writer.file_name == tmp_path / f"{base}.xdmf2"
+
+    data_writer = writer.write_mesh(SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+    assert data_writer.file_name == writer.file_name
+
+    # the name survives close(), where a caller tends to want it for a log line
+    data_writer.close()
+    assert data_writer.file_name == writer.file_name
+    assert (tmp_path / f"{base}.xdmf2").exists()
+    assert (tmp_path / f"{base}.h5").exists()

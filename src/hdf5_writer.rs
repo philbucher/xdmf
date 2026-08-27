@@ -453,17 +453,48 @@ fn create_and_write<T: H5Type>(
     shape: Vec<usize>,
     deflate_level: u8,
 ) -> Result<String> {
-    let data_set = group
-        .new_dataset::<T>()
+    let mut builder = group.new_dataset::<T>().shuffle().deflate(deflate_level);
+
+    if let Some(chunk) = chunk_shape::<T>(&shape) {
+        builder = builder.chunk(chunk);
+    }
+
+    let data_set = builder
         .shape(shape)
-        .shuffle()
-        .deflate(deflate_level)
         .create(dataset_name)
         .map_err(hdf5_ctx("creating dataset"))?;
 
     data_set.write(data).map_err(hdf5_ctx("writing dataset"))?;
 
     Ok(data_set.name())
+}
+
+/// How many raw bytes one chunk of a dataset holds, give or take its last one.
+///
+/// Every dataset written here is compressed, so HDF5 chunks it whether or not a size is given --
+/// and the size it picks on its own is the whole dataset (up to 16M elements). That makes reading
+/// any *part* of an array cost the whole array: a submesh's `HyperSlab` has to inflate every chunk
+/// it overlaps, and a chunk this far over HDF5's 1 MB chunk cache is never held, so the next read
+/// -- the next submesh, the next time step -- inflates it again.
+///
+/// A megabyte tested well: it costs next to nothing on disk, and below it the reads stop getting
+/// faster.
+const CHUNK_BYTES: usize = 1 << 20; // 1MB
+
+/// The chunk shape for a dataset of `shape` holding [`CHUNK_BYTES`] of raw data each, or [`None`]
+/// to leave it to HDF5.
+///
+/// [`None`] for a dataset that fits one chunk anyway, and for any shape that is not flat: every
+/// dataset this module writes is flat (see `write_values`), so a shape of another rank is a
+/// future caller's, whose layout this has no business guessing at.
+fn chunk_shape<T>(shape: &[usize]) -> Option<Vec<usize>> {
+    let [len] = *shape else { return None };
+
+    // `size_of` is zero only for a zero-sized type, which no `H5Type` is; guarded because the
+    // division is not the place to find that out
+    let elements = CHUNK_BYTES.div_euclid(size_of::<T>().max(1)).max(1);
+
+    (len > elements).then(|| vec![elements])
 }
 
 // Group holding everything written for one time step, in the single-file layout. Both writing a
@@ -923,6 +954,50 @@ mod tests {
         assert!(writer.h5_files_dir.exists());
         assert!(writer.h5_files_dir.is_dir());
         assert!(writer.h5_data_file.is_none());
+    }
+
+    #[test]
+    fn chunk_shape_keeps_a_chunk_at_the_target_size() {
+        // 4-byte elements, so a 1 MiB chunk is 256Ki of them, and 8-byte elements half that
+        assert_eq!(chunk_shape::<i32>(&[10_000_000]), Some(vec![262_144]));
+        assert_eq!(chunk_shape::<f64>(&[10_000_000]), Some(vec![131_072]));
+
+        // an array that is one chunk already is left to HDF5, as is a shape of another rank --
+        // nothing here writes one, so there is no layout to guess at
+        assert_eq!(chunk_shape::<i32>(&[262_144]), None);
+        assert_eq!(chunk_shape::<i32>(&[]), None);
+        assert_eq!(chunk_shape::<i32>(&[1000, 3]), None);
+    }
+
+    /// Every dataset here is compressed and so chunked either way; left to HDF5 the chunk is the
+    /// whole array, which makes reading any part of it -- a submesh's share, at every time step --
+    /// cost all of it. See `CHUNK_BYTES`.
+    #[test]
+    fn a_dataset_past_the_target_size_is_chunked_to_it() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test");
+        let mut writer = SingleFileHdf5Writer::new(&file_name, DEFAULT_DEFLATE_LEVEL).unwrap();
+
+        let big = vec![0_u64; 200_000];
+        let small = vec![0_u64; 10];
+        writer
+            .write_connectivity(None, &big.as_slice().into())
+            .unwrap();
+        writer.write_points(None, &small.as_slice().into()).unwrap();
+        drop(writer);
+
+        let h5_file = H5File::open(file_name.with_extension("h5")).unwrap();
+
+        // 8-byte elements, so the 1 MiB target is 128Ki of them
+        assert_eq!(
+            h5_file.dataset("mesh/cells").unwrap().chunk(),
+            Some(vec![131_072])
+        );
+        // and one that fits a chunk anyway keeps whatever HDF5 picks, which is all of it
+        assert_eq!(
+            h5_file.dataset("mesh/points").unwrap().chunk(),
+            Some(vec![10])
+        );
     }
 
     #[test]

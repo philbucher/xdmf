@@ -192,7 +192,7 @@ fn write_xdmf() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -202,6 +202,33 @@ fn write_xdmf() {
     //  std::fs::copy(xdmf_file, "time_series_writer.xdmf2").unwrap();
 
     pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+}
+
+/// `file_name` names the XDMF file of the series, both before the mesh goes in and after, and
+/// replaces an XDMF extension the caller spelled out rather than doubling it.
+#[test]
+fn the_file_name_is_the_xdmf_file_that_is_written() {
+    let tmp_dir = TempDir::new().unwrap();
+
+    for (given, base) in [("plain", "plain"), ("spelled.xdmf2", "spelled")] {
+        let writer =
+            TimeSeriesWriter::new(tmp_dir.path().join(given), xdmf::DataStorage::AsciiInline)
+                .unwrap();
+
+        let xdmf_file = tmp_dir.path().join(format!("{base}.xdmf2"));
+        assert_eq!(writer.file_name(), xdmf_file);
+
+        let writer = writer
+            .write_mesh(&[0.0, 0.0, 0.0], &[] as &[u32], &[])
+            .unwrap();
+
+        assert_eq!(writer.file_name(), xdmf_file);
+        assert!(
+            xdmf_file.exists(),
+            "{} was not written",
+            xdmf_file.display()
+        );
+    }
 }
 
 #[test]
@@ -257,7 +284,7 @@ fn write_xdmf_only_mesh() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="Int" Format="XML" Precision="4">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -306,7 +333,7 @@ fn write_xdmf_only_point_mesh() {
         <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -399,7 +426,7 @@ fn write_xdmf_point_mesh() {
         <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -470,7 +497,7 @@ fn write_xdmf_f32_points() {
         <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -541,7 +568,7 @@ fn write_xdmf_integer_data() {
         <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -944,7 +971,7 @@ fn write_xdmf_with_submeshes() {
                     <Geometry GeometryType="XYZ">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_0"]</DataItem>
                     </Topology>
                     <Time Value="0.5"/>
@@ -959,7 +986,7 @@ fn write_xdmf_with_submeshes() {
                     <Geometry GeometryType="XYZ">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_0"]</DataItem>
                     </Topology>
                     <Time Value="1.5"/>
@@ -976,7 +1003,7 @@ fn write_xdmf_with_submeshes() {
                     <Geometry GeometryType="XYZ">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="2">
+                    <Topology TopologyType="Triangle" NumberOfElements="2">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
                     </Topology>
                     <Time Value="0.5"/>
@@ -991,7 +1018,7 @@ fn write_xdmf_with_submeshes() {
                     <Geometry GeometryType="XYZ">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="2">
+                    <Topology TopologyType="Triangle" NumberOfElements="2">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
                     </Topology>
                     <Time Value="1.5"/>
@@ -1037,15 +1064,15 @@ fn write_xdmf_with_submeshes() {
             </Grid>
         </Grid>
         <DataItem Name="coords_0" Dimensions="2 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0</DataItem>
-        <DataItem Name="connectivity_0" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">2 2 0 1</DataItem>
+        <DataItem Name="connectivity_0" Dimensions="2" NumberType="UInt" Format="XML" Precision="4">0 1</DataItem>
         <DataItem Name="coords_1" Dimensions="4 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0 1e0 1e0 0e0</DataItem>
-        <DataItem Name="connectivity_1" Dimensions="8" NumberType="UInt" Format="XML" Precision="4">4 0 2 1 4 1 2 3</DataItem>
+        <DataItem Name="connectivity_1" Dimensions="6" NumberType="UInt" Format="XML" Precision="4">0 2 1 1 2 3</DataItem>
         <DataItem Name="coords_2" Dimensions="4 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0 1e0 1e0 0e0</DataItem>
         <DataItem Name="connectivity_2" Dimensions="8" NumberType="UInt" Format="XML" Precision="4">4 1 2 3 2 2 0 1</DataItem>
         <DataItem Name="submesh_cells_2" Dimensions="2" NumberType="Int" Format="XML" Precision="4">2 0</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:2 submesh_cells_2"/>
     <Information Name="submesh_points" Value="0:2 0:4 0:4"/>
 </Xdmf>"#;
@@ -1141,7 +1168,7 @@ fn write_xdmf_with_submeshes_only_mesh() {
         <DataItem Name="connectivity_0" Dimensions="12" NumberType="UInt" Format="XML" Precision="4">2 2 0 1 4 0 2 1 4 1 2 3</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:3"/>
     <Information Name="submesh_points" Value="0:4"/>
 </Xdmf>"#;
@@ -1289,7 +1316,7 @@ fn write_xdmf_with_a_scattered_submesh_selects_its_points_out_of_the_mesh() {
         <DataItem Name="submesh_points_1" Dimensions="4" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/submesh_points/1</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:1"/>
 </Xdmf>"#;
 
@@ -1542,7 +1569,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0_y"]</DataItem>
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0_z"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_0"]</DataItem>
                     </Topology>
                     <Time Value="0.5"/>
@@ -1571,7 +1598,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0_y"]</DataItem>
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0_z"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_0"]</DataItem>
                     </Topology>
                     <Time Value="1.5"/>
@@ -1602,7 +1629,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1_y"]</DataItem>
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1_z"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Triangle" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
                     </Topology>
                     <Time Value="0.5"/>
@@ -1631,7 +1658,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1_y"]</DataItem>
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1_z"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Triangle" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
                     </Topology>
                     <Time Value="1.5"/>
@@ -1728,7 +1755,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
             <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="4">0 1 2</DataItem>
             <DataItem Dimensions="4" NumberType="Float" Format="HDF" Precision="8">test_output.h5:mesh/points/2</DataItem>
         </DataItem>
-        <DataItem Name="connectivity_0" Dimensions="4" NumberType="UInt" Format="HDF" Precision="4">test_output.h5:mesh/cells/0</DataItem>
+        <DataItem Name="connectivity_0" Dimensions="2" NumberType="UInt" Format="HDF" Precision="4">test_output.h5:mesh/cells/0</DataItem>
         <DataItem Name="coords_1_x" ItemType="HyperSlab" Dimensions="3" NumberType="Float" Precision="8">
             <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="4">0 1 3</DataItem>
             <DataItem Dimensions="4" NumberType="Float" Format="HDF" Precision="8">test_output.h5:mesh/points/0</DataItem>
@@ -1741,7 +1768,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
             <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="4">0 1 3</DataItem>
             <DataItem Dimensions="4" NumberType="Float" Format="HDF" Precision="8">test_output.h5:mesh/points/2</DataItem>
         </DataItem>
-        <DataItem Name="connectivity_1" Dimensions="4" NumberType="UInt" Format="HDF" Precision="4">test_output.h5:mesh/cells/1</DataItem>
+        <DataItem Name="connectivity_1" Dimensions="3" NumberType="UInt" Format="HDF" Precision="4">test_output.h5:mesh/cells/1</DataItem>
         <DataItem Name="coords_2_x" ItemType="HyperSlab" Dimensions="4" NumberType="Float" Precision="8">
             <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="4">0 1 4</DataItem>
             <DataItem Dimensions="4" NumberType="Float" Format="HDF" Precision="8">test_output.h5:mesh/points/0</DataItem>
@@ -1759,7 +1786,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
         <DataItem Name="selections_0" Dimensions="6" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/selections/0</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:1 submesh_cells_2"/>
 </Xdmf>"#;
 
@@ -1831,7 +1858,7 @@ fn write_xdmf_with_an_unordered_submesh_writes_its_share_out() {
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1_y"]</DataItem>
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1_z"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="2">
+                    <Topology TopologyType="Triangle" NumberOfElements="2">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
                     </Topology>
                     <Time Value="0.0"/>
@@ -1866,11 +1893,11 @@ fn write_xdmf_with_an_unordered_submesh_writes_its_share_out() {
             <DataItem Dimensions="3" NumberType="Int" Format="XML" Precision="4">0 1 4</DataItem>
             <DataItem Dimensions="4" NumberType="Float" Format="HDF" Precision="8">test_output.h5:mesh/points/2</DataItem>
         </DataItem>
-        <DataItem Name="connectivity_1" Dimensions="8" NumberType="UInt" Format="HDF" Precision="4">test_output.h5:mesh/cells/1</DataItem>
+        <DataItem Name="connectivity_1" Dimensions="6" NumberType="UInt" Format="HDF" Precision="4">test_output.h5:mesh/cells/1</DataItem>
         <DataItem Name="submesh_cells_1" Dimensions="2" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/submesh_cells/1</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:2 submesh_cells_1"/>
 </Xdmf>"#;
 
@@ -1927,7 +1954,7 @@ fn write_xdmf_with_submeshes_never_selects_from_a_storage_that_misreads_it() {
                     <Geometry GeometryType="XYZ">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_0"]</DataItem>
                     </Topology>
                     <Time Value="0.0"/>
@@ -1943,7 +1970,7 @@ fn write_xdmf_with_submeshes_never_selects_from_a_storage_that_misreads_it() {
                     <Geometry GeometryType="XYZ">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1"]</DataItem>
                     </Geometry>
-                    <Topology TopologyType="Mixed" NumberOfElements="1">
+                    <Topology TopologyType="Triangle" NumberOfElements="1">
                         <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
                     </Topology>
                     <Time Value="0.0"/>
@@ -1974,13 +2001,13 @@ fn write_xdmf_with_submeshes_never_selects_from_a_storage_that_misreads_it() {
         <DataItem Name="coords_0" Dimensions="2 3" NumberType="Float" Format="XML" Precision="8">
             <xi:include href="test_output.txt/points_0.txt" parse="text"/>
         </DataItem>
-        <DataItem Name="connectivity_0" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">
+        <DataItem Name="connectivity_0" Dimensions="2" NumberType="UInt" Format="XML" Precision="4">
             <xi:include href="test_output.txt/cells_0.txt" parse="text"/>
         </DataItem>
         <DataItem Name="coords_1" Dimensions="3 3" NumberType="Float" Format="XML" Precision="8">
             <xi:include href="test_output.txt/points_1.txt" parse="text"/>
         </DataItem>
-        <DataItem Name="connectivity_1" Dimensions="4" NumberType="UInt" Format="XML" Precision="4">
+        <DataItem Name="connectivity_1" Dimensions="3" NumberType="UInt" Format="XML" Precision="4">
             <xi:include href="test_output.txt/cells_1.txt" parse="text"/>
         </DataItem>
         <DataItem Name="coords_2" Dimensions="4 3" NumberType="Float" Format="XML" Precision="8">
@@ -1994,7 +2021,7 @@ fn write_xdmf_with_submeshes_never_selects_from_a_storage_that_misreads_it() {
         </DataItem>
     </Domain>
     <Information Name="data_storage" Value="Ascii"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:1 submesh_cells_2"/>
     <Information Name="submesh_points" Value="0:2 0:3 0:4"/>
 </Xdmf>"#;
