@@ -192,7 +192,7 @@ fn write_xdmf() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -284,7 +284,7 @@ fn write_xdmf_only_mesh() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="Int" Format="XML" Precision="4">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -333,7 +333,7 @@ fn write_xdmf_only_point_mesh() {
         <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -426,7 +426,7 @@ fn write_xdmf_point_mesh() {
         <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -497,7 +497,7 @@ fn write_xdmf_f32_points() {
         <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -568,7 +568,7 @@ fn write_xdmf_integer_data() {
         <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -1072,7 +1072,7 @@ fn write_xdmf_with_submeshes() {
         <DataItem Name="submesh_cells_2" Dimensions="2" NumberType="Int" Format="XML" Precision="4">2 0</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:2 submesh_cells_2"/>
     <Information Name="submesh_points" Value="0:2 0:4 0:4"/>
 </Xdmf>"#;
@@ -1168,7 +1168,7 @@ fn write_xdmf_with_submeshes_only_mesh() {
         <DataItem Name="connectivity_0" Dimensions="12" NumberType="UInt" Format="XML" Precision="4">2 2 0 1 4 0 2 1 4 1 2 3</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:3"/>
     <Information Name="submesh_points" Value="0:4"/>
 </Xdmf>"#;
@@ -1316,7 +1316,7 @@ fn write_xdmf_with_a_scattered_submesh_selects_its_points_out_of_the_mesh() {
         <DataItem Name="submesh_points_1" Dimensions="4" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/submesh_points/1</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:1"/>
 </Xdmf>"#;
 
@@ -1786,7 +1786,7 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
         <DataItem Name="selections_0" Dimensions="6" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/selections/0</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:1 submesh_cells_2"/>
 </Xdmf>"#;
 
@@ -1897,7 +1897,7 @@ fn write_xdmf_with_an_unordered_submesh_writes_its_share_out() {
         <DataItem Name="submesh_cells_1" Dimensions="2" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/submesh_cells/1</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:2 submesh_cells_1"/>
 </Xdmf>"#;
 
@@ -2021,7 +2021,7 @@ fn write_xdmf_with_submeshes_never_selects_from_a_storage_that_misreads_it() {
         </DataItem>
     </Domain>
     <Information Name="data_storage" Value="Ascii"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
     <Information Name="submesh_cells" Value="0:1 1:1 submesh_cells_2"/>
     <Information Name="submesh_points" Value="0:2 0:3 0:4"/>
 </Xdmf>"#;

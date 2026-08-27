@@ -4166,7 +4166,7 @@ mod tests {
         </Grid>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.1.3"/>
+    <Information Name="version" Value="0.2.0"/>
 </Xdmf>"#;
 
         let xdmf_file = xdmf_file_path.with_extension("xdmf2");
