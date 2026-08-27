@@ -55,10 +55,9 @@ for i in 0..10 {
 ~~~
 
 The closure scopes the step. Return `Ok` and the writer adds the step to the XDMF file; return an
-error and it drops the step, removing the heavy data already written for it. So you cannot leave a
-step half-written by forgetting to complete it, nor leave data behind that nothing references. The
-error can be one of your own: any type that `xdmf::Error` converts into works, so `?` covers both
-inside the closure, and `write_time_step` hands your error back unchanged.
+error and it drops the step, removing the heavy data already written for it. The error can be one of
+your own: any type that `xdmf::Error` converts into works, so `?` covers both inside the closure,
+and `write_time_step` hands your error back unchanged.
 
 ### Can I show parts of the mesh separately?
 
@@ -66,48 +65,29 @@ Yes. `write_mesh_with_submeshes` takes named subsets of the mesh's cells alongsi
 and each one becomes a separately selectable block in ParaView's Multi-block Inspector
 (`View -> Multi-block Inspector`). Submeshes may overlap: a cell can belong to any number of them.
 
-Give a submesh's cells either as an index list or, when it is one block of consecutive cells (as
-element blocks and material zones tend to be), as a range: `("fluid", 0..1_000_000)` rather than a
-million-entry `Vec`. Both end up as the same two numbers, and the range skips building the list.
-See `SubmeshCells` for every shape it accepts.
+Give a submesh's cells as an index list, or as a range for one block of consecutive cells:
+`("fluid", 0..1_000_000)` rather than a million-entry `Vec`. See `SubmeshCells` for every shape it
+accepts.
 
 You still write time step data over the whole mesh, exactly as above, point data over all points
-and cell data over all cells. The writer gives each submesh its share, so you can add submeshes to
-existing code without touching how it produces field data.
+and cell data over all cells. The writer gives each submesh its share.
 
-### move this paragrph
-The two HDF5 storages copy nothing per block. The writer stores the mesh's coordinates once, and
-each block's `<Geometry>` and `<Attribute>`s name the part of them, and of every field, that the
-block holds. A point on a block boundary therefore lands in the file once however many blocks touch
-it, and a step costs the same at any number of blocks and any overlap. Measured on the same mesh
-over 10 steps at 64 blocks: 27.2 MB of heavy data before, 17.2 MB now, and 65.1 MB against 20.2 MB
-when the blocks are strided rather than contiguous. You pay for it in light data (+78%) and in read
-time (about 40% longer to step through that animation, about double when the blocks are strided).
-
-The ascii and binary storages keep a copy per block instead: of its points, and of its share of
-every field. ParaView reads a selection out of those formats from the start of the array rather than
-from where it points, and says nothing about it, so the writer emits no selection there. The
-duplication is what you pay: a point on a block boundary is written once per block that touches it
-(+73% of the mesh's heavy data at 256 blocks, nothing measurable at a handful).
+What the split costs on disk depends on the storage, see [Data storage](#data-storage).
 
 To look at one submesh on its own, use the Multi-block Inspector or an `Extract Block` filter, which
-both select a block by name and hold it for the whole animation. ParaView's *other* selection list,
-`Grids` in the reader's Properties panel, does not: it lists one entry per grid in the file, which
-for a time series means one per (submesh, time step), so unchecking entries there hides a submesh at
-some steps and not at others. That list is per-step for any time series this crate writes, with
-submeshes or without.
+both select a block by name and hold it for the whole animation. Do not use the `Grids` list in the
+reader's Properties panel: it holds one entry per (submesh, time step), so unchecking entries there
+hides a submesh at some steps and not at others.
 
-See [`examples/submeshes.rs`](examples/submeshes.rs) for a complete example
-(`cargo run --example submeshes`).
+See [`examples/submeshes.rs`](examples/submeshes.rs) for a complete example.
 
 ### Which precision should I use for the floating point data?
 
 Both `f32` and `f64` work, for the mesh coordinates as well as for the point and cell data, and each
 goes into the file at the width you pass it.
 
-`f32` halves the size of the written data. For attribute data that is the whole story. For the mesh
-coordinates it comes with a caveat: on a domain far from the origin, `f32` coordinates jitter
-visibly in ParaView, because the absolute coordinate eats up the mantissa.
+`f32` halves the size of the written data. For the mesh coordinates it comes with a caveat: on a
+domain far from the origin, `f32` coordinates jitter visibly in ParaView.
 
 ### Can I write integer data?
 
@@ -116,28 +96,8 @@ id or a flag. Mesh coordinates stay floating point.
 
 Each type goes in at its own width: the file holds the type you passed, narrowed, widened or cast
 nowhere along the way. Where ParaView cannot read a type back as it was written, the writer refuses
-the write. Three cases do that, all measured against ParaView 5.13 and 6.1 (see
-`examples/paraview_smoke.rs` and `tests/paraview_smoke/`):
-
-- **`DataStorage::Binary` does not accept `i64` or `u64` at all.** ParaView's legacy Xdmf2 reader
-  walks 64-bit integers in `Format="Binary"` at the wrong stride: attribute values come back with
-  every second one replaced by zero, and 64-bit connectivity makes the reader give up
-  (`vtkXdmfReader: Failed to read data`). How large the numbers are makes no difference, so the
-  writer rejects the *type* rather than a range. Pass `i32`/`u32`, or use another storage. Earlier
-  versions narrowed to 32 bits instead, which produced a loadable file holding a different type
-  than the caller handed over.
-- **Every storage rejects `u64` above `u32::MAX`.** ParaView builds a 32-bit array for
-  `NumberType="UInt"` whatever `Precision` the light data declares, so a larger value comes back
-  truncated (ascii) or clamped to `u32::MAX` (HDF5), with no reader error to show for it. Values
-  *within* that range read back exactly at the full 8 bytes, so the cap is on the value and not on
-  the width. Use `i64` for integer data that has to exceed 32 bits; ParaView really does decode
-  `NumberType="Int"` at 64 bits. The same cap covers `u32`/`u64` connectivity, and so the mesh size
-  (see the connectivity section below).
-- **The ascii storages cap `i64` at ±2^53.** ParaView parses their integers through a `double`, so a
-  larger value comes back rounded, and `i64::MAX` comes back as `i64::MIN` with the sign flipped.
-  Values past that are rejected rather than written, so nothing lands in the output that ParaView
-  would display as a different number. `Hdf5SingleFile`/`Hdf5MultipleFiles` have no such limit and
-  read `i64` back at both extremes, which is what the error points at.
+the write instead. Which types those are depends on the storage, and on the value in one case: see
+[what ParaView reads back](#what-paraview-reads-back).
 
 If file size matters to you more than keeping your own type, pass the narrow type in the first
 place.
@@ -156,39 +116,17 @@ pair in the light data:
 | `i64` | `NumberType="Int" Precision="8"` | beyond any mesh | `Hdf5SingleFile`, `Hdf5MultipleFiles` |
 
 `u32` is the one to reach for: it indexes any mesh whose connectivity ParaView can read, in half the
-bytes of `u64`. `u64` writes the same indices at twice the width without raising the cap, since the
-cap belongs to the reader and not to the type.
-
-`i64` lifts the 2^32 cap, because `NumberType="Int"` is the one ParaView decodes at the width the
-light data declares. How far that carries is only partly measured: the reader handles `Int`/8
-connectivity (verified on ParaView 5.13 and 6.1, whose `vtkIdType` is 64 bits in both builds), but a
-mesh with an index past 2^32 needs over 100 GB of coordinates, and nobody has tried one here. Only
-the HDF5 storages could carry such a mesh anyway: `Binary` refuses 64-bit integers, and the ascii
-storages cap `i64` at 2^53.
+bytes of `u64`. `u64` writes the same indices at twice the width without raising the cap. `i64` is
+the one type that lifts it, and only the HDF5 storages take it.
 
 A mesh too large for the type it is written with is rejected up front, rather than wrapping around.
-
-### Which data storage should I use for the heavy data?
-
-xdmf keeps light and heavy data apart, and this crate offers five ways to store the heavy half:
-
-- `Ascii`: text files, one per array.
-- `AsciiInline`: the heavy data inline in the light data's xml. Neither fast nor space efficient, so
-  keep it for testing and small meshes. It is the one method that puts everything in a single file.
-- `Hdf5SingleFile`: one hdf5 file for all the heavy data. **Use this one** unless you have a reason
-  not to.
-- `Hdf5MultipleFiles`: one hdf5 file per time step, plus one for the mesh. More files to handle,
-  worth it when something reads the data while you are still writing it.
-- `Binary`: raw binary files, one per array, uncompressed. ParaView misreads 64-bit integers out of
-  this one, so the writer refuses them (see above).
 
 ## Reading
 
 `TimeSeriesReader::new` parses the whole file up front, so every read call after it is a plain,
-independent, repeatable query, with no phase to pass through first. (The writer has one: it writes
-the mesh once and irreversibly, before any time step.) The reader handles the two HDF5 storages
-(`Hdf5SingleFile`/`Hdf5MultipleFiles`) so far. Opening a file written with `Ascii`/`AsciiInline`/
-`Binary` fails there and then, rather than at the first call that reaches the heavy data.
+independent, repeatable query. The reader handles the two HDF5 storages
+(`Hdf5SingleFile`/`Hdf5MultipleFiles`) so far, and opening a file written with
+`Ascii`/`AsciiInline`/`Binary` fails right there.
 
 ~~~rs
 use xdmf::TimeSeriesReader;
@@ -227,19 +165,15 @@ for step in 0..reader.num_steps() {
 }
 ~~~
 
-`point_data_info`/`cell_data_info` report a field's shape and element type before you read it, so
-you can size a buffer and pick a type without guessing. Reading a field into a wider type than it
-was written as works (`f32` file data into a `Vec<f64>`); narrowing fails instead of dropping
-precision quietly. `read_points` follows the same rule (`f32`/`f64`, see `Coordinate`).
+`point_data_info`/`cell_data_info` report a field's shape and element type before you read it.
+Reading a field into a wider type than it was written as works (`f32` file data into a `Vec<f64>`),
+narrowing fails. `read_points` follows the same rule (`f32`/`f64`, see `Coordinate`).
 `read_topology` takes any of `u32`/`u64`/`i32`/`i64` (see `ConnectivityIndex`) and checks the
-*values* instead: what it hands back are positions in the mesh it reassembled, not the file's own
-array, so any type that holds every index works whatever the file was written as.
+*values* instead, so any type that holds every index works whatever the file was written as.
 
-A mesh written with `write_mesh_with_submeshes` reads back as the single, whole mesh it started from.
-`read_points`/`read_topology` put it back together from the submeshes' own points, cells and
-connectivity, and `points`/`cell_types`/`connectivity` come back exactly as they would from a mesh
-written without submeshes at all. `submesh_names()`/`submesh_cells()`/`submesh_points()` recover
-which mesh cells and points each submesh holds, if you want that split back too.
+A mesh written with `write_mesh_with_submeshes` reads back as the single, whole mesh it started
+from, and `submesh_names()`/`submesh_cells()`/`submesh_points()` recover which mesh cells and points
+each submesh holds.
 
 See [`tests/reader.rs`](./tests/reader.rs) for more examples.
 
@@ -254,12 +188,55 @@ to Python, taking the mesh and the data as numpy arrays it borrows rather than c
 First comparisons show smaller files and faster writes. The numbers still need summarizing here;
 until then, [this file](./tests/vtk_comparison.rs) holds the comparison.
 
+## Data storage
+
+xdmf keeps light and heavy data apart, and this crate offers five ways to store the heavy half:
+
+- `Hdf5SingleFile`: one hdf5 file for all the heavy data. **Use this one** unless you have a reason
+  not to.
+- `Hdf5MultipleFiles`: one hdf5 file per time step, plus one for the mesh. More files to handle,
+  worth it when something reads the data while you are still writing it.
+- `Ascii`: text files, one per array.
+- `AsciiInline`: the heavy data inline in the light data's xml. Neither fast nor space efficient, so
+  keep it for testing and small meshes. It is the one method that puts everything in a single file.
+- `Binary`: raw binary files, one per array, uncompressed.
+
+Only the two HDF5 storages can be read back (see [Reading](#reading)).
+
+### What a submesh costs
+
+The two HDF5 storages copy nothing per block: the mesh's arrays are written once, and each block's
+`<Geometry>` and `<Attribute>`s name its share of them. The extra light data that takes makes the
+file slower to step through in ParaView.
+
+The ascii and binary storages keep a copy per block instead: of its points, and of its share of
+every field. A point on a block boundary is written once per block that touches it.
+
+### What ParaView reads back
+
+Three types come back from ParaView's legacy Xdmf2 reader as something other than what the file
+holds, so the writer refuses them (measured against ParaView 5.13 and 6.1, see
+`examples/paraview_smoke.rs` and `tests/paraview_smoke/`):
+
+- **`Binary` does not accept `i64` or `u64` at all.** The reader walks them at the wrong stride:
+  attribute values come back with every second one replaced by zero, and 64-bit connectivity makes
+  the reader give up (`vtkXdmfReader: Failed to read data`). Pass `i32`/`u32`, or use another
+  storage.
+- **Every storage rejects `u64` above `u32::MAX`.** ParaView builds a 32-bit array for
+  `NumberType="UInt"` whatever `Precision` the light data declares, so a larger value comes back
+  truncated (ascii) or clamped to `u32::MAX` (HDF5), with no reader error to show for it. Use `i64`
+  for integer data that has to exceed 32 bits. The cap covers `u32`/`u64` connectivity too, and so
+  the mesh size (see [the connectivity table](#which-integer-type-should-the-connectivity-be)).
+- **The ascii storages cap `i64` at ±2^53.** ParaView parses their integers through a `double`, so a
+  larger value comes back rounded, and `i64::MAX` comes back as `i64::MIN` with the sign flipped.
+  `Hdf5SingleFile`/`Hdf5MultipleFiles` have no such limit.
+
 ## General information
 
 - The node ordering follows [vtk](https://www.vtk.org/wp-content/uploads/2015/04/file-formats.pdf).
-- The focus is data that ParaView can visualize, so the writer checks what you hand it instead of letting a file through that the reader would misread.
+- The focus is data that ParaView can visualize, so the writer checks what you hand it.
 - Nobody seems to develop the xdmf format any more, and [hdf-based vtk files](https://www.kitware.com/vtk-hdf-reader/) will likely supersede it. ParaView should keep reading xdmf for a while yet.
-- `DataAttribute::Tensor6`, `DataAttribute::Matrix`, and `DataAttribute::Generic` data (written as XDMF's `AttributeType="Matrix"`) needs **ParaView >= 6.1 / VTK >= 9.6** to read back correctly. Older versions misread the shape and merge every node's or cell's values into one tuple, after a change in VTK's XDMF2 reader ([Kitware/VTK@7199be5](https://github.com/Kitware/VTK/commit/7199be5854)). `Scalar`, `Vector`, and `Tensor` read back on every ParaView version.
+- `DataAttribute::Tensor6`, `DataAttribute::Matrix`, and `DataAttribute::Generic` data (written as XDMF's `AttributeType="Matrix"`) needs **ParaView >= 6.1 / VTK >= 9.6** ([Kitware/VTK@7199be5](https://github.com/Kitware/VTK/commit/7199be5854)); older versions merge every node's or cell's values into one tuple. `Scalar`, `Vector`, and `Tensor` read back on every ParaView version.
 
 <!-- <https://www.kitware.com/how-to-write-time-dependent-data-in-vtkhdf-files/>
 <https://docs.vtk.org/en/latest/design_documents/VTKFileFormats.html#vtkhdf-file-format>  -->
