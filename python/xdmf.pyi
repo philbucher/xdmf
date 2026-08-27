@@ -5,7 +5,9 @@ These bindings expose the crate's writing interface only; its `TimeSeriesReader`
 not bound, so reading an XDMF file back is Rust-only for now.
 """
 
+import os
 from collections.abc import Sequence
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
@@ -115,6 +117,10 @@ class TimeSeriesDataWriter:
         must not modify an array while a write of it is running.
         """
 
+    @property
+    def file_name(self) -> Path:
+        """The XDMF file this writer writes"""
+
     def close(self) -> None: ...
     def __enter__(self) -> "TimeSeriesDataWriter": ...
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
@@ -122,7 +128,18 @@ class TimeSeriesDataWriter:
 class TimeSeriesWriter:
     """Writer for time series data in XDMF format."""
 
-    def __init__(self, file_name: str, data_storage: DataStorage) -> None: ...
+    def __init__(self, file_name: str | os.PathLike[str], data_storage: DataStorage) -> None:
+        """Every file of the series takes its name from `file_name`, swapping the extension it
+        carries for the one that file needs. See `file_name`.
+        """
+
+    @property
+    def file_name(self) -> Path:
+        """The XDMF file this writer writes: the name it was given with the `.xdmf2` extension.
+
+        The heavy data takes the same base and its own storage's extension.
+        """
+
     def write_mesh(
         self,
         points: PointArray,

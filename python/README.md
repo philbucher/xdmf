@@ -1,10 +1,10 @@
-# xdmf — python interface
+# xdmf - python interface
 
 Python bindings for the [xdmf](https://github.com/philbucher/xdmf) crate, built with
-[pyo3](https://pyo3.rs)/[maturin](https://www.maturin.rs): write meshes with time-series data as XDMF
-files, to be read and visualized by ParaView or VisIt.
+[pyo3](https://pyo3.rs)/[maturin](https://www.maturin.rs): write meshes with time-series data as
+XDMF files, for ParaView or VisIt to read.
 
-There are no wheels on PyPI yet, so it is built from the repository:
+No wheels on PyPI yet, so build from the repository:
 
 ~~~sh
 pip install ./python
@@ -12,9 +12,9 @@ pip install ./python
 
 ## Example
 
-The mesh and the data are passed as numpy arrays, which are borrowed directly — nothing is copied on
-the way into the file, and each array is written at the dtype it is passed in (`float64`, `float32`,
-`uint64`, `uint32`, `int64`, `int32`), just like in Rust:
+Pass the mesh and the data as numpy arrays. The bindings borrow them rather than copy them, and
+write each one at the dtype you pass (`float64`, `float32`, `uint64`, `uint32`, `int64`, `int32`),
+as in Rust:
 
 ~~~py
 import numpy as np
@@ -38,47 +38,51 @@ with writer.write_mesh(coords, connectivity, cell_types) as data_writer:
         )
 ~~~
 
+## Submeshes
+
+`write_mesh_with_submeshes` splits the mesh into named blocks, which ParaView lists in its
+Multi-block Inspector (`View -> Multi-block Inspector`) and shows or hides one at a time. Each
+`(name, cells)` pair names the cells belonging to one block, as a `range`, a numpy integer array or
+a sequence of `int`:
+
+~~~py
+writer = xdmf.TimeSeriesWriter("xdmf_blocks", xdmf.DataStorage.Hdf5SingleFile)
+
+with writer.write_mesh_with_submeshes(
+    coords, connectivity, cell_types, [("line", range(0, 1)), ("triangle", [1])]
+) as data_writer:
+    # the data still covers the whole mesh, and each block gets its share
+    data_writer.write_time_step(
+        "0.0",
+        point_data=[("point_data", xdmf.DataAttribute.VECTOR, np.zeros(9))],
+        cell_data=[("material", xdmf.DataAttribute.SCALAR, np.array([10.0, 20.0]))],
+    )
+~~~
+
+Give a block of consecutive cells as `range(start, stop)` to save storage space.
+
+Blocks may overlap, every cell has to belong to at least one, and no two may share a name.
+
 `tests/test_writer.py` has many more examples, including every failure case.
 
 ## Good to know
 
-- Points and vector data may also be shaped `(N, 3)`, the natural numpy layout — a C-contiguous
-  `(N, 3)` array is the same memory as the flat one, so no `reshape` is needed. Points are the one
-  array whose shape is checked: a last dimension that is not 3 is rejected, so the transposed
-  `(3, N)` layout (separate x/y/z rows, which is C-contiguous too) raises instead of being read as
-  interleaved coordinates. `cell_types` may be a numpy array of the raw VTK cell type codes, in any
-  integer dtype, instead of a list.
-- `write_mesh_with_submeshes(points, connectivity, cell_types, submeshes)` splits the mesh into
-  named, independently selectable submeshes for ParaView's Multi-block Inspector — `submeshes` is a
-  sequence of `(name, cells)` pairs, `cells` a numpy integer array or a plain sequence of `int`
-  naming which cells belong to it. A submesh that is one block of consecutive cells is better given
-  as a `range` — `("fluid", range(0, 1_000_000))` costs the two numbers it is stored as, where the
-  equivalent list would first build a million Python ints. Any other `range` (a step of 2, say) is
-  read as the plain sequence it also is. Point and cell data are still passed over the whole mesh in
-  `write_time_step`; the writer slices each submesh's share. Submeshes may overlap, but every cell
-  must belong to at least one, and no two names may be the same — compared verbatim, so names that
-  differ in case alone are two submeshes. A name only ever labels a `<Grid>`, never a file (the
-  heavy data is numbered), so it may hold any printable character.
-- A time step is all-or-nothing, as in Rust: it is written when every attribute of it was accepted,
-  and discarded — leaving no heavy data behind and the time still available — as soon as one is not.
-- The data writer is a context manager, so the HDF5 file is closed at the end of the `with` block
-  instead of whenever the object happens to be garbage-collected. `close()` does the same explicitly.
-- Writes release the GIL, so other Python threads keep running — and several threads writing their own
-  file do so in parallel. The flip side of that, combined with the arrays being borrowed rather than
-  copied, is that another thread must not modify an array while a write of it is running.
-  Single-threaded code cannot hit this, since `write_mesh`/`write_time_step` return before the next
-  statement runs.
-- A rejected `write_mesh` leaves the writer usable, so a dtype or shape you can fix can simply be
-  retried; only a *successful* call consumes it, matching the Rust API.
-- `DataStorage`, `DataAttribute` and `CellType` are frozen, comparable and hashable, so they work as
-  `dict` keys and in sets.
-- Failures are the Python exception matching what went wrong: `ValueError` for anything the mesh or
-  the step does not accept, `OverflowError` for an integer the chosen storage cannot represent (see
-  the [integer data](https://github.com/philbucher/xdmf#can-integer-data-be-written) section,
-  whose limits apply here too),
-  `OSError` for a failing write, and `RuntimeError` for using a consumed writer.
-- These bindings are a **writing** interface only. The crate's `TimeSeriesReader` is deliberately
-  not bound: reading is Rust-only for now, and Python code that needs to read an XDMF file back is
-  better served by `h5py` on the heavy data plus an XML parser on the `.xdmf2` file, or by ParaView's
-  own `paraview.simple`.
-- Type stubs (`xdmf.pyi`) ship with the package, so editors and type checkers see the full interface.
+- Points and vector data may also be shaped `(N, 3)`: a C-contiguous `(N, 3)` array is the same
+  memory as the flat one, so it needs no `reshape`. Points are the one array whose shape is
+  checked, so the transposed `(3, N)` layout raises instead of passing as interleaved coordinates.
+- `cell_types` also takes a numpy array of cell type codes, in any integer dtype. Those codes are
+  the `CellType` values, i.e. the XDMF topology types and *not* the VTK cell codes: a hexahedron is
+  9 here and 12 in VTK. (The node ordering *within* a cell does follow VTK.)
+- The file name is a `str` or any `os.PathLike`, and `writer.file_name` hands back the
+  `pathlib.Path` it writes.
+- A time step is all-or-nothing, as in Rust: one rejected attribute drops the whole step, heavy
+  data and all, and leaves the time free again.
+- The data writer is a context manager, so the `with` block closes the HDF5 file instead of the
+  garbage collector. `close()` does the same.
+- Writes release the GIL, so other threads keep running and threads writing their own file write in
+  parallel. The arrays are borrowed, so no thread may modify one mid-write.
+- A rejected `write_mesh` leaves the writer usable, so fix the dtype or shape and retry. Only a
+  successful call consumes it, as in Rust.
+- `DataStorage`, `DataAttribute` and `CellType` are frozen, comparable and hashable, so they work
+  as `dict` keys and in sets.
+- Type stubs (`xdmf.pyi`) ship with the package.

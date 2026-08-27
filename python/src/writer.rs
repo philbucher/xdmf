@@ -12,6 +12,8 @@
 //! anyway -- so the Python method takes all attributes of a step at once and runs the closure
 //! itself, over arrays it borrows without copying.
 
+use std::path::{Path, PathBuf};
+
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 use crate::{
@@ -50,22 +52,37 @@ macro_rules! dispatch_dtype {
 #[derive(Debug)]
 pub struct PyTimeSeriesWriter {
     inner: Option<xdmf::TimeSeriesWriter>,
+    // kept as its own field rather than read off `inner`, so it survives `write_mesh` taking that
+    file_name: PathBuf,
 }
 
 #[pymethods]
 impl PyTimeSeriesWriter {
     #[new]
-    fn new(file_name: &str, data_storage: PyDataStorage) -> PyResult<Self> {
+    fn new(file_name: PathBuf, data_storage: PyDataStorage) -> PyResult<Self> {
         let inner =
-            xdmf::TimeSeriesWriter::new(file_name, data_storage.into()).map_err(to_py_err)?;
-        Ok(Self { inner: Some(inner) })
+            xdmf::TimeSeriesWriter::new(&file_name, data_storage.into()).map_err(to_py_err)?;
+        let file_name = inner.file_name().to_path_buf();
+
+        Ok(Self {
+            inner: Some(inner),
+            file_name,
+        })
+    }
+
+    /// The XDMF file this writer writes: the name it was given, with the `.xdmf2` extension on
+    /// it. The heavy data takes the same base and its own storage's extension.
+    #[getter]
+    fn file_name(&self) -> &Path {
+        &self.file_name
     }
 
     /// Write the mesh, returning the writer for the time step data.
     ///
     /// `points` is a numpy `float64`/`float32` array of x/y/z coordinates, `connectivity` a numpy
     /// `uint64`/`uint32`/`int64`/`int32` array of point indices, and `cell_types` either a sequence
-    /// of `xdmf.CellType` or a numpy array of raw VTK cell type codes.
+    /// of `xdmf.CellType` or a numpy array of the XDMF topology type codes those values have
+    /// -- *not* the VTK cell codes, which differ (a hexahedron is 9 here and 12 in VTK).
     ///
     /// Both arrays are stored at the dtype they are passed in, so the connectivity dtype is what
     /// caps the mesh size. Their shape only has to be C-contiguous -- the natural `(N, 3)` layout
@@ -108,7 +125,7 @@ impl PyTimeSeriesWriter {
             )
         })?;
 
-        Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
+        Ok(data_writer(inner))
     }
 
     /// Write the mesh split into named submeshes, returning the writer for the time step data, as
@@ -161,7 +178,7 @@ impl PyTimeSeriesWriter {
             )
         })?;
 
-        Ok(PyTimeSeriesDataWriter { inner: Some(inner) })
+        Ok(data_writer(inner))
     }
 }
 
@@ -179,15 +196,32 @@ fn extract_mesh_args<'py>(
     Ok((points, connectivity, cell_types))
 }
 
+/// Wraps the core crate's data writer, taking the file name off it while it is still there to
+/// take it off -- `close()` drops the writer, and the name should outlive that.
+fn data_writer(inner: xdmf::TimeSeriesDataWriter) -> PyTimeSeriesDataWriter {
+    PyTimeSeriesDataWriter {
+        file_name: inner.file_name().to_path_buf(),
+        inner: Some(inner),
+    }
+}
+
 /// Writer for the per-step data, obtained from `TimeSeriesWriter.write_mesh`.
 #[pyclass(name = "TimeSeriesDataWriter")]
 #[derive(Debug)]
 pub struct PyTimeSeriesDataWriter {
     inner: Option<xdmf::TimeSeriesDataWriter>,
+    // as on `PyTimeSeriesWriter`, so `close()` does not take the name with it
+    file_name: PathBuf,
 }
 
 #[pymethods]
 impl PyTimeSeriesDataWriter {
+    /// The XDMF file this writer writes, as `TimeSeriesWriter.file_name` reported it.
+    #[getter]
+    fn file_name(&self) -> &Path {
+        &self.file_name
+    }
+
     /// Write the point and cell data of one time step.
     ///
     /// `time` is the time as a string, leaving its formatting to the caller. `point_data` and
