@@ -70,42 +70,42 @@ jobs:
       shell: bash
       run: |
         if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --locked --all-targets -- -D warnings
         else
-          cargo clippy --all-targets --no-default-features -- -D warnings
+          cargo clippy --locked --all-targets --no-default-features -- -D warnings
         fi
 
     - name: Run tests (debug mode)
       shell: bash
       run: |
         if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
-          cargo nextest run
+          cargo nextest run --locked
         else
-          cargo nextest run --no-default-features
+          cargo nextest run --locked --no-default-features
         fi
 
     - name: Run tests (release mode)
       shell: bash
       run: |
         if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
-          cargo nextest run --release
+          cargo nextest run --locked --release
         else
-          cargo nextest run --no-default-features --release
+          cargo nextest run --locked --no-default-features --release
         fi
 
     - name: Run doc tests # nextest does not support doc tests, thus running them separately
       shell: bash
       run: |
         if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
-          cargo test --doc
+          cargo test --locked --doc
         else
-          cargo test --no-default-features --doc
+          cargo test --locked --no-default-features --doc
         fi
 
     - name: Check Docs # docs need dependencies to be installed, thus checking them after installing dependencies
       if: ${{ matrix.hdf5 == 'YES' }}
       shell: bash
-      run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
+      run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --locked --no-deps --document-private-items
 
   python-bindings:
     runs-on: ubuntu-latest
@@ -144,9 +144,9 @@ jobs:
     - name: Run clippy # not covered by the job above, which builds the core crate only
       run: |
         if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
-          cargo clippy -p xdmf-python --all-targets -- -D warnings
+          cargo clippy --locked -p xdmf-python --all-targets -- -D warnings
         else
-          cargo clippy -p xdmf-python --all-targets --no-default-features -- -D warnings
+          cargo clippy --locked -p xdmf-python --all-targets --no-default-features -- -D warnings
         fi
 
     - name: Install the bindings

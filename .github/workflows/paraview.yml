@@ -47,9 +47,9 @@ jobs:
     - name: Build fixture-writer example
       run: |
         if [[ "${{ matrix.storage }}" == *Hdf5* ]]; then
-          cargo build --example paraview_smoke
+          cargo build --locked --example paraview_smoke
         else
-          cargo build --example paraview_smoke --no-default-features
+          cargo build --locked --example paraview_smoke --no-default-features
         fi
 
     - name: Write ParaView smoke-test fixture

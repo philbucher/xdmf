@@ -1,4 +1,3 @@
-Cargo.lock
 /target
 tests/xdmf_vtk_comparison
 /submeshes_example

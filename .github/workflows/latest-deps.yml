@@ -1,0 +1,73 @@
+name: Latest dependencies
+
+permissions:
+  contents: read
+
+# Committing `Cargo.lock` gives every other job one known dependency graph -- which also means a
+# dependency releasing a breaking version stops showing up on whichever pull request happens to run
+# next. This job is that canary instead: it throws the lockfile away, resolves everything to the
+# newest compatible versions, and runs the suite. A failure here is about the ecosystem, not about
+# the commit it ran on.
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays, 05:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  latest-deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    name: "Testing against the newest compatible dependencies (hdf5: ${{ matrix.hdf5 }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        hdf5: [YES, NO]
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: clippy
+
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest
+
+    - name: Install HDF5 (apt)
+      if: ${{ matrix.hdf5 == 'YES' }}
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get remove -y man-db || true # to speed up
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libhdf5-dev
+
+    - name: Update every dependency # deliberately uncached, and no `--locked` in the steps below
+      run: cargo update --verbose
+
+    - name: Run clippy
+      run: |
+        if [ "${{ matrix.hdf5 }}" = "YES" ]; then
+          cargo clippy --all-targets -- -D warnings
+        else
+          cargo clippy --all-targets --no-default-features -- -D warnings
+        fi
+
+    - name: Run the tests
+      run: |
+        if [ "${{ matrix.hdf5 }}" = "YES" ]; then
+          cargo nextest run
+          cargo test --doc
+        else
+          cargo nextest run --no-default-features
+          cargo test --no-default-features --doc
+        fi

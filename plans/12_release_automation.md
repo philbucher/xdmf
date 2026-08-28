@@ -63,8 +63,7 @@ It works, and I would not pick it:
 - **The tag's tree is not what was published**, unless you force-move the tag — and force-moving a
   tag a GitHub Release already points at is exactly the kind of thing that later makes
   `cargo install --git … --tag v0.3.0` build the *previous* version.
-- **`cargo publish` needs `--allow-dirty`** (and `--locked` becomes impossible, since the lockfile is
-  stale the moment `Cargo.toml` changes), so the one command whose job is to package a known tree
+- **`cargo publish` needs `--allow-dirty`**, so the one command whose job is to package a known tree
   gets told to ignore that it does not know the tree.
 - **The bot has to push to `main`** — a protected branch says no, and a second release racing a merge
   gets interesting.
@@ -89,7 +88,7 @@ Same manual release step, one extra click before it, and none of the four proble
    registries.
 
 Why this is the better shape: the tag points at exactly the tree that gets published, no tag is ever
-moved, `cargo publish --locked` stays honest, and a failed release is retried by cutting the next
+moved, `cargo publish` packages a tree it knows, and a failed release is retried by cutting the next
 patch version rather than by unwinding a bot commit. It is also what you already do by hand — the
 button only replaces the manual `Cargo.toml` edit, and step 0 shrinks that edit to one line anyway.
 
@@ -100,11 +99,11 @@ button only replaces the manual `Cargo.toml` edit, and step 0 shrinks that edit 
 | Job | What it does | Why it is a separate job |
 |-----|--------------|--------------------------|
 | `version-check` | tag vs. `cargo metadata` version (exists today) | catches "tagged without bumping" in 20 s, before anything builds |
-| `crate-dry-run` | `cargo publish -p xdmf --dry-run --locked` on a runner with `libhdf5-dev` | catches a wrong `include` list, a missing readme, a stale lockfile — the mistakes that only surface when packaging |
+| `crate-dry-run` | `cargo publish -p xdmf --dry-run` on a runner with `libhdf5-dev` (done) | catches a wrong `include` list, a missing readme — the mistakes that only surface when packaging |
 | `wheels` | five native wheels, each installed and pytested (exists) | the platform matrix |
 | `sdist` | build the sdist, then build and import a wheel *from* it (exists, as the reusable `sdist.yml` that `rust.yml` calls too) | the include lists are load-bearing for the sdist |
 | `publish-pypi` | `pypa/gh-action-pypi-publish`, environment `pypi`, `id-token: write` (exists) | irreversible, so it needs everything above green |
-| `publish-crates-io` | `rust-lang/crates-io-auth-action@v1` → `cargo publish -p xdmf --locked`, environment `crates-io`, `id-token: write` | same, and the OIDC token is scoped to this job |
+| `publish-crates-io` | `rust-lang/crates-io-auth-action@v1` → `cargo publish -p xdmf`, environment `crates-io`, `id-token: write` (done) | same, and the OIDC token is scoped to this job |
 
 Notes that matter:
 
@@ -157,7 +156,13 @@ No secrets, no tokens, nothing to rotate.
 ## Work items, in order
 
 1. ~~Step 0: derive the version in the 13 expected-XML sites.~~ Done.
-2. `release.yml`: add `crate-dry-run` and `publish-crates-io` (the rename is done).
+2. ~~`release.yml`: add `crate-dry-run` and `publish-crates-io`.~~ Done — `publish` became
+   `publish-pypi`, and both publishes wait on `crate-dry-run` too, so a release is all-or-nothing
+   across the two registries. `Cargo.lock` is now committed and every CI cargo command passes
+   `--locked` -- a library's lockfile is ignored by its consumers, so this costs them nothing, while
+   the wheels (which *are* binaries) become reproducible from the tag, and `cargo package` was
+   shipping a lockfile into the crate and the sdist either way. `latest-deps.yml` runs
+   `cargo update` weekly to keep the canary a lockfile otherwise removes.
 3. `prepare-release.yml`: the `workflow_dispatch` bump.
 4. The one-time registry/environment setup (yours to click).
 5. First run, `0.2.1` or `0.3.0`: it publishes a new crates.io version *and* the first PyPI release,
