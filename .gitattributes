@@ -1,0 +1,9 @@
+# LF in the repository and in every checkout: the tests compare raw string literals against files
+# the crate writes with `\n`, so a CRLF checkout would fail the suite on Windows.
+* text=auto eol=lf
+
+# Collapse the lockfile in reviews, and keep it out of the language statistics.
+Cargo.lock linguist-generated=true
+
+# Git's builtin Rust funcname pattern, so diff hunk headers name the enclosing item.
+*.rs diff=rust
