@@ -163,7 +163,18 @@ No secrets, no tokens, nothing to rotate.
    the wheels (which *are* binaries) become reproducible from the tag, and `cargo package` was
    shipping a lockfile into the crate and the sdist either way. `latest-deps.yml` runs
    `cargo update` weekly to keep the canary a lockfile otherwise removes.
-3. `prepare-release.yml`: the `workflow_dispatch` bump.
+3. `prepare-release.yml`: the `workflow_dispatch` bump. **Written, then dropped as not worth its
+   overhead** -- step 0 already made the bump a one-line edit to `Cargo.toml`, so the version is
+   bumped by hand in the release pull request, as it was for `v0.1.0` through `v0.2.1`. What the
+   workflow would have added over that one line is the checks around it (a malformed version, a
+   version already on crates.io) and one less manual step; `version-check` in `release.yml` already
+   catches the failure that actually matters, a tag disagreeing with the tree. Worth revisiting only
+   if releases become frequent enough that the ceremony grates -- and the ecosystem options are then
+   `cargo-release` (one local command: bump, commit, tag, push, publish) or `release-plz` (a
+   permanently-open release pull request, version derived from conventional commits, publishes on
+   merge), rather than a bespoke workflow. Note for either: a tag pushed with `GITHUB_TOKEN`
+   triggers no workflow, so whatever creates the tag must also do the publishing, or hold a PAT.
+
 4. The one-time registry/environment setup (yours to click).
 5. First run, `0.2.1` or `0.3.0`: it publishes a new crates.io version *and* the first PyPI release,
    so expect to iron out the trusted-publisher configuration on that run rather than the plumbing.

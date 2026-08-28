@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "xdmf"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "float-cmp",
  "fs_extra",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "xdmf-python"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "numpy",
  "pyo3",

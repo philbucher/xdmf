@@ -139,6 +139,8 @@ jobs:
       run: ls -l dist
 
     - uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        skip-existing: true # a failure halfway leaves some of the files up; a re-run lands the rest
 
   publish-crates-io:
     if: startsWith(github.ref, 'refs/tags/v')
