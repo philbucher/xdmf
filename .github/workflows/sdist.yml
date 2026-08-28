@@ -1,0 +1,51 @@
+name: Sdist
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    name: "Building a wheel from the sdist"
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.x"
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1 # the build below runs on the host, not in a container
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sdist" # also caches the from-source HDF5, which builds under target/
+
+    - name: Build the sdist
+      uses: PyO3/maturin-action@v1
+      with:
+        working-directory: python
+        command: sdist
+        args: --out dist
+
+    - name: Build a wheel from the sdist # it has to carry the core crate, which lives above it
+      env:
+        # pip builds the sdist in a temporary directory, so point cargo back at the cached target
+        # directory -- what that saves is the from-source HDF5, whose crate is path-independent.
+        CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends cmake
+        python -m pip install --upgrade pip
+        python -m pip install ./python/dist/*.tar.gz --config-settings=build-args='--features pyo3/extension-module,hdf5-static'
+        python -c "import xdmf; assert xdmf.is_hdf5_enabled()"
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: sdist
+        path: python/dist/*.tar.gz

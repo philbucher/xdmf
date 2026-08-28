@@ -4,7 +4,15 @@ Python bindings for the [xdmf](https://github.com/philbucher/xdmf) crate, built 
 [pyo3](https://pyo3.rs)/[maturin](https://www.maturin.rs): write meshes with time-series data as
 XDMF files, for ParaView or VisIt to read.
 
-No wheels on PyPI yet, so build from the repository:
+~~~sh
+pip install xdmf
+~~~
+
+One `abi3` wheel per platform (Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64) covers
+every Python >= 3.9, and carries its own HDF5 -- `xdmf.is_hdf5_enabled()` says whether a given
+build has it.
+
+To build from the repository instead, which links a *system* HDF5:
 
 ~~~sh
 pip install ./python

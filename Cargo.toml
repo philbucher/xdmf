@@ -3,7 +3,7 @@ members = ["python"]
 
 [workspace.package]
 edition = "2024"
-version = "0.2.0"
+version = "0.2.1"
 
 [workspace.lints.clippy]
 allow_attributes = "warn"
@@ -103,6 +103,7 @@ authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]
 description = "Small library to write XDMF files for Paraview"
 edition.workspace = true
+include = ["/src", "/README.md", "/LICENSE"]
 keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
 license = "MIT"
 name = "xdmf"
@@ -112,6 +113,9 @@ version.workspace = true
 [features]
 default = ["hdf5"]
 hdf5 = ["dep:hdf5"]
+# Builds HDF5 (and the zlib it needs for deflate) from source and links it statically, instead of
+# looking for a system library. Needs a C compiler and CMake; this is what the Python wheels use.
+hdf5-static = ["hdf5", "hdf5/static", "hdf5/zlib"]
 
 [dependencies]
 hdf5 = { package = "hdf5-metno", version = "0.14.0", optional = true }

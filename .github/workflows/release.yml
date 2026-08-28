@@ -1,0 +1,116 @@
+name: Release
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch: # to build (but not publish) the wheels of a branch
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-check: # a tag may not claim a version the crate does not have
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Compare the tag against the workspace version
+      run: |
+        crate_version=$(cargo metadata --format-version 1 --no-deps \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+        tag_version="${GITHUB_REF_NAME#v}"
+        echo "tag: $tag_version, crate: $crate_version"
+        if [ "$tag_version" != "$crate_version" ]; then
+          echo "::error::tag '$GITHUB_REF_NAME' does not match the crate version '$crate_version'"
+          exit 1
+        fi
+
+  wheels:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+
+    name: "Wheel for ${{ matrix.platform }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every wheel is built natively -- the statically linked HDF5 is compiled from source, and
+          # cross-compiling a CMake project (whose configure step runs its own probes) is the kind of
+          # trouble that native aarch64 runners make unnecessary.
+          - { platform: "linux-x86_64",   runner: ubuntu-24.04,     target: x86_64,  manylinux: "2_28" }
+          - { platform: "linux-aarch64",  runner: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
+          # `manylinux` is spelled out everywhere because the action reads it unconditionally;
+          # `auto` is its own default and means nothing outside the Linux jobs.
+          - { platform: "macos-x86_64",   runner: macos-15-intel,   target: x86_64,  manylinux: auto }
+          - { platform: "macos-aarch64",  runner: macos-15,         target: aarch64, manylinux: auto }
+          - { platform: "windows-x86_64", runner: windows-latest,   target: x64,     manylinux: auto }
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-python@v7
+      with:
+        # Any version >= 3.9 exercises the same wheel: what makes the >= 3.9 claim true is abi3,
+        # which is a build-time property of the extension module and not of the interpreter here.
+        python-version: "3.x"
+
+    - name: Build the wheel
+      uses: PyO3/maturin-action@v1
+      with:
+        working-directory: python
+        target: ${{ matrix.target }}
+        manylinux: ${{ matrix.manylinux }}
+        # `abi3-py39` (see `python/Cargo.toml`) makes this one wheel cover every CPython >= 3.9, and
+        # `hdf5-static` builds HDF5 into it, so `pip install xdmf` needs no system library.
+        args: --release --out dist --features pyo3/extension-module,hdf5-static
+        sccache: "true"
+        before-script-linux: | # the manylinux image has a compiler, but not CMake
+          if command -v dnf > /dev/null; then dnf install -y cmake; else yum install -y cmake; fi
+      env:
+        # Both macOS runners are newer than this; the wheels should not require the runner's OS.
+        MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+    - name: Install the wheel and run the tests against it
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest h5py numpy
+        python -m pip install --no-index --find-links python/dist xdmf
+        python -c "import xdmf; assert xdmf.is_hdf5_enabled(), 'the wheel was built without HDF5'"
+        cd python && python -m pytest tests
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: wheel-${{ matrix.platform }}
+        path: python/dist/*.whl
+
+  sdist: # the same build a pull request runs, see `sdist.yml`
+    uses: ./.github/workflows/sdist.yml
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ version-check, wheels, sdist ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    environment: pypi # holds the trusted-publisher configuration
+    permissions:
+      id-token: write # PyPI trusted publishing (OIDC), instead of a long-lived API token
+
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        path: dist
+        merge-multiple: true
+
+    - name: List what is about to be published
+      run: ls -l dist
+
+    - uses: pypa/gh-action-pypi-publish@release/v1
