@@ -299,9 +299,10 @@ them. Revisit deliberately, not by drift.
   manylinux image, links nothing but `libc`/`libm`/`libgcc_s`, takes ~2 min, and produces a 2.5 MB
   wheel whose output is byte-for-byte the same shape as before (gzip+shuffle, superblock 2, read
   back by h5py; vendored HDF5 is 2.2.0, and all 275 Rust tests and 86 pytest tests pass against it).
-  The PyPI name `xdmf` is free. **Open:** macOS and Windows are unverified until the first CI run,
-  and publishing needs the trusted publisher plus a `pypi` environment on the repository, so the
-  first `v*` tag is the real test. The reader bindings (M5 first) and Part 3 (the pyvista re-run in
+  The PyPI name `xdmf` is free. **Then released:** all five platforms built green (each wheel builds
+  its own HDF5, installs itself and passes pytest, macOS and Windows included, so the non-HDF5
+  fallback wheel is unnecessary today), and the `v0.2.1` tag published `pip install xdmf` to PyPI
+  through trusted publishing -- verified from a clean venv on Python 3.12. The reader bindings (M5 first) and Part 3 (the pyvista re-run in
   the wheel-installed configuration) are untouched.
 
 ## Sub-plans
@@ -439,6 +440,6 @@ Rules for the milestones below:
 |------|-----------|------------|
 | `quick-xml` cannot serialize a `Grid` fragment at a chosen indent depth | M2 | Spike this before committing to the design; fallback is manual indentation. See `02_performance.md`. |
 | `quick-xml` + serde `#[serde(flatten)]` on `DataContent` does not round-trip on deserialize — now with a third variant, the nested `Items(Vec<DataItem>)` a selection carries | M5 | Test deserialization of one `DataItem` per shape, selections included, on day one; fallback is a hand-rolled event-loop parser for `DataItem` only. |
-| Static HDF5 build in manylinux/macOS/Windows wheels | M6 | Spike Linux-only first, before building out the platform matrix. **Linux measured 2026-08-28 and fine; macOS/Windows are written but unverified until the first CI run, with the non-HDF5 wheel as the documented fallback.** |
+| Static HDF5 build in manylinux/macOS/Windows wheels | M6 | Spike Linux-only first, before building out the platform matrix. **Resolved 2026-08-28: Linux measured locally, then all five platforms built and self-tested green and `v0.2.1` shipped to PyPI, so the non-HDF5 fallback wheel stays unused.** |
 | `hdf5::File` may not be `Send`, blocking GIL release | M6 | Check early; if it is not, the Python HDF5 path keeps the GIL and only the other backends release it. |
 | ParaView misreading a new XML construct (hyperslab block references) | M4 | Two-stage plan with an explicit go/no-go: ship duplication first, add the hyperslab fast path only after CI proves it. |

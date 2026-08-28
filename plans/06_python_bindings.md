@@ -394,11 +394,13 @@ pattern).
 >    only, which is what ParaView needs. The whole Rust suite (275 tests) passes against the static
 >    build, and the 86 pytest tests pass against the built wheel in a clean venv.
 >
-> **Not verified here:** macOS and Windows, which have no local equivalent — the matrix is written
-> but its first CI run is the check. Both fall back to a non-HDF5 wheel per the plan below if the
-> static build turns out not to work there. Neither is `pip install xdmf` live: the name is free on
-> PyPI (checked), and the first `v*` tag both publishes it and needs the trusted publisher plus a
-> `pypi` environment configured on the repository first.
+> **All five platforms verified in CI 2026-08-28**, then released: `v0.2.1` published
+> `pip install xdmf` to PyPI through trusted publishing. Every wheel builds its own static HDF5,
+> installs itself and passes the pytest suite -- Linux x86_64 2.52 MB, Linux aarch64 2.51 MB,
+> macOS x86_64 2.14 MB, macOS arm64 1.92 MB, Windows x86_64 3.74 MB, sdist 0.14 MB. So the non-HDF5
+> fallback wheel is not needed on any platform today. Of the 6.7 MB uncompressed extension module,
+> 3.26 MB is HDF5 code against a 3.6 MB system `libhdf5.so` -- the wheel is small because it is a
+> zip, not because the library is trimmed.
 
 ### Build configuration
 
