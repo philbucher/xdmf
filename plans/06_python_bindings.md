@@ -11,8 +11,10 @@
 > fixes landed with the M4 work; 7 (the unchecked multiply in the core crate) was deferred behind
 > it and done on this branch afterwards, where 6 was also reconsidered (an `i64` fix was written,
 > then reverted back to `u8` to avoid duplicating the core's own bound and message).**
-> **Part 2 (wheels on PyPI) and the reader bindings are untouched**, as is Part 3 (the pyvista
-> re-run). This landed ahead of its place in the milestone order, so the ordering note below still
+> **Status (2026-08-28): Part 2 (wheels on PyPI) is implemented** -- the `hdf5-static` feature, the
+> abi3 build, `.github/workflows/release.yml` and the metadata, with the Linux spike measured; see
+> Part 2's own status note. **The reader bindings and Part 3 (the pyvista re-run) are untouched.**
+> Part 1 landed ahead of its place in the milestone order, so the ordering note below still
 > holds in reverse: M2/M4/M5 will each change the Rust API this layer wraps, and this layer then has
 > to follow.
 
@@ -369,6 +371,35 @@ pattern).
 
 ## Part 2 — Wheels on PyPI
 
+> **Status (2026-08-28): implemented as planned, and the Linux spike below is measured.** What
+> landed: `hdf5-static` on the core crate (`hdf5/static` + `hdf5/zlib`, i.e. HDF5 *and* zlib built
+> from source), passed through by an `hdf5-static` feature on the bindings crate whose `hdf5`
+> feature is now a passthrough too — so `--no-default-features` produces the fallback wheel, and
+> `is_hdf5_enabled()`'s `false` branch is reachable at last (the `python-bindings` CI job runs both
+> ways). `pyo3/abi3-py39`, `.github/workflows/release.yml` (tags + manual, five native runners, an
+> sdist, publish on a tag through PyPI trusted publishing), a tag-vs-crate-version check, and the
+> PyPI metadata in `pyproject.toml`, and an `include` list on both crates so the package (and the
+> sdist maturin builds from it) carries only sources, readme, license and stubs.
+>
+> **The spike's five questions, answered on Linux x86_64 (host build, not the manylinux image):**
+> 1. The static build works and needs only CMake on top of a C compiler — hence
+>    `before-script-linux` installing it in the manylinux image.
+> 2. zlib is built from source too (`libz-sys` static), so deflate needs no system zlib: the
+>    resulting `.so` links `libc`/`libm`/`libgcc_s` and nothing else.
+> 3. Build time is ~2 min for the whole release wheel including HDF5, so `sccache` in the action is
+>    enough and no separate HDF5 cache is warranted.
+> 4. The wheel is 2.5 MB. A non-issue.
+> 5. The output is unchanged: `gzip` level 3 + `shuffle` on every dataset, superblock version 2,
+>    read back by `h5py` (HDF5 2.0.0) — the vendored HDF5 is 2.2.0, and the file uses core filters
+>    only, which is what ParaView needs. The whole Rust suite (275 tests) passes against the static
+>    build, and the 86 pytest tests pass against the built wheel in a clean venv.
+>
+> **Not verified here:** macOS and Windows, which have no local equivalent — the matrix is written
+> but its first CI run is the check. Both fall back to a non-HDF5 wheel per the plan below if the
+> static build turns out not to work there. Neither is `pip install xdmf` live: the name is free on
+> PyPI (checked), and the first `v*` tag both publishes it and needs the trusted publisher plus a
+> `pypi` environment configured on the repository first.
+
 ### Build configuration
 
 - **abi3.** Build with `pyo3/abi3-py39` so one wheel per platform covers every Python ≥ 3.9 instead of
@@ -376,7 +407,7 @@ pattern).
   CI job that is maintainable and one that is not. The bindings use nothing that abi3 forbids.
 - **Platforms:** `manylinux_2_28` x86_64 + aarch64, macOS x86_64 + arm64, Windows x86_64. Plus an
   sdist.
-- **Tooling:** `maturin-action` in `.github/workflows/wheels.yml`, triggered on tags and manually.
+- **Tooling:** `maturin-action` in `.github/workflows/release.yml`, triggered on tags and manually.
 - **Publishing:** PyPI trusted publishing (OIDC), not a long-lived API token.
 
 ### The HDF5 problem — spike before building the matrix
@@ -406,6 +437,8 @@ document the gap. Do not block the whole release on the worst platform.
 Check `xdmf` is available on PyPI before anything else — the branch's `pyproject.toml` assumes it. If
 taken, decide the alternative (`xdmf-rs` / `pyxdmf`) early, because it propagates into the module name,
 the docs, and every example.
+
+**It is free** (checked 2026-08-28), so the name stays `xdmf` and nothing propagates.
 
 ## Part 3 — Re-run the pyvista benchmark
 

@@ -29,6 +29,10 @@ SQUARE_CELL_TYPES = [xdmf.CellType.Triangle, xdmf.CellType.Triangle]
 TEMPERATURE = np.array([10.0, 11.0, 12.0, 13.0], dtype=np.float64)
 REGION_ID = np.array([100, 200], dtype=np.uint32)
 
+requires_hdf5 = pytest.mark.skipif(
+    not xdmf.is_hdf5_enabled(), reason="this build has no HDF5 storage"
+)
+
 
 def write_square(tmp_path, data_storage, name="test_output", connectivity=SQUARE_CONNECTIVITY):
     """Writes the square mesh, returning its path (without suffix) and the data writer."""
@@ -73,6 +77,7 @@ def test_write_mesh_and_data_binary(tmp_path):
     assert struct.unpack("<2I", region_bytes) == tuple(REGION_ID)
 
 
+@requires_hdf5
 def test_write_mesh_and_data_hdf5_single_file(tmp_path):
     file_path, data_writer = write_square(tmp_path, xdmf.DataStorage.Hdf5SingleFile)
 
@@ -94,6 +99,7 @@ def test_write_mesh_and_data_hdf5_single_file(tmp_path):
         np.testing.assert_array_equal(h5_file["data/t_0/1"][:], REGION_ID)
 
 
+@requires_hdf5
 def test_write_mesh_and_data_hdf5_multiple_files(tmp_path):
     file_path, data_writer = write_square(tmp_path, xdmf.DataStorage.Hdf5MultipleFiles)
 
@@ -109,6 +115,7 @@ def test_write_mesh_and_data_hdf5_multiple_files(tmp_path):
         np.testing.assert_array_equal(h5_file["0"][:], TEMPERATURE)
 
 
+@requires_hdf5
 def test_hdf5_custom_deflate_level(tmp_path):
     file_path, data_writer = write_square(tmp_path, xdmf.DataStorage.hdf5_single_file(3))
 
@@ -706,7 +713,7 @@ def test_rejected_attribute_discards_the_whole_step(tmp_path):
         xdmf.DataStorage.Ascii,
         xdmf.DataStorage.AsciiInline,
         xdmf.DataStorage.Binary,
-        xdmf.DataStorage.Hdf5SingleFile,
+        pytest.param(xdmf.DataStorage.Hdf5SingleFile, marks=requires_hdf5),
     ],
 )
 def test_uint64_beyond_32_bits_raises_overflow_error(tmp_path, storage):
@@ -729,6 +736,7 @@ def test_int64_beyond_the_ascii_range_raises_overflow_error(tmp_path):
     assert "read back through a double" in str(exc_info.value)
 
 
+@requires_hdf5
 def test_int64_beyond_the_ascii_range_is_fine_in_hdf5(tmp_path):
     file_path, data_writer = write_points(tmp_path, xdmf.DataStorage.Hdf5SingleFile)
     large = np.array([2**53 + 1], dtype=np.int64)
@@ -752,6 +760,7 @@ def test_binary_rejects_64_bit_integers(tmp_path, dtype):
     assert "the Binary storage cannot hold" in str(exc_info.value)
 
 
+@requires_hdf5
 def test_close_releases_the_hdf5_file(tmp_path):
     file_path, data_writer = write_points(tmp_path, xdmf.DataStorage.Hdf5SingleFile)
     with data_writer:
@@ -774,6 +783,7 @@ def test_close_releases_the_hdf5_file(tmp_path):
         np.testing.assert_array_equal(h5_file["data/t_0/0"][:], [1.0])
 
 
+@requires_hdf5
 def test_write_mesh_result_is_usable_as_a_context_manager(tmp_path):
     file_path = tmp_path / "ctx"
     writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.Hdf5SingleFile)
@@ -858,6 +868,7 @@ def test_type_stubs_cover_the_module_surface():
         ("spelled.xdmf2", "spelled"),
     ],
 )
+@requires_hdf5
 def test_file_name_reports_what_is_written(tmp_path, given, base):
     # a pathlib.Path both ways: `os.fspath` on the way in, so a plain str works too (every other
     # test here passes one)

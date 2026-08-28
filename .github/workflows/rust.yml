@@ -111,7 +111,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    name: "Building and testing the python bindings"
+    name: "Building and testing the python bindings (hdf5: ${{ matrix.hdf5 }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        hdf5: [YES, NO]
 
     steps:
     - uses: actions/checkout@v7
@@ -122,13 +126,14 @@ jobs:
 
     - uses: Swatinem/rust-cache@v2
       with:
-        shared-key: "python-bindings"
+        shared-key: "python-bindings-${{ matrix.hdf5 }}"
 
     - uses: actions/setup-python@v7
       with:
         python-version: "3.x"
 
     - name: Install HDF5 (apt) # the wheel links against it, the bindings enable the feature
+      if: ${{ matrix.hdf5 == 'YES' }}
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -137,13 +142,55 @@ jobs:
         sudo apt-get install -y --no-install-recommends libhdf5-dev
 
     - name: Run clippy # not covered by the job above, which builds the core crate only
-      run: cargo clippy -p xdmf-python --all-targets -- -D warnings
+      run: |
+        if [ "${{ matrix.hdf5 }}" == 'YES' ]; then
+          cargo clippy -p xdmf-python --all-targets -- -D warnings
+        else
+          cargo clippy -p xdmf-python --all-targets --no-default-features -- -D warnings
+        fi
 
     - name: Install the bindings
+      env: # how cargo flags reach maturin through pip
+        MATURIN_PEP517_ARGS: ${{ matrix.hdf5 == 'NO' && '--no-default-features' || '' }}
       run: pip install './python[test]'
 
     - name: Run tests
       run: pytest python/tests
+
+  wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    name: "Building and testing a wheel (static HDF5)"
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "wheel-static" # also caches the from-source HDF5, which builds under target/
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.x"
+
+    - name: Install maturin
+      run: pip install maturin pytest h5py numpy
+
+    - name: Build the wheel the way the release does # minus the manylinux container and --release
+      working-directory: python
+      run: maturin build --out dist --features pyo3/extension-module,hdf5-static
+
+    - name: Install it and run the tests against it
+      run: |
+        pip install --no-index --find-links python/dist xdmf
+        python -c "import xdmf; assert xdmf.is_hdf5_enabled(), 'no HDF5 in the wheel'"
+        pytest python/tests
+
+  sdist: # a wheel built from the source distribution, as `release.yml` does it
+    uses: ./.github/workflows/sdist.yml
 
   formatting:
     runs-on: ubuntu-latest

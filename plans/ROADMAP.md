@@ -280,6 +280,30 @@ them. Revisit deliberately, not by drift.
   README's reading example updated to match; `05_reader.md`'s API section keeps the original
   two-phase sketch alongside a note on why it changed.
 
+- **2026-08-28, M6 Part 2: the PyPI wheel build.** `hdf5-static` on the core crate builds HDF5 and
+  zlib from source (`hdf5/static` + `hdf5/zlib`), so a wheel needs no system library — decision 3,
+  and the whole risk of the milestone. The bindings crate's `hdf5` feature became a passthrough with
+  `hdf5-static` on top of it, which is what finally makes `--no-default-features` (the fallback
+  wheel) and `is_hdf5_enabled() == False` reachable; the `python-bindings` CI job now runs both ways.
+  `pyo3/abi3-py39` makes one wheel per platform cover every CPython ≥ 3.9.
+  `.github/workflows/release.yml` builds five wheels (Linux x86_64/aarch64 in `manylinux_2_28`, macOS
+  x86_64/arm64, Windows x86_64) plus an sdist, each on a *native* runner rather than
+  cross-compiling — a CMake project that probes its own build host is the wrong thing to
+  cross-compile, and free aarch64/Intel-macOS runners make it unnecessary. Every job installs the
+  wheel it built and runs the pytest suite against it; a tag also checks itself against the crate
+  version and publishes through PyPI trusted publishing (OIDC, no token). Both crates gained an
+  `include` list, since `cargo package` fills the crates.io package *and* the sdist: only `src/`,
+  the readme, the license and the Python stubs ship, which halved the sdist (304 KB → 140 KB) and
+  keeps 1.5 MB of vtk test fixtures, the plans and the dev tooling out of both.
+  **Measured on Linux, which was the spike:** the static build needs only CMake added to the
+  manylinux image, links nothing but `libc`/`libm`/`libgcc_s`, takes ~2 min, and produces a 2.5 MB
+  wheel whose output is byte-for-byte the same shape as before (gzip+shuffle, superblock 2, read
+  back by h5py; vendored HDF5 is 2.2.0, and all 275 Rust tests and 86 pytest tests pass against it).
+  The PyPI name `xdmf` is free. **Open:** macOS and Windows are unverified until the first CI run,
+  and publishing needs the trusted publisher plus a `pypi` environment on the repository, so the
+  first `v*` tag is the real test. The reader bindings (M5 first) and Part 3 (the pyvista re-run in
+  the wheel-installed configuration) are untouched.
+
 ## Sub-plans
 
 | Plan | Milestone | Covers |
@@ -294,6 +318,7 @@ them. Revisit deliberately, not by drift.
 | [`07_mpi.md`](07_mpi.md) | post-1.0 | API draft only: collective sizing, global node ids, verification strategy |
 | [`08_write_data_builder.md`](08_write_data_builder.md) | M7 (before M6 Part 2) | Per-attribute `TimeStep` builder replacing `write_data`'s tuple lists; intra-step buffer reuse; `Values` out of caller code |
 | [`09_submesh_references.md`](09_submesh_references.md) | M4b (after M4, before M5) | Submeshes referencing shared arrays: what ParaView's Xdmf2 reader supports per storage format, four layouts measured; `select` implemented, then its geometry half too |
+| [`12_release_automation.md`](12_release_automation.md) | after M6 Part 2 | A manual GitHub release drives the version bump, crates.io and PyPI; why the tag cannot be the thing that writes the version |
 
 ### Historical records (not plans to execute)
 
@@ -414,6 +439,6 @@ Rules for the milestones below:
 |------|-----------|------------|
 | `quick-xml` cannot serialize a `Grid` fragment at a chosen indent depth | M2 | Spike this before committing to the design; fallback is manual indentation. See `02_performance.md`. |
 | `quick-xml` + serde `#[serde(flatten)]` on `DataContent` does not round-trip on deserialize — now with a third variant, the nested `Items(Vec<DataItem>)` a selection carries | M5 | Test deserialization of one `DataItem` per shape, selections included, on day one; fallback is a hand-rolled event-loop parser for `DataItem` only. |
-| Static HDF5 build in manylinux/macOS/Windows wheels | M6 | Spike Linux-only first, before building out the platform matrix. |
+| Static HDF5 build in manylinux/macOS/Windows wheels | M6 | Spike Linux-only first, before building out the platform matrix. **Linux measured 2026-08-28 and fine; macOS/Windows are written but unverified until the first CI run, with the non-HDF5 wheel as the documented fallback.** |
 | `hdf5::File` may not be `Send`, blocking GIL release | M6 | Check early; if it is not, the Python HDF5 path keeps the GIL and only the other backends release it. |
 | ParaView misreading a new XML construct (hyperslab block references) | M4 | Two-stage plan with an explicit go/no-go: ship duplication first, add the hyperslab fast path only after CI proves it. |

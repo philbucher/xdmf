@@ -3,18 +3,28 @@ name = "xdmf-python"
 version.workspace = true
 edition.workspace = true
 publish = false
+# Not published to crates.io, but `cargo package` is how maturin decides what goes into the sdist
+include = ["/src", "/README.md", "/py.typed", "/xdmf.pyi"]
 
 [lib]
 name = "xdmf"
 crate-type = ["cdylib"]
 
+[features]
+default = ["hdf5"]
+# HDF5 against a system library.
+hdf5 = ["xdmf/hdf5"]
+# HDF5 built from source into the wheel, so `pip install xdmf` needs no system library.
+hdf5-static = ["hdf5", "xdmf/hdf5-static"]
+
 [dependencies]
 numpy = "0.29"
-pyo3 = { version = "0.29", features = ["extension-module"] }
-# `default-features = false` + explicit `features = ["hdf5"]` (rather than just leaving the
+# `abi3-py39`: one wheel per platform covers every CPython >= 3.9, instead of one per version.
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+# `default-features = false` + the explicit `hdf5` feature above (rather than just leaving the
 # crate's own default on) so a future default-feature addition on the core crate doesn't get
 # silently pulled into the wheel unnoticed.
-xdmf = { path = "..", default-features = false, features = ["hdf5"] }
+xdmf = { path = "..", default-features = false }
 
 [lints]
 workspace = true

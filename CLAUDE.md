@@ -35,7 +35,13 @@ cargo +nightly fmt --all --check
 RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --document-private-items
 ```
 
-CI (`.github/workflows/rust.yml`) runs this same matrix across Linux/macOS/Windows, each with and without the `hdf5` feature, in both debug and release. It also checks formatting on nightly and runs `typos` for spell-checking — run `typos` locally before pushing if you've added prose/comments.
+CI (`.github/workflows/rust.yml`) runs this same matrix across Linux/macOS/Windows, each with and without the `hdf5` feature, in both debug and release. It also checks formatting on nightly and runs `typos` for spell-checking — run `typos` locally before pushing if you've added prose/comments. Its `python-bindings` job builds and pytests the bindings both ways too (`MATURIN_PEP517_ARGS=--no-default-features` is how the no-HDF5 build is asked for through `pip`), so a test needing an HDF5 storage carries `test_writer.py`'s `@requires_hdf5`.
+
+`.github/workflows/release.yml` builds the PyPI wheels on a tag (or manually): one `abi3` wheel per platform on a *native* runner, each with the `hdf5-static` feature, which builds HDF5 and zlib from source (needs CMake) so `pip install xdmf` needs no system library. A platform whose static build breaks is meant to fall back to a no-HDF5 wheel rather than hold up the release.
+
+Both crates carry an `include` list, since `cargo package` is what fills the crates.io package *and* (through maturin) the Python sdist: only `src/`, the readme, the license and the Python stubs ship. A new file the package itself needs — not the repository, the package — has to be added there, or it is silently missing from the sdist.
+
+`.github/workflows/sdist.yml` is a `workflow_call`-only workflow (builds the source distribution, then a wheel *from* it) that both `rust.yml` and `release.yml` call, so a pull request runs the same sdist build the release publishes. GitHub cannot call a single job from another workflow, which is why it is its own file. The wheels are deliberately *not* shared that way: `release.yml` builds them through `PyO3/maturin-action`'s manylinux container, which no host cache can reach, so `rust.yml`'s `wheel` job runs `maturin` directly on a cached host instead.
 
 `.clippy.toml` allows `unwrap`/`expect`/`panic` in test code, but the crate-level lint list in `Cargo.toml` (`[lints.clippy]`) is strict elsewhere (e.g. `unwrap_used`, `expect_used`, `panic` are warnings promoted to errors by CI's `-D warnings`) — don't introduce those in library code.
 

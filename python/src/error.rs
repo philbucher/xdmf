@@ -30,6 +30,8 @@ pub(crate) fn to_py_err(error: Error) -> PyErr {
         Error::Unsupported { .. } => PyNotImplementedError::new_err(error.to_string()),
         Error::NumberTypeMismatch { .. } => PyTypeError::new_err(error.to_string()),
         Error::Internal(_) => PyRuntimeError::new_err(error.to_string()),
-        Error::Io { .. } | Error::Hdf5 { .. } => PyOSError::new_err(error.to_string()),
+        Error::Io { .. } => PyOSError::new_err(error.to_string()),
+        #[cfg(feature = "hdf5")]
+        Error::Hdf5 { .. } => PyOSError::new_err(error.to_string()),
     }
 }

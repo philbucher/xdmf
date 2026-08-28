@@ -2537,6 +2537,10 @@ mod tests {
         },
     };
 
+    fn with_version(expected: &str) -> String {
+        expected.replace("$VERSION", env!("CARGO_PKG_VERSION"))
+    }
+
     #[test]
     fn test_poly_cell_points() {
         assert_eq!(poly_cell_points(CellType::Vertex), Some(1));
@@ -4166,7 +4170,7 @@ mod tests {
         </Grid>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
         let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -4175,7 +4179,7 @@ mod tests {
         // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
         // std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
 
-        pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+        pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
     }
 
     // A backend that fails on demand, to exercise the failure paths of a time step without

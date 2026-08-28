@@ -1,6 +1,10 @@
 use temp_dir::TempDir;
 use xdmf::TimeSeriesWriter;
 
+fn with_version(expected: &str) -> String {
+    expected.replace("$VERSION", env!("CARGO_PKG_VERSION"))
+}
+
 #[test]
 fn write_xdmf() {
     let node_coords = [
@@ -192,7 +196,7 @@ fn write_xdmf() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="UInt" Format="XML" Precision="8">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -201,7 +205,7 @@ fn write_xdmf() {
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
     //  std::fs::copy(xdmf_file, "time_series_writer.xdmf2").unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 /// `file_name` names the XDMF file of the series, both before the mesh goes in and after, and
@@ -284,7 +288,7 @@ fn write_xdmf_only_mesh() {
         <DataItem Name="connectivity" Dimensions="52" NumberType="Int" Format="XML" Precision="4">5 0 1 4 3 5 1 2 5 4 5 3 4 7 6 5 4 5 8 7 4 0 1 9 4 3 0 10 4 1 2 11 4 2 5 12 4 6 3 13 4 6 7 14 4 7 8 15 4 5 8 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -293,7 +297,7 @@ fn write_xdmf_only_mesh() {
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
     // std::fs::copy(xdmf_file, "time_series_writer_only_mesh.xdmf").unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -333,7 +337,7 @@ fn write_xdmf_only_point_mesh() {
         <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -342,7 +346,7 @@ fn write_xdmf_only_point_mesh() {
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
     // std::fs::copy(xdmf_file, "time_series_writer_only_point_mesh.xdmf2").unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -426,7 +430,7 @@ fn write_xdmf_point_mesh() {
         <DataItem Name="connectivity" Dimensions="17" NumberType="UInt" Format="XML" Precision="8">0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -435,7 +439,7 @@ fn write_xdmf_point_mesh() {
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
     // std::fs::copy(xdmf_file, "write_xdmf_point_mesh.xdmf2").unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -497,7 +501,7 @@ fn write_xdmf_f32_points() {
         <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
@@ -506,7 +510,7 @@ fn write_xdmf_f32_points() {
     // for debugging purposes, you can uncomment the line below to write the XDMF file to disk
     // std::fs::copy(xdmf_file, "write_xdmf_f32_points.xdmf2").unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -568,13 +572,13 @@ fn write_xdmf_integer_data() {
         <DataItem Name="connectivity" Dimensions="3" NumberType="UInt" Format="XML" Precision="8">0 1 2</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
 </Xdmf>"#;
 
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
     let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 // Counterpart to the u64 cap below: this limit is the ascii readers' alone, so the same value that
@@ -1072,7 +1076,7 @@ fn write_xdmf_with_submeshes() {
         <DataItem Name="submesh_cells_2" Dimensions="2" NumberType="Int" Format="XML" Precision="4">2 0</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
     <Information Name="submesh_cells" Value="0:1 1:2 submesh_cells_2"/>
     <Information Name="submesh_points" Value="0:2 0:4 0:4"/>
 </Xdmf>"#;
@@ -1080,7 +1084,7 @@ fn write_xdmf_with_submeshes() {
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
     let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -1168,7 +1172,7 @@ fn write_xdmf_with_submeshes_only_mesh() {
         <DataItem Name="connectivity_0" Dimensions="12" NumberType="UInt" Format="XML" Precision="4">2 2 0 1 4 0 2 1 4 1 2 3</DataItem>
     </Domain>
     <Information Name="data_storage" Value="AsciiInline"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
     <Information Name="submesh_cells" Value="0:3"/>
     <Information Name="submesh_points" Value="0:4"/>
 </Xdmf>"#;
@@ -1176,7 +1180,7 @@ fn write_xdmf_with_submeshes_only_mesh() {
     let xdmf_file = xdmf_file_path.with_extension("xdmf2");
     let read_xdmf = std::fs::read_to_string(&xdmf_file).unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -1316,13 +1320,13 @@ fn write_xdmf_with_a_scattered_submesh_selects_its_points_out_of_the_mesh() {
         <DataItem Name="submesh_points_1" Dimensions="4" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/submesh_points/1</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
     <Information Name="submesh_cells" Value="0:1 1:1"/>
 </Xdmf>"#;
 
     let read_xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -1786,13 +1790,13 @@ fn write_xdmf_with_submeshes_selects_hdf5_data_written_once() {
         <DataItem Name="selections_0" Dimensions="6" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/selections/0</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
     <Information Name="submesh_cells" Value="0:1 1:1 submesh_cells_2"/>
 </Xdmf>"#;
 
     let read_xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[cfg(feature = "hdf5")]
@@ -1897,13 +1901,13 @@ fn write_xdmf_with_an_unordered_submesh_writes_its_share_out() {
         <DataItem Name="submesh_cells_1" Dimensions="2" NumberType="Int" Format="HDF" Precision="4">test_output.h5:mesh/submesh_cells/1</DataItem>
     </Domain>
     <Information Name="data_storage" Value="Hdf5SingleFile { deflate_level: Some(3) }"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
     <Information Name="submesh_cells" Value="0:2 submesh_cells_1"/>
 </Xdmf>"#;
 
     let read_xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 }
 
 #[test]
@@ -2021,12 +2025,12 @@ fn write_xdmf_with_submeshes_never_selects_from_a_storage_that_misreads_it() {
         </DataItem>
     </Domain>
     <Information Name="data_storage" Value="Ascii"/>
-    <Information Name="version" Value="0.2.0"/>
+    <Information Name="version" Value="$VERSION"/>
     <Information Name="submesh_cells" Value="0:1 1:1 submesh_cells_2"/>
     <Information Name="submesh_points" Value="0:2 0:3 0:4"/>
 </Xdmf>"#;
 
-    pretty_assertions::assert_eq!(expected_xdmf, read_xdmf);
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
 
     // the same holds for the other two, whose light data differs only in where the values sit
     for storage in [xdmf::DataStorage::AsciiInline, xdmf::DataStorage::Binary] {

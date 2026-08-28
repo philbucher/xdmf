@@ -179,9 +179,9 @@ See [`tests/reader.rs`](./tests/reader.rs) for more examples.
 
 ## Python interface
 
-The [`python/`](./python) directory holds bindings that expose the same `TimeSeriesWriter` interface
-to Python, taking the mesh and the data as numpy arrays it borrows rather than copies. See
-[`python/README.md`](./python/README.md) for how to build them and what they look like.
+`pip install xdmf` gets bindings that expose the same `TimeSeriesWriter` interface to Python, taking
+the mesh and the data as numpy arrays it borrows rather than copies. They live in
+[`python/`](./python); see [`python/README.md`](./python/README.md) for what they look like.
 
 ## Comparison with vtk/vtu
 
