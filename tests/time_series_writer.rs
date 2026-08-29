@@ -898,7 +898,7 @@ fn write_data_escapes_xml_special_characters_in_a_name() {
     loop {
         match reader.read_event().unwrap() {
             quick_xml::events::Event::Eof => break,
-            quick_xml::events::Event::Start(tag) if tag.name().as_ref() == b"Attribute" => {
+            quick_xml::events::Event::Start(tag) if tag.name().as_ref() == "Attribute" => {
                 let attribute = tag.try_get_attribute("Name").unwrap().unwrap();
                 names.push(
                     attribute
