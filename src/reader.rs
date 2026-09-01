@@ -102,7 +102,10 @@ pub struct DataInfo {
     pub number_type: NumberType,
     /// The element width, in bytes, the file holds this field at.
     pub precision: u8,
-    /// Total element count: `num_entities * attribute.size()`.
+    /// Components per entity, the product of the dimensions past the first. What [`len`](Self::len)
+    /// was sized with, so trust it over [`attribute`](Self::attribute)'s own count.
+    pub components: usize,
+    /// Total element count: `num_entities * components`.
     pub len: usize,
 }
 
@@ -731,6 +734,7 @@ fn build_data_info(attribute: &attribute::Attribute, num_entities: usize) -> Res
         attribute: reconstruct_data_attribute(attribute.attribute_type, component_shape),
         number_type,
         precision,
+        components,
         len,
     })
 }
