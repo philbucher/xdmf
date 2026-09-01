@@ -215,6 +215,7 @@ fn round_trip_point_and_cell_data_over_several_steps() {
             let cell_info = reader.cell_data_info(step).unwrap();
             assert_eq!(cell_info.len(), 1, "{storage:?}");
             assert_eq!(cell_info[0].attribute, DataAttribute::Scalar);
+            assert_eq!(cell_info[0].components, 1);
             assert_eq!(cell_info[0].len, 3);
 
             let mut pressure = Vec::new();
@@ -613,6 +614,7 @@ fn round_trip_data_attribute_shapes() {
             DataAttribute::Tensor,
             "{storage:?}"
         );
+        assert_eq!(find("tensor").components, 9);
         assert_eq!(find("tensor").len, 36);
         // Tensor6/Matrix/Generic all collapse to AttributeType::Matrix on write and are read back
         // as Generic(size), see DataInfo::attribute's doc
@@ -621,6 +623,7 @@ fn round_trip_data_attribute_shapes() {
             DataAttribute::Generic(6),
             "{storage:?}"
         );
+        assert_eq!(find("tensor6").components, 6);
         assert_eq!(find("tensor6").len, 24);
         assert_eq!(
             find("generic").attribute,
