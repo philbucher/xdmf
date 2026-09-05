@@ -134,12 +134,14 @@ pub enum Error {
 ///
 /// Use it to match on the kind of failure without depending on `reason`'s wording, or to build a
 /// stable discriminator for structured logs. See [`Error::kind`].
+///
+/// `Hdf5` is present with or without the `hdf5` feature, so feature unification in a downstream
+/// dependency graph cannot break a `match` on this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
     /// See [`Error::Io`].
     Io,
-    /// See [`Error::Hdf5`].
-    #[cfg(feature = "hdf5")]
+    /// `Error::Hdf5`, which the `hdf5` feature gates but this variant does not.
     Hdf5,
     /// See [`Error::InvalidFileName`].
     InvalidFileName,
