@@ -24,7 +24,7 @@ mod values;
 pub mod xdmf_elements;
 
 // Re-export types used in the public API
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, Result};
 pub use reader::{DataInfo, TimeSeriesReader, ValueType};
 pub use time_series_writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use values::{ConnectivityIndex, Coordinate, Values};

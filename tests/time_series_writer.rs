@@ -817,6 +817,28 @@ fn write_mesh_rejects_a_negative_connectivity_index() {
     );
 }
 
+// `Error::kind` returning a type from a private module compiles inside the crate, so only a test
+// in another crate catches a missing re-export.
+#[test]
+fn error_kind_is_pub() {
+    let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0];
+    let cell_types = [xdmf::CellType::Triangle];
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_writer = TimeSeriesWriter::new(
+        tmp_dir.path().join("test_output"),
+        xdmf::DataStorage::AsciiInline,
+    )
+    .unwrap();
+
+    let error = xdmf_writer
+        .write_mesh(&coords, &[0_i64, -2, 1], &cell_types)
+        .err()
+        .unwrap();
+
+    assert_eq!(error.kind(), xdmf::ErrorKind::InvalidMesh);
+}
+
 // A component count or a total number of values that does not fit a `usize`: in release builds
 // both multiplications used to wrap, and a total that wraps back onto the real array length was
 // accepted -- writing `Dimensions="0 4611686018427387905 1"` for four values.
