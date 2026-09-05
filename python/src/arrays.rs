@@ -7,8 +7,9 @@
 //!
 //! Shape is otherwise free: a C-contiguous `(N, 3)` array has the flat memory layout the Rust API
 //! wants, so the natural numpy layout for points and vector fields needs no `reshape(-1)`. The
-//! exception is [`PointArray::validate_shape`], since points are always 3 components. An array
-//! that is not C-contiguous is rejected rather than copied.
+//! exception is [`PointArray::validate_shape`]: points are always 3 components, so a trailing
+//! dimension that is not 3 is rejected rather than read as interleaved xyz. An array that is not
+//! C-contiguous is rejected rather than silently copied.
 
 use numpy::{Element, PyReadonlyArrayDyn, PyUntypedArray, PyUntypedArrayMethods};
 use pyo3::{exceptions::PyValueError, prelude::*};

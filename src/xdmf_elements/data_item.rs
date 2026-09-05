@@ -169,7 +169,7 @@ impl XInclude {
 ///
 /// Only [`Serialize`]s: `DataItem`'s hand-written [`Deserialize`] builds this from a non-flattened
 /// intermediate, since `quick-xml` cannot deserialize this enum's own derive combined with
-/// `#[serde(flatten)]`.
+/// `#[serde(flatten)]` -- see the impl on [`DataItem`].
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum DataContent {
     #[serde(rename = "$value")]
@@ -536,7 +536,10 @@ mod tests {
     // No `data_item_include_deserialize` round-trip: `quick-xml` fails to route a nested
     // `xi:include` child to the `Raw::include` field once `DataItem` sits inside another struct
     // (verified -- it resolves fine as the directly-deserialized root type, but every real
-    // document nests it). Not a gap the reader hits today, since it only reads `Format::HDF` data.
+    // document nests it inside `Domain`/`Geometry`/`Topology`/`Attribute`). Not a gap the reader
+    // hits today: only the `Ascii` backend's external-file mode writes `DataContent::Include`, so
+    // it needs solving once the ascii storages can be read -- most likely with a hand-rolled
+    // event-loop parse of that one child.
 
     #[test]
     fn data_item_selection_deserialize() {

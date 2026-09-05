@@ -1,7 +1,9 @@
 //! Reading a `Format="HDF"` `DataItem`'s heavy data: `file.h5:group/dataset` -> [`Values`].
 //!
-//! An HDF5 dataset is self-describing, so the light data's `NumberType`/`Precision` is not needed
-//! here. The whole module is gated on the `hdf5` feature and holds no `cfg` of its own.
+//! An HDF5 dataset is self-describing, so the light data's `NumberType`/`Precision` is not needed:
+//! the dataset's own `H5Type` picks the [`Values`] variant. Splitting `file:path` is
+//! `selection.rs`'s job, so nothing here touches a `DataItem`; the whole module is gated on the
+//! `hdf5` feature and holds no `cfg` of its own.
 
 use std::{
     path::{Path, PathBuf},
@@ -16,6 +18,9 @@ use crate::{Error, Result, Values, reader::sealed::SealedValueType};
 ///
 /// One slot rather than a map, which would hold one open file descriptor per time step and run a
 /// long run out of them. Reads come in file order, so a single slot rarely misses.
+///
+/// A `Mutex` rather than a `RefCell` because the read methods take `&self`, which keeps
+/// [`TimeSeriesReader`](crate::TimeSeriesReader) `Sync`. It guards a pointer comparison.
 #[derive(Default)]
 pub(super) struct FileCache {
     last: Mutex<Option<(PathBuf, H5File)>>,
@@ -25,7 +30,7 @@ impl FileCache {
     /// The file at `path`, opened only if it is not the one already held.
     ///
     /// The handle is cloned out rather than borrowed, so the lock is released before the read
-    /// itself runs.
+    /// itself runs; cloning an `H5File` is a refcount bump on the same open file.
     fn open(&self, path: &Path) -> Result<H5File> {
         // a previous read panicking says nothing about the handle it left behind
         let mut cached = self.last.lock().unwrap_or_else(PoisonError::into_inner);
@@ -58,10 +63,11 @@ pub(super) fn read(
 }
 
 /// The same read, straight into `into` where the dataset's own element type is already `T`,
-/// reporting whether it was. `false` leaves `into` untouched, for the caller to convert.
+/// reporting whether it was. `false` leaves `into` untouched: only the caller knows how another
+/// type converts -- a field widens it, a connectivity checks its values, a coordinate rejects it.
 ///
-/// This is the only path that skips an intermediate array, so a caller looping with the same
-/// buffer allocates once rather than once per call.
+/// The matching case is the common one and the only one that skips the intermediate array, so a
+/// caller looping with the same buffer allocates once rather than once per call.
 pub(super) fn read_exact_into<T: SealedValueType>(
     file_path: &Path,
     dataset_path: &str,

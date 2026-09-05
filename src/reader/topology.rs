@@ -1,5 +1,6 @@
-//! Decodes a `Topology`'s raw connectivity array into per-cell [`CellType`]s and a connectivity
-//! without the type codes, local to whatever submesh wrote it.
+//! The inverse of `time_series_writer.rs`'s `prepare_cells`: a `Topology`'s raw connectivity array
+//! into per-cell [`CellType`]s and a connectivity without the type codes, local to whatever submesh
+//! wrote it.
 
 use crate::{
     CellType, ConnectivityIndex, Error, Result,
@@ -132,9 +133,9 @@ fn decode_mixed_in_place<I: ConnectivityIndex>(
     Ok(())
 }
 
-/// The single `CellType` every cell of a uniform topology has, or `None` for `Mixed`.
-///
-/// This is what lets a uniform submesh's cell types be learned without reading its heavy data.
+/// The single `CellType` every cell of a uniform topology has, or `None` for `Mixed`, whose
+/// per-cell types only its connectivity states. This is what lets `read_topology_with_submeshes`
+/// learn a uniform submesh's cell types without reading its heavy data.
 pub(super) fn uniform_cell_type(topology: &Topology) -> Result<Option<CellType>> {
     match topology.topology_type {
         TopologyType::Mixed => Ok(None),
@@ -142,8 +143,8 @@ pub(super) fn uniform_cell_type(topology: &Topology) -> Result<Option<CellType>>
     }
 }
 
-/// The one `CellType` a uniform `TopologyType` decodes to, the inverse of `From<CellType> for
-/// TopologyType`.
+/// The one `CellType` a uniform `TopologyType` decodes to, the inverse of
+/// `topology.rs`'s `From<CellType> for TopologyType`.
 fn cell_type_of(topology_type: TopologyType, nodes_per_element: Option<u8>) -> Result<CellType> {
     let cell_type = match topology_type {
         TopologyType::Mixed => {
@@ -191,7 +192,8 @@ fn cell_type_of(topology_type: TopologyType, nodes_per_element: Option<u8>) -> R
     Ok(cell_type)
 }
 
-/// Whether a `Mixed` connectivity's cell carries a point count, as the writer decides it.
+/// Whether a `Mixed` connectivity's cell carries a point count -- the same table `prepare_mesh`
+/// (`time_series_writer.rs`) decides it with.
 fn poly_cell_points(cell_type: CellType) -> Option<u8> {
     match cell_type {
         CellType::Vertex => Some(1),

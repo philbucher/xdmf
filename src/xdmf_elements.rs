@@ -112,7 +112,9 @@ impl Domain {
 }
 
 // Declares the cell types, their XDMF codes and their point counts as one list, so a new type
-// cannot be added while missing from `ALL`, `from_code` or `num_points`.
+// cannot be added while missing from `ALL`, `from_code` or `num_points`. Adding one still needs an
+// arm in `From<CellType> for TopologyType` (`xdmf_elements/topology.rs`), which the compiler asks
+// for.
 macro_rules! define_cell_types {
     ($($variant:ident = $code:literal => $num_points:literal),+ $(,)?) => {
         /// The cell types this crate can write, i.e. the XDMF topology types it supports.
@@ -134,11 +136,13 @@ macro_rules! define_cell_types {
             /// Every cell type this crate knows, in the order they are declared.
             ///
             /// A slice rather than a sized array, so adding a cell type is not a breaking change
-            /// for a caller naming the type.
+            /// for a caller naming the type, and so consumers mapping these onto their own cell
+            /// types can check coverage.
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
 
             /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None`
-            /// for a code this crate does not know.
+            /// for a code this crate does not know. The inverse of the `as u8` cast
+            /// `prepare_cells` (`time_series_writer.rs`) writes with.
             pub(crate) fn from_code(code: u8) -> Option<Self> {
                 match code {
                     $($code => Some(Self::$variant),)+

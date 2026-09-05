@@ -93,7 +93,8 @@ pub(crate) trait DataWriter: Send + Sync {
     /// submesh at that position otherwise.
     ///
     /// Called once per mesh or once per submesh, before the matching
-    /// [`write_connectivity`](Self::write_connectivity), and never both ways for one mesh.
+    /// [`write_connectivity`](Self::write_connectivity), and never both ways for one mesh: a
+    /// submesh carries only the points its own cells use.
     fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent>;
 
     /// Write one component of the mesh's own coordinates: every X value, then every Y, then every
@@ -136,7 +137,8 @@ pub(crate) trait DataWriter: Send + Sync {
     ///
     /// The counterpart of [`write_submesh_cells`](Self::write_submesh_cells) for the points a
     /// submesh's connectivity is renumbered against, and the array its `<Geometry>` selects them
-    /// through where the storage supports selections.
+    /// through where the storage supports selections -- in which case the light data references
+    /// this and records it nowhere else.
     fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent>;
 
     /// Write one array of attribute data, identified by its position among all the arrays written
@@ -147,7 +149,8 @@ pub(crate) trait DataWriter: Send + Sync {
     /// its share of them.
     ///
     /// Only the HDF5 storages can. `ParaView` honours a `HyperSlab`/`Coordinates` selection for
-    /// `Format="HDF"` only; elsewhere it reads the source array from its start, without an error.
+    /// `Format="HDF"` only; elsewhere it reads the source array from its start, silently, so a
+    /// selection there would show values the file does not contain.
     fn supports_selections(&self) -> bool {
         false
     }
@@ -175,8 +178,9 @@ pub(crate) trait DataWriter: Send + Sync {
     /// End the current time step and remove the heavy data written for it.
     ///
     /// Called instead of [`write_data_finalize`](Self::write_data_finalize) when a time step is
-    /// abandoned rather than written. Backends that write nothing until the step is complete (e.g.
-    /// `AsciiInline`) keep the default of finalizing.
+    /// abandoned rather than written; without it the step's heavy data would stay on disk with no
+    /// `<Grid>` referencing it. Backends that write nothing until the step is complete (e.g.
+    /// [`DataStorage::AsciiInline`]) keep the default of finalizing.
     fn write_data_discard(&mut self) -> Result<()> {
         self.write_data_finalize()
     }
@@ -318,8 +322,8 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> Resu
 /// Remove the files written for an abandoned time step, shared by the file-per-attribute backends
 /// (`Ascii`/`Binary`) implementing [`DataWriter::write_data_discard`].
 ///
-/// The paths are drained out of `step_files` even if a removal fails, and every file is attempted
-/// before the first error is returned.
+/// The paths are drained out of `step_files` even if a removal fails, so a second discard would
+/// only report the same failure again. Every file is attempted before the first error is returned.
 pub(crate) fn remove_step_files(step_files: &mut Vec<PathBuf>) -> Result<()> {
     let mut first_error = None;
 
@@ -350,7 +354,8 @@ pub(crate) const SUBMESH_CELLS: &str = "submesh_cells";
 pub(crate) const SELECTIONS: &str = "selections";
 
 /// Name of the `Information` element recording which [`DataStorage`] wrote the document, so the
-/// reader can reject a file it cannot read at open time.
+/// reader can reject a file it cannot read when it is opened rather than at the first read that
+/// reaches heavy data.
 pub(crate) const DATA_STORAGE: &str = "data_storage";
 
 /// Name of the file one of a mesh's arrays goes into, for the backends that write one file per

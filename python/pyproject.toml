@@ -13,7 +13,7 @@ requires-python = ">=3.9"
 dependencies = ["numpy>=1.21"]
 keywords = ["xdmf", "paraview", "visit", "hdf5", "postprocessing"]
 classifiers = [
-    "Development Status :: 3 - xxx",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",

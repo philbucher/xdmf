@@ -30,7 +30,8 @@ impl Membership {
         }
     }
 
-    /// The source position the entry at `local` sits at, or `None` beyond the membership's end.
+    /// The source position the entry at `local` sits at, or `None` beyond the membership's end,
+    /// which a document read out of a file can always turn out to be.
     pub(super) fn get(&self, local: usize) -> Option<usize> {
         match self {
             Self::Contiguous { start, len } => (local < *len).then(|| start + local),
@@ -49,7 +50,8 @@ impl Membership {
     /// The values this membership picks out of a fully-read source array.
     ///
     /// The positions come from the file, so neither shape is trusted to stay inside the array it
-    /// selects from.
+    /// selects from: a truncated or foreign document is reported rather than indexed past the end
+    /// of.
     fn apply(&self, source: &Values<'_>) -> Result<Values<'static>> {
         let out_of_range = |position: usize| Error::InvalidDocument {
             reason: format!(
@@ -106,8 +108,8 @@ pub(super) fn read_data_item(
 /// The same read, into a caller's buffer rather than into a fresh [`Values`].
 ///
 /// Only the plain array a reference chain ends at can be filled in place, and only when the
-/// dataset already holds `T`. Another element type, or a selection, goes through `convert`
-/// instead.
+/// dataset already holds `T`. Another element type, or a selection (which must evaluate its whole
+/// source before it knows what to keep), goes through `convert` instead.
 pub(super) fn read_data_item_into<T, F>(
     item: &DataItem,
     document: &Document,
@@ -142,7 +144,8 @@ fn read_heavy(item: &DataItem, document: &Document) -> Result<Values<'static>> {
     hdf5_reader::read(&file_path, dataset_path, &document.files)
 }
 
-/// The same, into the caller's buffer. The `bool` reports whether the dataset already held `T`.
+/// The same, into the caller's buffer -- see [`hdf5_reader::read_exact_into`] for what the `bool`
+/// reports.
 fn read_heavy_exact_into<T: SealedValueType>(
     item: &DataItem,
     document: &Document,
@@ -181,7 +184,7 @@ fn heavy_data_path<'i>(item: &'i DataItem, document: &Document) -> Result<(PathB
 }
 
 /// The `<selector, source>` pair a `HyperSlab`/`Coordinates` `DataItem` carries as its nested
-/// items, in that order.
+/// items, in that order -- the shape `selection()` (`time_series_writer.rs`) writes.
 pub(super) fn selection_parts(item: &DataItem) -> Result<(&DataItem, &DataItem)> {
     let DataContent::Items(children) = &item.data else {
         return Err(Error::InvalidDocument {
@@ -200,8 +203,9 @@ pub(super) fn selection_parts(item: &DataItem) -> Result<(&DataItem, &DataItem)>
     }
 }
 
-/// The membership a selector names: which positions of the source it picks. A `Geometry`'s
-/// selector answers which mesh points a submesh holds without reading the whole-mesh source.
+/// The membership a selector names: which positions of the source it picks. Used to evaluate a
+/// selection's values (see [`read_data_item`]) and, for a `Geometry`'s selector alone, to learn
+/// which mesh points a submesh holds without reading the whole-mesh source at all.
 pub(super) fn parse_selector(
     selector: &DataItem,
     document: &Document,
@@ -251,7 +255,8 @@ pub(super) fn parse_selector(
     Ok(Membership::Contiguous { start, len })
 }
 
-/// Convert an index array's values, small signed integers by construction, to source positions.
+/// Convert an index array's values (small signed integers by construction, see
+/// `time_series_writer.rs`'s `index_values`) to source positions.
 pub(super) fn values_to_usize(values: &Values<'_>) -> Result<Vec<usize>> {
     let to_usize = |value: i128| {
         usize::try_from(value).map_err(|_source| Error::InvalidDocument {

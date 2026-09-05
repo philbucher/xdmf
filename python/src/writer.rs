@@ -1,7 +1,8 @@
 //! `TimeSeriesWriter`/`TimeSeriesDataWriter` pyclasses wrapping the core crate's writer API.
 //!
 //! Both classes are ordinary (non-`unsendable`) pyclasses, since the core crate's `DataWriter`
-//! trait is `Send + Sync`, which is what lets the writes here release the GIL.
+//! trait is `Send + Sync`, which is what lets the writes here release the GIL (`Python::detach`)
+//! instead of blocking every other Python thread for the duration of a large write.
 //!
 //! A Rust `TimeStep` borrows its writer, which a pyclass cannot hold, so the Python method takes
 //! all attributes of a step at once and runs the closure itself.
@@ -83,7 +84,8 @@ impl PyTimeSeriesWriter {
     /// is the same memory as the flat one and needs no reshape.
     ///
     /// Consumes this writer, matching the Rust API, and calling it twice raises `RuntimeError`. A
-    /// call *rejected* here leaves the writer usable.
+    /// call *rejected* here leaves the writer usable, so a dtype or shape the caller can fix does
+    /// not also cost them the writer.
     fn write_mesh(
         &mut self,
         py: Python<'_>,
@@ -224,7 +226,8 @@ impl PyTimeSeriesDataWriter {
     /// the time available. A step needs at least one attribute.
     ///
     /// The arrays are borrowed and the write releases the GIL, so another thread must not modify
-    /// an array while a write of it is running.
+    /// an array while a write of it is running. Single-threaded code cannot hit this: the method
+    /// returns before the next statement runs.
     #[pyo3(signature = (time, point_data=None, cell_data=None))]
     fn write_time_step(
         &mut self,

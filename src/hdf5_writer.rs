@@ -476,9 +476,10 @@ fn create_and_write<T: H5Type>(
 /// it costs next to nothing on disk, and below it the reads stop getting faster.
 const CHUNK_BYTES: usize = 1 << 20; // 1MB
 
-/// The chunk shape for a dataset of `shape` holding `CHUNK_BYTES` of raw data each, or `None` to
-/// leave it to HDF5: for a dataset that fits one chunk anyway, or a shape that is not flat, whose
-/// layout this cannot guess.
+/// The chunk shape for a dataset of `shape` holding [`CHUNK_BYTES`] of raw data each, or [`None`]
+/// to leave it to HDF5: for a dataset that fits one chunk anyway, or a shape that is not flat --
+/// every dataset this module writes is flat, so another rank is a future caller's, whose layout
+/// this has no business guessing at.
 fn chunk_shape<T>(shape: &[usize]) -> Option<Vec<usize>> {
     let [len] = *shape else { return None };
 

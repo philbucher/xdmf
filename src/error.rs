@@ -11,7 +11,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// The error type for all fallible operations in this crate.
 ///
 /// Most variants carry a `reason` in prose rather than fields of their own, so a caller matches on
-/// the variant. The wording is not part of the API contract.
+/// the variant to react to a category of failure. The wording is not part of the API contract.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A filesystem operation failed.
@@ -76,9 +76,11 @@ pub enum Error {
     },
     /// An integer value is outside the range that can be written and read back correctly.
     ///
-    /// `reason` says which limit was hit, and so whether a different `DataStorage` would accept
+    /// `reason` says which limit was hit, and so whether a different [`DataStorage`] would accept
     /// the value: `Binary`'s refusal of 64-bit integers is storage-specific, while the `u64` cap
     /// applies to every backend.
+    ///
+    /// [`DataStorage`]: crate::DataStorage
     #[error("integer value {value} is out of range: {reason}")]
     IntegerOutOfRange {
         /// The out-of-range value, widened to `i128` so that both `u64` and `i64` inputs are
@@ -87,7 +89,8 @@ pub enum Error {
         /// Which limit was hit, and whether a different `DataStorage` would avoid it.
         reason: String,
     },
-    /// An internal invariant was violated. Not reachable through the public API.
+    /// An internal invariant was violated. Not reachable through the public API; it guards the
+    /// pairing of a backend's `write_data_initialize`/`write_data_finalize` calls.
     #[error("internal invariant violated: {0}")]
     Internal(&'static str),
     /// An XDMF document does not describe a mesh this crate's reader can reconstruct: malformed or
@@ -98,16 +101,18 @@ pub enum Error {
         /// What is wrong with the document.
         reason: String,
     },
-    /// The document uses an XDMF construct this crate's reader does not support. Its own variant
-    /// so a caller reading a foreign file can catch it and fall back to another loader.
+    /// The document uses an XDMF construct this crate's reader does not support -- a `Format`,
+    /// `ItemType` or `TopologyType` outside its own output, or `Format="HDF"` data in a build
+    /// without the `hdf5` feature. Its own variant so a caller reading a foreign file can catch it
+    /// and fall back to another loader.
     #[error("unsupported: {reason}")]
     Unsupported {
         /// What was found and why this reader cannot read it.
         reason: String,
     },
     /// A read call requested a type the file's data cannot be read as without losing precision,
-    /// such as `u64` data read as `Vec<u32>`. Its own variant so a caller can catch it and retry
-    /// at the file's actual width.
+    /// such as `u64` data read as `Vec<u32>`. Its own variant so a caller can catch it and retry at
+    /// the width [`DataInfo`](crate::DataInfo) reports.
     #[error("number type mismatch: {reason}")]
     NumberTypeMismatch {
         /// The type that was requested and the type the file actually holds.
@@ -116,7 +121,7 @@ pub enum Error {
 }
 
 /// Stable, fieldless category for an [`Error`], mirroring [`std::io::ErrorKind`]. Match on it to
-/// react to the kind of failure without depending on `reason`'s wording.
+/// react to the kind of failure without depending on `reason`'s wording. See [`Error::kind`].
 ///
 /// `Hdf5` is present with or without the `hdf5` feature, so feature unification in a downstream
 /// dependency graph cannot break a `match` on this enum.
@@ -186,9 +191,10 @@ pub(crate) fn io_ctx<'a>(
 }
 
 /// Converts to a `std::io::Error` for consumers that plumb `io::Error` throughout their own
-/// codebase. `Error::Io`'s original kind is preserved; every other variant (a validation failure,
-/// not a filesystem failure) becomes `InvalidInput`. The `Error` is kept as the payload rather
-/// than flattened into a string, so the original cause stays reachable via `get_ref`.
+/// codebase. `Error::Io`'s original [`std::io::ErrorKind`] is preserved; every other variant (a
+/// validation failure, not a filesystem failure) becomes [`std::io::ErrorKind::InvalidInput`]. The
+/// [`Error`] is kept as the payload rather than flattened into a string, so the original cause
+/// stays reachable via [`std::io::Error::get_ref`].
 impl From<Error> for std::io::Error {
     fn from(err: Error) -> Self {
         let kind = match &err {

@@ -1,7 +1,7 @@
 //! Python bindings for the `xdmf` crate, built with pyo3/numpy.
 //!
 //! Points, connectivity and per-step attribute data are borrowed straight from the numpy buffer
-//! with no copy, and the writes themselves release the GIL.
+//! with no copy (see `arrays.rs`), and the writes themselves release the GIL (see `writer.rs`).
 
 mod arrays;
 mod enums;

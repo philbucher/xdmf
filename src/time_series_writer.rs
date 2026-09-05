@@ -178,7 +178,7 @@ impl TimeSeriesWriter {
     /// ```
     ///
     /// A submesh that is one block of consecutive cells can be given as a [`Range`] rather than an
-    /// index list:
+    /// index list -- see [`SubmeshCells`]:
     ///
     /// ```rust
     /// # use xdmf::TimeSeriesWriter;
@@ -670,6 +670,8 @@ struct PreparedMesh<'c, I: Clone> {
 /// cloning the grid per time step repeats a short reference.
 ///
 /// All three share the mesh's own `submesh_points` list as their selector for a scattered submesh.
+/// The link is by name alone, and [`TimeSeriesWriter::write_submesh_index_lists`] writes that item
+/// only because of this reference, so change the two together.
 fn selected_coordinates(
     submesh: usize,
     coordinates: &[DataItem; 3],
@@ -810,7 +812,7 @@ impl IndexList {
     }
 }
 
-/// The cells of one submesh, as `write_mesh_with_submeshes` takes them.
+/// The cells of one submesh, as [`TimeSeriesWriter::write_mesh_with_submeshes`] takes them.
 ///
 /// Built with `.into()` from a slice, a `Vec`, an array, or a [`Range`], so a submesh of
 /// consecutive cells can be given as `start..end` without building an index list at all.
@@ -1231,8 +1233,10 @@ fn submesh_points<I: ConnectivityIndex>(
 /// Where each point of the mesh sits in the submesh currently being renumbered.
 ///
 /// A lookup array rather than a binary search of the submesh's own point list, which cost 6-28% of
-/// the whole mesh write when measured on a 4M-point mesh. Never cleared between submeshes: each
-/// one writes every entry it goes on to read.
+/// the whole mesh write when measured on a 4M-point mesh. Built only for a submesh whose points are
+/// not one run, and sized by the largest point id that reaches it rather than by the mesh, so the
+/// common case allocates nothing. Never cleared between submeshes: each one writes every entry it
+/// goes on to read.
 #[derive(Default)]
 struct LocalPoints {
     of_point: Vec<usize>,
@@ -1452,7 +1456,7 @@ pub struct TimeSeriesDataWriter {
 
 impl fmt::Debug for TimeSeriesDataWriter {
     /// A summary rather than the whole state, which grows with every step written and, for
-    /// `DataStorage::AsciiInline`, holds the data itself.
+    /// [`DataStorage::AsciiInline`], holds the data itself.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimeSeriesDataWriter")
             .field("xdmf_file_name", &self.xdmf_file_name)
@@ -1474,7 +1478,8 @@ impl fmt::Debug for TimeSeriesDataWriter {
 }
 
 impl TimeSeriesDataWriter {
-    /// The XDMF file this writer writes, same as `TimeSeriesWriter::file_name` reported.
+    /// The XDMF file this writer writes, same as
+    /// [`TimeSeriesWriter::file_name`](crate::TimeSeriesWriter::file_name) reported.
     pub fn file_name(&self) -> &Path {
         &self.xdmf_file_name
     }
@@ -1717,9 +1722,11 @@ impl TimeSeriesDataWriter {
     }
 }
 
-/// A single time step being written, handed to the closure passed to `write_time_step`.
+/// A single time step being written, handed to the closure passed to
+/// [`TimeSeriesDataWriter::write_time_step`].
 ///
-/// Each `point_data`/`cell_data` call writes its heavy data before returning, so one buffer can
+/// Each [`point_data`](Self::point_data)/[`cell_data`](Self::cell_data) call writes its heavy data
+/// before returning, so one buffer can
 /// serve every field of the step; the light data (XML) is written once, after the closure
 /// returns.
 ///
@@ -1966,8 +1973,8 @@ impl TimeStep<'_> {
     /// Write one field once, whole, and give every submesh a `<DataItem>` selecting its own share
     /// of it -- keeping a step's heavy data independent of the number of submeshes and their
     /// overlap. A submesh whose entities are one run selects with a `HyperSlab`, any other with
-    /// `Coordinates` through its index array. Only for the HDF5 storages, whose selections
-    /// `ParaView` honours.
+    /// `Coordinates` through its index array. Only for a storage whose selections `ParaView`
+    /// honours, which is the HDF5 ones; see [`DataWriter::supports_selections`].
     fn write_data_selected(
         &mut self,
         name: &str,
@@ -2260,9 +2267,9 @@ fn build_data_item(
 // plain-string labels for the data category in error messages, since heavy-data naming doesn't
 // go through `attribute::Center` either
 
-/// Label for point data in user-facing error messages.
+/// Label for point data in user-facing error messages, named after [`TimeStep::point_data`].
 const POINT_DATA: &str = "point_data";
-/// Label for cell data in user-facing error messages.
+/// Label for cell data in user-facing error messages, named after [`TimeStep::cell_data`].
 const CELL_DATA: &str = "cell_data";
 
 /// Whether a name a caller chose -- for a data field or for a submesh -- can be written.
