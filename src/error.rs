@@ -130,6 +130,61 @@ pub enum Error {
     },
 }
 
+/// Stable, fieldless category for an [`Error`], mirroring [`std::io::ErrorKind`].
+///
+/// Use it to match on the kind of failure without depending on `reason`'s wording, or to build a
+/// stable discriminator for structured logs. See [`Error::kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorKind {
+    /// See [`Error::Io`].
+    Io,
+    /// See [`Error::Hdf5`].
+    #[cfg(feature = "hdf5")]
+    Hdf5,
+    /// See [`Error::InvalidFileName`].
+    InvalidFileName,
+    /// See [`Error::InvalidConfiguration`].
+    InvalidConfiguration,
+    /// See [`Error::InvalidMesh`].
+    InvalidMesh,
+    /// See [`Error::InvalidTimeStep`].
+    InvalidTimeStep,
+    /// See [`Error::InvalidData`].
+    InvalidData,
+    /// See [`Error::IntegerOutOfRange`].
+    IntegerOutOfRange,
+    /// See [`Error::Internal`].
+    Internal,
+    /// See [`Error::InvalidDocument`].
+    InvalidDocument,
+    /// See [`Error::Unsupported`].
+    Unsupported,
+    /// See [`Error::NumberTypeMismatch`].
+    NumberTypeMismatch,
+}
+
+impl Error {
+    /// This error's category, for matching without depending on `reason`'s wording, or for a
+    /// stable discriminator in structured logs.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Io { .. } => ErrorKind::Io,
+            #[cfg(feature = "hdf5")]
+            Self::Hdf5 { .. } => ErrorKind::Hdf5,
+            Self::InvalidFileName { .. } => ErrorKind::InvalidFileName,
+            Self::InvalidConfiguration { .. } => ErrorKind::InvalidConfiguration,
+            Self::InvalidMesh { .. } => ErrorKind::InvalidMesh,
+            Self::InvalidTimeStep { .. } => ErrorKind::InvalidTimeStep,
+            Self::InvalidData { .. } => ErrorKind::InvalidData,
+            Self::IntegerOutOfRange { .. } => ErrorKind::IntegerOutOfRange,
+            Self::Internal(_) => ErrorKind::Internal,
+            Self::InvalidDocument { .. } => ErrorKind::InvalidDocument,
+            Self::Unsupported { .. } => ErrorKind::Unsupported,
+            Self::NumberTypeMismatch { .. } => ErrorKind::NumberTypeMismatch,
+        }
+    }
+}
+
 /// Attach filesystem-operation context to a [`std::io::Error`], for use with `map_err`.
 ///
 /// A bare `?` on a filesystem call loses which path and which operation failed; every fallible
@@ -348,5 +403,103 @@ mod error_messages {
         }
         .into();
         assert_eq!(io_err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+}
+
+#[cfg(test)]
+mod kind {
+    use super::*;
+
+    #[test]
+    fn each_variant_reports_its_own_kind() {
+        assert_eq!(
+            Error::Io {
+                operation: "creating data file",
+                path: PathBuf::from("/tmp/out/data.txt"),
+                source: std::io::Error::other("boom"),
+            }
+            .kind(),
+            ErrorKind::Io
+        );
+        assert_eq!(
+            Error::InvalidFileName {
+                path: PathBuf::from("a:b"),
+                reason: "bad name".to_string(),
+            }
+            .kind(),
+            ErrorKind::InvalidFileName
+        );
+        assert_eq!(
+            Error::InvalidConfiguration {
+                reason: "bad config".to_string(),
+            }
+            .kind(),
+            ErrorKind::InvalidConfiguration
+        );
+        assert_eq!(
+            Error::InvalidMesh {
+                reason: "bad mesh".to_string(),
+            }
+            .kind(),
+            ErrorKind::InvalidMesh
+        );
+        assert_eq!(
+            Error::InvalidTimeStep {
+                time: "0.1".to_string(),
+                reason: "bad time step".to_string(),
+            }
+            .kind(),
+            ErrorKind::InvalidTimeStep
+        );
+        assert_eq!(
+            Error::InvalidData {
+                reason: "bad data".to_string(),
+            }
+            .kind(),
+            ErrorKind::InvalidData
+        );
+        assert_eq!(
+            Error::IntegerOutOfRange {
+                value: 0,
+                reason: "out of range".to_string(),
+            }
+            .kind(),
+            ErrorKind::IntegerOutOfRange
+        );
+        assert_eq!(Error::Internal("boom").kind(), ErrorKind::Internal);
+        assert_eq!(
+            Error::InvalidDocument {
+                reason: "bad document".to_string(),
+            }
+            .kind(),
+            ErrorKind::InvalidDocument
+        );
+        assert_eq!(
+            Error::Unsupported {
+                reason: "not supported".to_string(),
+            }
+            .kind(),
+            ErrorKind::Unsupported
+        );
+        assert_eq!(
+            Error::NumberTypeMismatch {
+                reason: "mismatch".to_string(),
+            }
+            .kind(),
+            ErrorKind::NumberTypeMismatch
+        );
+    }
+
+    #[cfg(feature = "hdf5")]
+    #[test]
+    fn hdf5_reports_its_own_kind() {
+        assert_eq!(
+            Error::Hdf5 {
+                operation: "creating group",
+                source: hdf5::Error::from("boom".to_string()),
+            }
+            .kind(),
+            ErrorKind::Hdf5
+        );
     }
 }

@@ -3,7 +3,7 @@ members = ["python"]
 
 [workspace.package]
 edition = "2024"
-version = "0.2.3"
+version = "0.2.4"
 
 [workspace.lints.clippy]
 allow_attributes = "warn"
