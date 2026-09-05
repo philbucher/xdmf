@@ -5,15 +5,10 @@
 //! so the value is refused rather than written. A file that broke them would be valid XDMF and
 //! would read back correctly elsewhere.
 //!
-//! [`validate`] is the single entry point, called by [`TimeSeriesWriter`] and [`TimeStep`] and
-//! never by a [`DataWriter`] backend. It only ever *rejects*, never rewrites, so a path that does
-//! not care about `ParaView` is this one call away.
+//! `validate` is the single entry point. It only ever *rejects*, never rewrites, so a caller that
+//! does not care about `ParaView` skips this one call.
 //!
 //! Each limit below was measured against `ParaView` 5.13 and 6.1.
-//!
-//! [`TimeSeriesWriter`]: crate::TimeSeriesWriter
-//! [`TimeStep`]: crate::TimeStep
-//! [`DataWriter`]: crate::DataWriter
 
 use crate::{Error, Result, Values, xdmf_elements::data_item::Format};
 

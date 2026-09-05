@@ -1,5 +1,5 @@
-//! A `Topology`'s raw connectivity array to per-cell [`CellType`]s and a connectivity without the
-//! type codes, local to whatever submesh wrote it. The inverse of the writer's `prepare_cells`.
+//! Decodes a `Topology`'s raw connectivity array into per-cell [`CellType`]s and a connectivity
+//! without the type codes, local to whatever submesh wrote it.
 
 use crate::{
     CellType, ConnectivityIndex, Error, Result,

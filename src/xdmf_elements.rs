@@ -111,12 +111,8 @@ impl Domain {
     }
 }
 
-// Declares the cell types, their XDMF codes and their point counts as one list, so that a type
-// added to the crate cannot reach `ALL`, `from_code` or `num_points` as an omission — unlike
-// `define_values!`, where the methods are left out on purpose, `from_code` maps a code *to* a
-// variant and so cannot be made exhaustive by hand. The one decision still left to the compiler
-// is `From<CellType> for TopologyType` (`xdmf_elements/topology.rs`), whose exhaustive match asks
-// which XDMF name a new type serialises as.
+// Declares the cell types, their XDMF codes and their point counts as one list, so a new type
+// cannot be added while missing from `ALL`, `from_code` or `num_points`.
 macro_rules! define_cell_types {
     ($($variant:ident = $code:literal => $num_points:literal),+ $(,)?) => {
         /// The cell types this crate can write, i.e. the XDMF topology types it supports.

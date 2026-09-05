@@ -35,7 +35,6 @@ pub(crate) struct SingleFileHdf5Writer {
     deflate_level: u8,
 }
 
-/// TODO show file hierarchy, and how data is structured
 impl SingleFileHdf5Writer {
     pub(crate) fn new(file_name: impl AsRef<Path>, deflate_level: u8) -> Result<Self> {
         let h5_file_name_full = file_name.as_ref().to_path_buf().with_extension("h5");
@@ -471,18 +470,14 @@ fn create_and_write<T: H5Type>(
 
 /// How many raw bytes one chunk of a dataset holds, give or take its last one.
 ///
-/// Every dataset written here is compressed, so HDF5 chunks it either way, and on its own it picks
-/// the whole dataset (up to 16M elements). Reading any *part* of such an array then costs the
-/// whole array, repeatedly, since a chunk that far over HDF5's 1 MB cache is never held.
-///
-/// A megabyte tested well: it costs next to nothing on disk, and below it the reads stop getting
-/// faster.
+/// Every dataset here is compressed, so HDF5 chunks it either way, defaulting to the whole
+/// dataset (up to 16M elements) -- which makes reading any part of it cost the whole array,
+/// repeatedly, once a chunk that large no longer fits HDF5's 1 MB cache. A megabyte tested well:
+/// it costs next to nothing on disk, and below it the reads stop getting faster.
 const CHUNK_BYTES: usize = 1 << 20; // 1MB
 
-/// The chunk shape for a dataset of `shape` holding [`CHUNK_BYTES`] of raw data each, or [`None`]
-/// to leave it to HDF5.
-///
-/// [`None`] for a dataset that fits one chunk anyway, and for any shape that is not flat, whose
+/// The chunk shape for a dataset of `shape` holding `CHUNK_BYTES` of raw data each, or `None` to
+/// leave it to HDF5: for a dataset that fits one chunk anyway, or a shape that is not flat, whose
 /// layout this cannot guess.
 fn chunk_shape<T>(shape: &[usize]) -> Option<Vec<usize>> {
     let [len] = *shape else { return None };

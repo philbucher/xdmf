@@ -536,10 +536,7 @@ mod tests {
     // No `data_item_include_deserialize` round-trip: `quick-xml` fails to route a nested
     // `xi:include` child to the `Raw::include` field once `DataItem` sits inside another struct
     // (verified -- it resolves fine as the directly-deserialized root type, but every real
-    // document nests it inside `Domain`/`Geometry`/`Topology`/`Attribute`). Not a gap the reader
-    // hits today: `Format::HDF` never writes `DataContent::Include`, only the `Ascii` backend's
-    // external-file mode does (`ascii_writer.rs`), so it only needs solving once the ascii
-    // storages can be read -- most likely with a hand-rolled event-loop parse of that one child.
+    // document nests it). Not a gap the reader hits today, since it only reads `Format::HDF` data.
 
     #[test]
     fn data_item_selection_deserialize() {
