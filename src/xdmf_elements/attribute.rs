@@ -1,4 +1,4 @@
-//! This module contains the Attribute element, which defines values associated with the mesh.
+//! The Attribute element, which defines values associated with the mesh.
 
 use serde::{Deserialize, Serialize};
 

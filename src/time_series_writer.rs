@@ -1,9 +1,8 @@
-//! This module contains functionalities for writing a series of time steps to XDMF.
+//! Writing a series of time steps to XDMF.
 //!
-//! The mesh is written only once and then referenced in each time step.
-//! This is a significant advantage over VTK based formats, making it more efficient both in terms of storage size as well as write speed.
+//! The mesh is written once and referenced from each time step, rather than repeated per step.
 //!
-//! The concept is inspired by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio)
+//! Inspired by the `TimeSeriesWriter` of [meshio](https://github.com/nschloe/meshio).
 
 use std::{
     borrow::Cow,
@@ -37,8 +36,7 @@ pub struct TimeSeriesWriter {
 }
 
 impl fmt::Debug for TimeSeriesWriter {
-    /// The backend is named by its [`DataStorage`] rather than shown, since a `dyn DataWriter` has
-    /// nothing a caller could act on beyond which storage it is.
+    /// The backend is shown as its [`DataStorage`], the only part of it a caller can act on.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimeSeriesWriter")
             .field("xdmf_file_name", &self.xdmf_file_name)
@@ -78,17 +76,10 @@ impl TimeSeriesWriter {
 
     /// Writes the mesh to the XDMF file, returning a `TimeSeriesDataWriter` for writing time steps.
     ///
-    /// Sizes of the inputs are validated to ensure consistency with the mesh and defined cell types.
-    ///
-    /// The coordinates are taken as `f32` or `f64`, whichever the caller already holds, and are
-    /// written at that precision.
-    ///
-    /// The connectivity is likewise taken and written as the integer type it is passed in --
-    /// `u32`, `i32`, `u64` or `i64` -- which is what sets the largest mesh that can be written.
-    /// `u32` and `u64` are both capped at `u32::MAX` points, since `ParaView` decodes `UInt`
-    /// connectivity at 32 bits whatever precision is declared; `i64` is decoded at the full 64
-    /// bits, but only `Hdf5SingleFile`/`Hdf5MultipleFiles` can store it that wide (see
-    /// [`Error::IntegerOutOfRange`]).
+    /// Coordinates go in as `f32` or `f64`, connectivity as `u32`, `i32`, `u64` or `i64`, each at
+    /// the width it was passed. The connectivity type caps the mesh size: `u32` and `u64` at
+    /// `u32::MAX` points, since `ParaView` decodes `UInt` at 32 bits whatever precision is
+    /// declared, `i64` at the full 64 bits but only in the HDF5 storages.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -153,39 +144,25 @@ impl TimeSeriesWriter {
     ///
     /// A submesh is a named subset of the mesh's cells, given as indices into `cell_types` (or,
     /// for a mesh of points only, into the points). Each becomes a separately selectable block in
-    /// `ParaView`'s Multi-block Inspector (`View -> Multi-block Inspector`), which is what makes
-    /// parts of a mesh -- material zones, boundary patches, element blocks -- individually visible
-    /// and colourable.
+    /// `ParaView`'s Multi-block Inspector, so material zones, boundary patches or element blocks
+    /// can be shown and coloured on their own.
     ///
-    /// Each submesh holds the points its own cells use and nothing else, its connectivity
-    /// numbered against them, so that a viewer holds the mesh about once however many submeshes it
-    /// is split into rather than once per submesh.
+    /// Each submesh holds the points its own cells use and nothing else, its connectivity numbered
+    /// against them. Submeshes may overlap: a cell can belong to any number of them. Every cell
+    /// must belong to at least one, since a cell in none of them would disappear from the
+    /// visualization; leave such cells out of `cell_types` instead. A submesh name may be any
+    /// non-blank string without control characters -- `ParaView` labels the block with it and
+    /// nothing else uses it.
     ///
-    /// Where those points come from depends on the [`DataStorage`], as the field data below does.
-    /// The HDF5 ones write the mesh's coordinates once -- one array per coordinate direction --
-    /// and each submesh's `<Geometry>` selects the points it holds out of them, so a point on a
-    /// boundary between submeshes is stored once however many of them touch it. The ascii and
-    /// binary storages are given a copy of each submesh's points instead.
+    /// Data is still written per time step as for a plain mesh: point data over all points, cell
+    /// data over all cells, in the mesh's own indexing. The writer gives each submesh its share,
+    /// so adding submeshes changes nothing about how field data is produced.
     ///
-    /// Submeshes may overlap: a cell can belong to any number of them. Every cell must belong to
-    /// at least one, though, since a cell in none of them would silently disappear from the
-    /// visualization; leave such cells out of `cell_types` instead.
-    ///
-    /// A submesh name may be any non-blank string without control characters -- it is what
-    /// `ParaView` labels the block with, and it goes nowhere else: the heavy data is numbered, so
-    /// nothing a caller names has to be usable as a file name.
-    ///
-    /// Data is still written per time step exactly as for a plain mesh -- point data over all
-    /// points, cell data over all cells, in the mesh's own indexing. The writer takes care of
-    /// giving each submesh its share of both, so adding submeshes to existing code does not change
-    /// how its field data is produced.
-    ///
-    /// How that share reaches a submesh depends on the [`DataStorage`]. The HDF5 ones write each
-    /// field once, exactly as it was passed, and each submesh's `<Attribute>` selects the part of
-    /// it that submesh holds -- so a step's heavy data does not grow with the number of submeshes
-    /// or with how much they overlap. The ascii and binary storages are given a copy per submesh
-    /// instead, since `ParaView` misreads a selection out of those; so is a submesh that lists
-    /// its cells in any order other than ascending, whichever storage it is written to.
+    /// What that costs on disk depends on the [`DataStorage`]. The HDF5 ones write the coordinates
+    /// and each field once and let every submesh's `<Geometry>`/`<Attribute>` select its share, so
+    /// the heavy data grows with neither the number of submeshes nor their overlap. The ascii and
+    /// binary storages get a copy per submesh, since `ParaView` misreads a selection out of those;
+    /// so does a submesh listing its cells in any order but ascending, whichever storage it is.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -212,8 +189,8 @@ impl TimeSeriesWriter {
     /// # std::fs::remove_file("xdmf_write_submeshes.xdmf2").expect("the example writes this file");
     /// ```
     ///
-    /// A submesh that is one block of consecutive cells can be given as a [`Range`] rather than as
-    /// an index list -- see [`SubmeshCells`], which is what the second half of each pair converts
+    /// A submesh that is one block of consecutive cells can be given as a [`Range`] rather than an
+    /// index list -- see [`SubmeshCells`], which is what the second half of each pair converts
     /// into:
     ///
     /// ```rust
@@ -236,13 +213,11 @@ impl TimeSeriesWriter {
     /// # std::fs::remove_file("xdmf_write_submesh_ranges.xdmf2").expect("the example writes this file");
     /// ```
     ///
-    /// Each submesh is written with the topology *its own* cells share
-    ///
-    /// The submeshes are taken as an iterator so that a caller who has them in any shape can pass
-    /// it without first building a slice of them. They are not consumed lazily, though: the whole
-    /// list is read and validated before anything is written, and a submesh whose cells -- or
-    /// whose points -- are not one ascending run keeps that index list for the writer's lifetime,
-    /// since every time step needs it to cut up that submesh's share of the data.
+    /// The submeshes are taken as an iterator so that a caller holding them in any shape can pass
+    /// it without building a slice first. They are not consumed lazily: the whole list is read and
+    /// validated before anything is written, and a submesh whose cells or points are not one
+    /// ascending run keeps its index list for the writer's lifetime, since every time step needs
+    /// it to cut up that submesh's share of the data.
     pub fn write_mesh_with_submeshes<'c, C, I, N, B>(
         mut self,
         points: &[C],
@@ -373,8 +348,8 @@ impl TimeSeriesWriter {
         self.finish_mesh(grid, data_items, prepared, mesh.num_points, mesh.num_cells)
     }
 
-    /// Everything the two entry points share, once the mesh itself has been validated: assembling
-    /// the connectivity and deciding the topology it is written as.
+    /// What the two entry points share once the mesh is validated: assembling the connectivity and
+    /// deciding the topology it is written as.
     fn prepare_mesh<'c, C: Coordinate, I: ConnectivityIndex>(
         &mut self,
         points: &[C],
@@ -411,8 +386,8 @@ impl TimeSeriesWriter {
 
     /// Write one array of point coordinates and describe it as a named, `Domain`-level `DataItem`.
     ///
-    /// Named and referenced for the same reason the connectivity is: the grid carrying it is
-    /// cloned once per time step, and a reference is short where the coordinates are not.
+    /// Named and referenced so that cloning the grid per time step repeats a short reference
+    /// rather than the coordinates.
     fn points_data_item(
         &mut self,
         submesh: Option<usize>,
@@ -439,14 +414,11 @@ impl TimeSeriesWriter {
 
     /// Write the mesh's own coordinates, once, as one array per coordinate direction.
     ///
-    /// Split that way -- an `X_Y_Z` geometry rather than the usual interleaved `XYZ` one -- so
-    /// that all three of a submesh's selections out of them can share the one index list naming
-    /// the points it holds; selecting out of an interleaved array would take one index per
-    /// coordinate instead.
+    /// An `X_Y_Z` geometry rather than the interleaved `XYZ` one, so all three of a submesh's
+    /// selections share the one index list naming the points it holds.
     ///
-    /// The `DataItem`s returned describe those arrays flat and unnamed: each goes *inside* a
-    /// submesh's selection rather than being referenced by it, since `ParaView` matches the rank
-    /// of a selection against the rank of the array it selects out of.
+    /// The `DataItem`s returned are flat and unnamed: each goes *inside* a submesh's selection,
+    /// since `ParaView` matches the rank of a selection against the array it selects out of.
     fn write_mesh_coordinates(&mut self, points: &Values<'_>) -> Result<[DataItem; 3]> {
         // its own, not the caller's: this runs once, before the per-submesh gathers start
         let mut buffers = GatherBuffers::default();
@@ -483,8 +455,8 @@ impl TimeSeriesWriter {
 
     /// Write one connectivity array and describe it as a named, `Domain`-level `DataItem`.
     ///
-    /// Named and referenced rather than inlined into the topology, so that cloning the grid once
-    /// per time step repeats only a short reference instead of the connectivity itself.
+    /// Named and referenced rather than inlined, so that cloning the grid per time step repeats a
+    /// short reference rather than the connectivity.
     fn connectivity_data_item<I: ConnectivityIndex>(
         &mut self,
         submesh: Option<usize>,
@@ -517,20 +489,13 @@ impl TimeSeriesWriter {
     /// Record which cells and which points of the mesh each submesh holds, for reading the file
     /// back.
     ///
-    /// A submesh's connectivity is indexed into its own points and submeshes may overlap, so the
-    /// grids alone say neither which cell of the mesh a submesh's cell was nor which point its
-    /// points were. One `Information` names, per submesh in the order they were given, either
-    /// `<start>:<len>` for a contiguous list or the `DataItem` holding its indices. `ParaView`
-    /// reads neither -- this is a side channel for a reader, not something a viewer shows.
+    /// One `Information` names, per submesh, either `<start>:<len>` for a contiguous list or the
+    /// `DataItem` holding its indices. A side channel for a reader; `ParaView` reads neither.
     ///
-    /// Only the cell list needs one. Where a submesh selects its points out of the mesh's
-    /// coordinates, its `<Geometry>` already says which points it holds, in those same two forms,
-    /// and the file would be stating it twice.
-    ///
-    /// The point *arrays* are still written for such a storage, though, and only because
-    /// [`selected_coordinates`] has already emitted a reference to `submesh_points_<k>` for every
-    /// scattered submesh -- dropping them here would leave those references dangling. The two
-    /// agree by name alone; keep them in step.
+    /// Only the cell list needs one, since a submesh selecting its points out of the mesh's
+    /// coordinates already states them in its `<Geometry>`. The point *arrays* are still written
+    /// for such a storage, because the geometry references `submesh_points_<k>` by name. Keep the
+    /// two in step.
     fn write_submesh_index_lists(
         &mut self,
         submeshes: &[Submesh],
@@ -686,8 +651,8 @@ fn new_document(grid: Grid, data_items: Vec<DataItem>, data_storage: DataStorage
     xdmf
 }
 
-/// How many cells a mesh has: one per cell type, or -- with no cell types at all -- one per point,
-/// since those are then written as a polyvertex topology over the points themselves.
+/// How many cells a mesh has: one per cell type, or one per point with no cell types at all, since
+/// those are written as a polyvertex topology over the points.
 fn num_cells(num_coordinates: usize, cell_types: &[CellType]) -> usize {
     if cell_types.is_empty() {
         num_coordinates / 3
@@ -701,14 +666,10 @@ const DOMAIN_DATA_ITEMS: &str = "/Xdmf/Domain/DataItem";
 
 /// A submesh's cell or point indices, as the narrowest integer type that holds all of them.
 ///
-/// Nothing casts or narrows a caller's own data anywhere in this crate, but these indices are the
-/// crate's own: they are positions in an array it assembled, so the type they are written as is a
-/// storage decision, and a reader takes it from the `DataItem` either way.
+/// Narrowing is allowed here where it is nowhere else, since these indices are the crate's own.
 ///
-/// Signed rather than unsigned, even though an index is never negative: `ParaView` decodes a
-/// `NumberType="UInt"` array at 32 bits whatever `Precision` says (see the `paraview` module),
-/// and these arrays are no longer only a side channel -- a scattered submesh selects its share of
-/// every field through them.
+/// Signed rather than unsigned, even though an index is never negative, because `ParaView` decodes
+/// a `NumberType="UInt"` array at 32 bits whatever `Precision` says.
 fn index_values(indices: &[usize]) -> Result<Values<'static>> {
     if let Some(indices) = indices
         .iter()
@@ -736,30 +697,19 @@ struct PreparedMesh<'c, I: Clone> {
     nodes_per_element: Option<u8>,
     /// Connectivity of the whole mesh, with the cell types prepended (see `prepare_cells`).
     ///
-    /// Borrowed from the caller's own array whenever `prepare_cells` had nothing to prepend --
-    /// which is every mesh whose cells all share one type, the common case. Only a `Mixed` mesh
-    /// (or one of points only) owns an array here, since only those interleave something with the
-    /// indices the caller passed. Nothing below writes through it, so the borrow costs nothing.
+    /// Borrowed from the caller's array unless something had to be prepended, which is only a
+    /// `Mixed` mesh or one of points only.
     cells: Cow<'c, [I]>,
 }
 
 /// One submesh's geometry, as a selection out of the mesh's coordinates: one item per coordinate
 /// direction, each selecting the points the submesh holds out of that direction's array.
 ///
-/// All three share one selector -- the index list of the points the submesh holds, or, for a
-/// submesh whose points are one run, the start and count that say the same thing in three
-/// numbers. That list is `submesh_points`, which the mesh already carries for a reader; nothing is
-/// written here that was not written anyway.
+/// All three share one selector, the `submesh_points` list the mesh already carries for a reader.
+/// A scattered submesh references it as `submesh_points_<k>`, and the `DataItem` of that name is
+/// written afterwards only because of this reference. Change both ends together.
 ///
-/// The link to it is by name alone: a scattered submesh's selector is a reference to
-/// `submesh_points_<k>`, and the `DataItem` of that name is written afterwards, by
-/// [`TimeSeriesWriter::write_submesh_index_lists`] -- which writes the point lists for a
-/// selecting storage *because* of this reference and nothing else. Neither end can be changed
-/// without the other, so change both together or the geometry references an item that is not
-/// there.
-///
-/// Named and `Domain`-level for the same reason the connectivity is: the grid carrying them is
-/// cloned once per time step, and a reference is short where a selection is not.
+/// Named and `Domain`-level so that cloning the grid per time step repeats a short reference.
 fn selected_coordinates(
     submesh: usize,
     coordinates: &[DataItem; 3],
@@ -821,17 +771,16 @@ fn geometry(points_item: &DataItem) -> Geometry {
     }
 }
 
-/// A named subset of a mesh's cells, as it comes out of validation -- before the mesh it is cut
-/// out of has been walked to find the points those cells use.
+/// A named subset of a mesh's cells as it comes out of validation, before the mesh has been walked
+/// to find the points those cells use.
 #[derive(Debug)]
 struct PreparedSubmesh {
     name: String,
     cells: IndexList,
 }
 
-/// A submesh as the data writer keeps it: its name, which cells of the mesh it holds, and which
-/// points its cells were renumbered against -- the two lists its share of every time step is cut
-/// with.
+/// A submesh as the data writer keeps it: its name, plus the cell and point lists its share of
+/// every time step is cut with.
 #[derive(Debug)]
 struct Submesh {
     name: String,
@@ -851,11 +800,9 @@ fn entities_of(submesh: &Submesh, point_data: bool) -> &IndexList {
 
 /// Which index array a scattered submesh selects fields of one width with.
 ///
-/// A selector names the position of every value it picks, so it depends on how many values an
-/// entity has as well as on the submesh: for a scalar field that is the entity's own index --
-/// which is what `submesh_points`/`submesh_cells` already hold -- and for a wider one, its
-/// components' positions in the field. One array per (submesh, centering, component count) is
-/// therefore written, at the step that first carries such a field, and reused by every step after.
+/// A selector names the position of every value it picks, so it depends on the entity's width as
+/// well as on the submesh. One array per (submesh, centering, component count) is written at the
+/// step that first needs it and reused by every step after.
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct SelectionKey {
     submesh: usize,
@@ -867,11 +814,9 @@ struct SelectionKey {
 
 /// An ascending list of a submesh's cells or points, as positions in the mesh.
 ///
-/// Cell index lists usually come out of a mesh generator as one ascending run -- element blocks,
-/// material zones and boundary patches are produced grouped -- so that case is recognized once, at
-/// mesh-write time, and collapses to two numbers. It then costs nothing per cell for the whole
-/// run, and every per-step slice of a field is a borrow of the caller's own array rather than a
-/// gather into a new one. The points of such a submesh are frequently one run as well.
+/// Mesh generators usually produce element blocks, material zones and boundary patches grouped, so
+/// a cell list is one ascending run. That case collapses to two numbers, after which every
+/// per-step slice of a field is a borrow of the caller's array rather than a gather.
 #[derive(Debug)]
 enum IndexList {
     Contiguous { start: usize, len: usize },
@@ -886,10 +831,9 @@ impl IndexList {
         }
     }
 
-    /// Whether the list is ascending, which is what a `Coordinates` selection needs: `ParaView`
-    /// hands back the values such a selection names in the order the array holds them, not in the
-    /// order they were named, so a submesh listing its cells in any other order has to be given a
-    /// copy of its share instead (see [`TimeStep::write_data_selected`]).
+    /// Whether the list is ascending, which a `Coordinates` selection needs: `ParaView` hands the
+    /// values back in array order rather than the order they were named. A submesh listing its
+    /// cells any other way gets a copy of its share instead.
     fn is_ascending(&self) -> bool {
         match self {
             Self::Contiguous { .. } => true,
@@ -897,7 +841,7 @@ impl IndexList {
         }
     }
 
-    /// The indices themselves -- for a scattered list, in the order it holds them.
+    /// The indices themselves, for a scattered list in the order it holds them.
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         let (run, indices) = match self {
             Self::Contiguous { start, len } => (*start..*start + *len, [].as_slice()),
@@ -910,18 +854,14 @@ impl IndexList {
 
 /// The cells of one submesh, as [`TimeSeriesWriter::write_mesh_with_submeshes`] takes them.
 ///
-/// Built with `.into()` from the shapes a caller usually holds an index list in -- a slice, a
-/// `Vec`, an array -- and from a [`Range`], so a submesh that is one block of consecutive cells
-/// can be given as `start..end`. Element blocks, material zones and boundary patches normally come
-/// out of a mesh generator grouped like that, and the writer stores such a submesh as those two
-/// numbers either way; passing the range keeps a caller splitting a 100M-cell mesh into blocks
-/// from first materialising ~800 MB of index lists for it to fold back up.
+/// Built with `.into()` from a slice, a `Vec`, an array, or a [`Range`], so a submesh of
+/// consecutive cells can be given as `start..end`. The writer stores such a submesh as those two
+/// numbers either way, so passing the range spares a caller building the index list at all.
 #[derive(Clone, Debug)]
 pub enum SubmeshCells<'a> {
     /// A block of consecutive cells, `start..end`.
     Range(Range<usize>),
-    /// One index per cell, in the order the submesh holds them -- borrowed from the caller, or
-    /// owned when the caller hands over its own `Vec`.
+    /// One index per cell, in the order the submesh holds them.
     Indices(Cow<'a, [usize]>),
 }
 
@@ -1102,9 +1042,8 @@ fn prepare_submeshes<'c, N: AsRef<str>, B: Into<SubmeshCells<'c>>>(
 
 /// One bit per cell, for the two membership questions [`prepare_submeshes`] asks.
 ///
-/// A `Vec<usize>` naming which submesh last claimed each cell would answer both in one array, but
-/// costs 8 bytes per cell -- 800 MB on a 100M-cell mesh, held for the whole validation. Two bit
-/// sets cost a quarter of a byte between them.
+/// A `Vec<usize>` naming which submesh last claimed each cell would answer both at 8 bytes per
+/// cell, 800 MB on a 100M-cell mesh. Two bit sets cost a quarter of a byte between them.
 struct CellBitSet {
     words: Vec<u64>,
     len: usize,
@@ -1163,8 +1102,8 @@ fn collapse_indices(cells: &[usize]) -> IndexList {
     }
 }
 
-/// Reject a mesh with cells in no submesh at all: such a cell is in none of the grids that get
-/// written, so it would silently vanish from the visualization rather than fail.
+/// Reject a mesh with cells in no submesh: such a cell reaches none of the grids, so it would
+/// vanish from the visualization rather than fail.
 fn check_all_cells_covered(covered: &CellBitSet) -> Result<()> {
     const MAX_LISTED: usize = 10;
 
@@ -1205,10 +1144,8 @@ fn check_all_cells_covered(covered: &CellBitSet) -> Result<()> {
 
 /// Where each cell's entries start in the prepared connectivity, with a final entry for its end.
 ///
-/// The stride per cell depends on `topology_type`: `Mixed` connectivity has the cell type (and,
-/// for poly-cells, the point count) prepended to each cell's points, while a uniform topology
-/// (every cell sharing one `CellType`, see `prepare_cells`) stores just the points, with no
-/// per-cell metadata.
+/// `Mixed` connectivity prepends the cell type (and, for a poly-cell, the point count) to each
+/// cell's points; a uniform topology stores only the points.
 fn cell_offsets(
     cell_types: &[CellType],
     topology_type: TopologyType,
@@ -1227,7 +1164,7 @@ fn cell_offsets(
 }
 
 /// How many entries one cell takes in a connectivity written as `topology_type`: its point ids,
-/// behind whatever `Mixed` puts in front of them (see `leading_entries`).
+/// behind whatever `Mixed` puts in front of them.
 fn cell_span(cell_types: &[CellType], topology_type: TopologyType, cell: usize) -> usize {
     // the polyvertex fallback for a mesh of points only numbers each point one entry
     let Some(cell_type) = cell_types.get(cell) else {
@@ -1239,11 +1176,8 @@ fn cell_span(cell_types: &[CellType], topology_type: TopologyType, cell: usize) 
 
 /// A submesh's share of the prepared connectivity, in the order it lists its cells.
 ///
-/// Owned rather than borrowed even for one contiguous run, because the copy is renumbered into the
-/// submesh's own points afterwards -- see `renumber_connectivity`.
-///
-/// A submesh written uniformly is cut out of a `Mixed` mesh without the per-cell type codes that
-/// mesh carries: its own `<Topology>` says once what those said per cell (see `submesh_topology`).
+/// Owned even for one contiguous run, because the copy is renumbered into the submesh's own
+/// points afterwards. A submesh written uniformly drops the type codes a `Mixed` mesh carries.
 fn extract_connectivity<I: ConnectivityIndex>(
     cells: &[I],
     offsets: &[usize],
@@ -1275,14 +1209,11 @@ fn extract_connectivity<I: ConnectivityIndex>(
 /// The topology one submesh's own cells are written as: the [`CellType`] all of them share, or the
 /// mesh's own where they do not.
 ///
-/// Decided per submesh rather than taken from the mesh, because the split that makes a mesh
-/// `Mixed` in the first place is usually the one that leaves each block uniform: a volume of
-/// hexahedra beside a boundary of quadrilaterals. Written uniformly, that block states its cell
-/// type once in its `<Topology>` instead of once per cell in its connectivity -- on a
-/// 4.3M-hexahedron volume block, 4.3M indices, about 11% of the block's connectivity.
+/// Decided per submesh, because the split that makes a mesh `Mixed` usually leaves each block
+/// uniform: a volume of hexahedra beside a boundary of quadrilaterals. Written uniformly, such a
+/// block saves one index per cell, about 11% of its connectivity.
 ///
-/// The second half of the pair is the per-element node count only `Polyvertex`/`Polyline` carry,
-/// as in `prepare_mesh`.
+/// The second half of the pair is the per-element node count only `Polyvertex`/`Polyline` carry.
 fn submesh_topology(
     cell_types: &[CellType],
     mesh_topology: TopologyType,
@@ -1309,9 +1240,8 @@ fn submesh_topology(
     (TopologyType::from(first), poly_cell_points(first))
 }
 
-/// How many entries of a cell's span in the prepared connectivity come before its point ids: the
-/// cell type and, for a poly-cell, its point count, which only `Mixed` connectivity carries (see
-/// `prepare_cells`).
+/// How many entries of a cell's span come before its point ids: the cell type and, for a
+/// poly-cell, its point count, which only `Mixed` connectivity carries.
 fn leading_entries(cell_types: &[CellType], topology_type: TopologyType, cell: usize) -> usize {
     if topology_type != TopologyType::Mixed {
         return 0;
@@ -1322,9 +1252,8 @@ fn leading_entries(cell_types: &[CellType], topology_type: TopologyType, cell: u
 
 /// The mesh points one submesh's cells use, ascending.
 ///
-/// This is the submesh's own point list: its coordinates are cut out of the mesh's with it, and
-/// its connectivity is renumbered against it, so that a viewer holds each block's points once
-/// instead of the whole mesh's once per block.
+/// The submesh's coordinates are cut out of the mesh's with this list, and its connectivity is
+/// renumbered against it.
 fn submesh_points<I: ConnectivityIndex>(
     cells: &[I],
     offsets: &[usize],
@@ -1352,11 +1281,9 @@ fn submesh_points<I: ConnectivityIndex>(
 
 /// Where each point of the mesh sits in the submesh currently being renumbered.
 ///
-/// A lookup array rather than a binary search of the submesh's own point list: measured on a
-/// 4M-point mesh, searching cost 6-28% of the whole mesh write depending on how many submeshes it
-/// was split into, and never less. It is built only for a submesh whose points are *not* one run
-/// -- for one that is, a point's position is a subtraction -- so the common case allocates nothing,
-/// and it is sized by the largest point id that reaches it rather than by the mesh.
+/// A lookup array rather than a binary search of the submesh's own point list, which cost 6-28% of
+/// the whole mesh write when measured on a 4M-point mesh. Built only for a submesh whose points
+/// are *not* one run, and sized by the largest point id that reaches it.
 ///
 /// Never cleared between submeshes: each one writes every entry it goes on to read.
 #[derive(Default)]
@@ -1513,11 +1440,9 @@ fn poly_cell_points(cell_type: CellType) -> Option<u8> {
 
 /// Prepare cells / connectivity for writing.
 ///
-/// When every cell shares the same `CellType`, the type is written once as a uniform
-/// `TopologyType` instead of being prepended to every cell, saving one word per cell (two for
-/// `Polyvertex`/`Polyline`, whose per-cell node count is otherwise also repeated). Otherwise the
-/// cell type is prepended to the connectivity list as `Mixed` topology requires, and for
-/// poly-cells, the number of points is also added.
+/// When every cell shares one `CellType`, that type is written once as a uniform `TopologyType`
+/// instead of being prepended per cell. Otherwise the cell type goes in front of each cell as
+/// `Mixed` topology requires, followed by the point count for a poly-cell.
 fn prepare_cells<'c, I: ConnectivityIndex>(
     connectivity: &'c [I],
     cell_types: &[CellType],
@@ -1598,11 +1523,8 @@ pub struct TimeSeriesDataWriter {
 }
 
 impl fmt::Debug for TimeSeriesDataWriter {
-    /// Deliberately a summary rather than the whole state: the light data this holds grows with
-    /// every step written -- and for [`DataStorage::AsciiInline`] each `DataItem` *is* its data --
-    /// so a derived `Debug` would print the entire time series. What is shown is what identifies
-    /// the writer and what a caller can check their own numbers against; hence
-    /// `finish_non_exhaustive`.
+    /// A summary rather than the whole state, which grows with every step written and, for
+    /// [`DataStorage::AsciiInline`], holds the data itself.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimeSeriesDataWriter")
             .field("xdmf_file_name", &self.xdmf_file_name)
@@ -1634,13 +1556,11 @@ impl TimeSeriesDataWriter {
     ///
     /// Without submeshes that is one `<Grid>` in the file's temporal collection. With them the
     /// step is split over one temporal collection per submesh, each carrying that submesh's name
-    /// and holding only that submesh's grids -- rather than one spatial collection per step, each
-    /// naming every submesh again.
+    /// and holding only that submesh's grids.
     ///
     /// The nesting is that way round because `ParaView` makes a grid name unique across the whole
     /// document: a submesh named in every step comes back as `name`, `name[1]`, `name[2]`, ... and
-    /// so changes identity as the animation runs, losing whatever the user set for that block in
-    /// the Multi-block Inspector. Named once, it stays itself.
+    /// loses whatever the user set for that block in the Multi-block Inspector.
     fn push_step(
         &mut self,
         time: &str,
@@ -1736,28 +1656,21 @@ impl TimeSeriesDataWriter {
     ///
     /// The step is completed when `write_step` returns: on `Ok` its `<Grid>` is added to the XDMF
     /// file, on `Err` the step is discarded and the heavy data already written for it is removed
-    /// again. Should that removal fail in turn, the caller's error is still the one reported --
-    /// so heavy data can be left behind, unreferenced by any `<Grid>`, without that being said.
+    /// again. Should that removal fail in turn, the caller's error is still the one reported, so
+    /// heavy data can be left behind unreferenced without that being said.
     ///
-    /// The time is accepted as a str to avoid dealing with formatting, thus leaving it to the
-    /// user. It is validated once, up front, to reject duplicated times. Each attribute is
-    /// validated as it is passed: its name, and its size against the mesh and the
-    /// [`DataAttribute`] it declares.
+    /// The time is a str, leaving the formatting to the caller, and is checked once up front
+    /// against the times already written. Each attribute is validated as it is passed.
     ///
-    /// `write_step` may fail with any error type that this crate's [`Error`] converts into, so a
-    /// caller can abort a step with an error of their own and get it back unchanged.
-    ///
-    /// The error type is inferred from the closure, which works as long as one type is implied --
-    /// as in the example below, where every `?` is on an [`Error`]. A closure that mixes error
-    /// types (say a `?` on an [`Error`] and one on the caller's own error) leaves nothing to
-    /// infer from and needs the type stated, most readably as a return type on the closure:
+    /// `write_step` may fail with any error type that this crate's [`Error`] converts into, and
+    /// gets it back unchanged. That type is inferred from the closure; a closure mixing error
+    /// types needs it stated, most readably as a return type:
     /// `|step| -> Result<(), MyError> { ... }`.
     ///
-    /// A step contains exactly the attributes that were written successfully: if `write_step`
-    /// ignores the error of a rejected attribute and returns `Ok` anyway, the step is written
-    /// without that attribute rather than failing. Only a step left with no attributes at all is
-    /// rejected, since a `<Grid>` without data is of no use. Propagating the error with `?` --
-    /// as the example below does -- is therefore what keeps a step all-or-nothing.
+    /// A step contains exactly the attributes that were written successfully, so a closure that
+    /// ignores a rejected attribute's error and returns `Ok` gets a step without it. Only a step
+    /// left with no attributes at all is rejected; propagating with `?` keeps a step
+    /// all-or-nothing.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -1891,12 +1804,12 @@ impl TimeSeriesDataWriter {
 /// [`TimeSeriesDataWriter::write_time_step`].
 ///
 /// Each [`point_data`](Self::point_data)/[`cell_data`](Self::cell_data) call writes its heavy data
-/// before returning, so the caller's buffer is free again immediately and one buffer can serve
-/// every field of the step. The light data (XML) is written once, after the closure returns.
+/// before returning, so one buffer can serve every field of the step. The light data (XML) is
+/// written once, after the closure returns.
 ///
 /// A step needs at least one attribute; returning from the closure without writing any is an
-/// error. Returning an error discards the step: no `<Grid>` is added to the XDMF file, the heavy
-/// data already written for it is removed again, and the time stays available.
+/// error. Returning an error discards the step: no `<Grid>` reaches the XDMF file, the heavy data
+/// already written for it is removed, and the time stays available.
 pub struct TimeStep<'a> {
     writer: &'a mut TimeSeriesDataWriter,
     time: String,
@@ -1919,9 +1832,8 @@ pub struct TimeStep<'a> {
 }
 
 impl fmt::Debug for TimeStep<'_> {
-    /// Shows which attributes the step has taken so far, by name, rather than the attributes
-    /// themselves -- those carry the step's data. The names are sorted because they are held in a
-    /// `HashSet`, whose iteration order would otherwise vary between runs.
+    /// Names only, since the attributes themselves carry the step's data. Sorted, as a
+    /// `HashSet`'s iteration order varies between runs.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimeStep")
             .field("time", &self.time)
@@ -1931,8 +1843,7 @@ impl fmt::Debug for TimeStep<'_> {
     }
 }
 
-/// The names in a set, in a stable order -- a `HashSet`'s own is not one, and `Debug` output that
-/// reorders itself between runs is hard to compare.
+/// The names in a set, sorted, since a `HashSet`'s own order varies between runs.
 fn sorted_names(names: &HashSet<String>) -> Vec<&str> {
     let mut names: Vec<&str> = names.iter().map(String::as_str).collect();
     names.sort_unstable();
@@ -2063,8 +1974,8 @@ impl TimeStep<'_> {
         Ok(())
     }
 
-    /// Take the next array number. What the backends name their heavy data by, so it only has to
-    /// be unique within the step -- the file name and the HDF5 group already carry the time.
+    /// Take the next array number, which the backends name their heavy data by. Unique within the
+    /// step, since the file name and the HDF5 group carry the time.
     fn take_array_index(&mut self) -> usize {
         let index = self.next_array_index;
         self.next_array_index += 1;
@@ -2074,12 +1985,11 @@ impl TimeStep<'_> {
     /// Give every submesh its share of one field.
     ///
     /// The `Attribute` keeps the caller's name in all of them, since `ParaView` matches a field
-    /// across the blocks of a multi-block dataset by that name -- only the *storage* name is made
-    /// unique, so the backends do not write every submesh to the same file or dataset.
+    /// across the blocks of a multi-block dataset by that name; only the *storage* name is made
+    /// unique.
     ///
-    /// A storage that can be selected out of is written once and referenced (see
-    /// [`write_data_selected`](Self::write_data_selected)); the rest are given a copy of each
-    /// submesh's share, gathered here.
+    /// A storage that can be selected out of is written once and referenced; the rest are given a
+    /// copy of each submesh's share, gathered here.
     fn write_data_per_submesh(
         &mut self,
         name: &str,
@@ -2152,12 +2062,10 @@ impl TimeStep<'_> {
     /// Write one field once, whole, and give every submesh a `<DataItem>` selecting its own share
     /// of it.
     ///
-    /// This is what makes a step's heavy data independent of how many submeshes the mesh is split
-    /// into and of how much they overlap: the caller's array is written exactly as it was passed,
-    /// and what each submesh holds is said in the light data instead -- a `HyperSlab` for a
-    /// submesh whose entities are one run, a `Coordinates` selection through its index array
-    /// otherwise. Only for a storage whose selections `ParaView` honours, which is the HDF5 ones;
-    /// see [`DataWriter::supports_selections`].
+    /// This keeps a step's heavy data independent of the number of submeshes and their overlap.
+    /// A submesh whose entities are one run selects with a `HyperSlab`, any other with
+    /// `Coordinates` through its index array. Only for the HDF5 storages, whose selections
+    /// `ParaView` honours.
     fn write_data_selected(
         &mut self,
         name: &str,
@@ -2320,11 +2228,9 @@ impl TimeStep<'_> {
 
 /// Write one attribute's values and describe them as an XDMF `Attribute`.
 ///
-/// What the backend calls the heavy data is an `index` -- unique within this step -- while the
-/// caller's `name` goes only into the `Attribute`, which is where `ParaView` reads it.
-/// Keeping the two apart is what lets the same field be written once per submesh without the
-/// submeshes disagreeing about its name, and what keeps every name a caller chooses out of the
-/// filesystem.
+/// The backend names the heavy data by an `index`, while the caller's `name` goes only into the
+/// `Attribute`, where `ParaView` reads it. Keeping the two apart keeps every name a caller chooses
+/// out of the filesystem.
 fn build_attribute(
     writer: &mut dyn DataWriter,
     index: usize,
@@ -2344,11 +2250,10 @@ fn build_attribute(
 /// Wrap one submesh's selector and the whole field it selects from into the `DataItem` that
 /// submesh's `<Attribute>` reads through.
 ///
-/// The source item is repeated in each submesh rather than named once and referenced: what it
-/// carries is a path into the heavy storage, which is shorter than the reference to it would be.
-/// It is the one place a field's `DataItem` is written flat: `ParaView` matches the rank of a
-/// selection against the rank of the `HDF5` dataset it reads, and this crate writes every array as
-/// one run of values, so the shape of the field is carried by this item instead.
+/// The source item is repeated in each submesh rather than referenced, since the path into the
+/// heavy storage is shorter than a reference to it. It is also the one place a field's `DataItem`
+/// is written flat, since `ParaView` matches the rank of a selection against the dataset it
+/// reads.
 fn selection(
     selector: DataItem,
     source: &DataItem,
@@ -2383,8 +2288,7 @@ fn selection(
 /// The selector of a submesh whose entities are one run: a start, a stride and a count, small
 /// enough to go into the XML itself rather than into an array.
 ///
-/// Counted in values rather than in entities, since the array it selects out of is written flat --
-/// which is also what keeps the selection one-dimensional whatever shape the field has.
+/// Counted in values rather than entities, since the array it selects out of is written flat.
 fn hyper_slab(start: usize, len: usize, components: usize) -> DataItem {
     DataItem {
         name: None,
@@ -2402,9 +2306,8 @@ fn hyper_slab(start: usize, len: usize, components: usize) -> DataItem {
 /// Write the index array a scattered submesh selects fields of one width with, and describe it as
 /// a named, `Domain`-level `DataItem` for every step to reference.
 ///
-/// One index per value the submesh holds, naming that value's position in the whole field. For a
-/// scalar field that is the submesh's own index list, which is already written as the reader's
-/// side channel and is never written again here.
+/// One index per value the submesh holds, naming its position in the whole field. A scalar field
+/// reuses the submesh's own index list instead.
 fn write_selection_indices(
     writer: &mut dyn DataWriter,
     next_index: &mut usize,
@@ -2469,16 +2372,12 @@ const CELL_DATA: &str = "cell_data";
 
 /// Whether a name a caller chose -- for a data field or for a submesh -- can be written.
 ///
-/// The rule is only that the name be non-blank and printable, because a name is *only* ever light
-/// data: it is the `Name` attribute of an `<Attribute>` or a `<Grid>`, which `quick-xml` escapes,
-/// and nothing else. The heavy data is numbered instead (see [`DataWriter::write_data`] and
-/// [`crate::mesh_file_name`]), so no name has to survive being a file name, a URI or an HDF5 path,
-/// and the characters those would reserve -- `/`, `:`, `%`, `*`, quotes -- need not be rejected.
-/// That matters because solver field names routinely carry them: FDS for instance writes
-/// `Quantity('SOOT DENSITY')`.
+/// The rule is only that the name be non-blank and printable, since a name is only ever light data
+/// and the heavy data is numbered. So `/`, `:`, `%`, `*` and quotes stay allowed, which matters
+/// because solver field names carry them: FDS writes `Quantity('SOOT DENSITY')`.
 ///
-/// Control characters are the exception, and are rejected rather than escaped: XML 1.0 cannot
-/// represent most of them at all, escaped or not, so a name holding one has no valid encoding.
+/// Control characters are rejected rather than escaped, since XML 1.0 cannot represent most of
+/// them at all.
 fn is_valid_data_name(name: &str) -> bool {
     // blank rather than merely empty: a whitespace-only name labels the array with nothing at all
     if name.trim().is_empty() {
@@ -3313,9 +3212,9 @@ mod tests {
         assert_eq!(extracted, &[5, 8, 9, 10, 11, 5, 0, 1, 2, 3]);
     }
 
-    /// A submesh whose cells all share one type is written uniformly, so the type code the mesh's
-    /// `Mixed` connectivity prepends to each of them is dropped on the way out -- its
-    /// `<Topology>` says the same thing once.
+    /// A submesh whose cells share one type is written uniformly, so the type code the mesh's
+    /// `Mixed` connectivity prepends to each cell is dropped on the way out; its `<Topology>`
+    /// states it once.
     #[test]
     fn extract_connectivity_drops_the_type_codes_of_a_uniform_submesh() {
         let contiguous = extract_connectivity(

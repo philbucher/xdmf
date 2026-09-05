@@ -3,21 +3,15 @@
 //! document that says which storage wrote it is rejected as [`Error::Unsupported`] when it is
 //! opened, and a foreign one whose `DataItem`s turn out to hold either as it is read.
 //!
-//! [`TimeSeriesReader::new`] parses the whole document up front -- mesh/time-step metadata and,
-//! for a mesh with submeshes, which points and cells each one holds -- so every read call after it
-//! is a plain, independent, repeatable query against an already-parsed document: read the points,
-//! read the topology, read one field of one step. There is deliberately no phase a caller has to
-//! pass through first (unlike the writer, where writing the mesh is a one-time, irreversible
-//! mutation of the file): reading has no such constraint, so nothing here enforces one.
+//! [`TimeSeriesReader::new`] parses the whole document up front, so every read call after it is an
+//! independent, repeatable query, in any order.
 //!
 //! A mesh written with [`crate::TimeSeriesWriter::write_mesh_with_submeshes`] has no points or
-//! connectivity of its own -- each submesh holds only the points its own cells use, renumbered
-//! against them, and submeshes may overlap. [`TimeSeriesReader::read_points`]/
+//! connectivity of its own. [`TimeSeriesReader::read_points`]/
 //! [`TimeSeriesReader::read_topology`] put the original mesh back together from the mesh's own
-//! coordinates (written once, per direction) plus each submesh's `submesh_cells`/`<Geometry>`
-//! selector. This is also why only the HDF5 storages can be read: the ascii and binary storages
-//! write only a compacted copy of each submesh's points, so a point no cell uses is not in the
-//! file at all and cannot be reconstructed.
+//! coordinates plus each submesh's `submesh_cells`/`<Geometry>` selector. This is also why only
+//! the HDF5 storages can be read: the ascii and binary storages write a compacted copy of each
+//! submesh's points, so a point no cell uses is not in the file at all.
 
 mod light_data;
 mod selection;
@@ -32,17 +26,14 @@ cfg_select! {
         /// saying so, for every `Format="HDF"` `DataItem` a document turns out to hold.
         ///
         /// [`TimeSeriesReader::new`] already rejects a document that *says* an HDF5 storage wrote
-        /// it, so this is reached only for a foreign document, one `DataItem` at a time. Selecting
-        /// a whole module rather than gating each item inside it is what `lib.rs` does for
-        /// `hdf5_writer`, and it is why `hdf5_reader.rs` itself holds no `cfg`.
+        /// it, so this is reached only for a foreign document, one `DataItem` at a time.
         mod hdf5_reader {
             use std::path::Path;
 
             use crate::{Error, Result, Values, reader::sealed::SealedValueType};
 
-            /// Nothing to cache when no file can be opened, but `Document` holds one either way.
-            /// Braced rather than a unit struct so that `FileCache::default()` stays the way it is
-            /// written in the build that has a field to fill.
+            /// Nothing to cache when no file can be opened. Braced rather than a unit struct so
+            /// `FileCache::default()` reads the same in both builds.
             #[derive(Default)]
             pub(super) struct FileCache {}
 
@@ -93,17 +84,16 @@ use crate::{
 pub struct DataInfo {
     /// Name of the field
     pub name: String,
-    /// The field's shape. For a field whose `AttributeType` collapsed several `DataAttribute`
-    /// shapes onto `Matrix` when it was written (`Tensor6`, `Matrix(n, m)`, `Generic`, see
-    /// `values.rs`), this is always [`DataAttribute::Generic`] with the real component count --
-    /// the file does not state which of the three it originally was.
+    /// The field's shape. `Tensor6`, `Matrix(n, m)` and `Generic` all write as `Matrix`, and the
+    /// file does not say which, so those come back as [`DataAttribute::Generic`] with the real
+    /// component count.
     pub attribute: DataAttribute,
     /// The element type the file holds this field as.
     pub number_type: NumberType,
     /// The element width, in bytes, the file holds this field at.
     pub precision: u8,
-    /// Components per entity, the product of the dimensions past the first. What [`len`](Self::len)
-    /// was sized with, so trust it over [`attribute`](Self::attribute)'s own count.
+    /// Components per entity, the product of the dimensions past the first. What
+    /// [`len`](Self::len) was sized with.
     pub components: usize,
     /// Total element count: `num_entities * components`.
     pub len: usize,
@@ -216,9 +206,8 @@ pub(crate) mod sealed {
 /// with submeshes, which points and cells each one holds), and every read call against it.
 ///
 /// The light data is parsed once, in [`new`](Self::new), so a reader shows the steps the document
-/// had when it was opened; reopen it to pick up steps written since. A read keeps its heavy-data
-/// file open afterwards, for the next read that names the same one, so that file stays open until
-/// the reader is dropped.
+/// had when it was opened; reopen it to pick up steps written since. The heavy-data file a read
+/// opens stays open until the reader is dropped.
 ///
 /// ```rust,no_run
 /// use xdmf::TimeSeriesReader;
@@ -262,8 +251,7 @@ pub(crate) mod sealed {
 /// ```
 pub struct TimeSeriesReader {
     document: Document,
-    /// How the document's grids break down, as positions rather than references, so that it can
-    /// be built once here rather than rebuilt by every read call.
+    /// How the document's grids break down, built once rather than by every read call.
     analysis: Analysis,
     num_points: usize,
     num_cells: usize,
@@ -286,9 +274,9 @@ impl std::fmt::Debug for TimeSeriesReader {
 }
 
 impl TimeSeriesReader {
-    /// Parse the light data (XML) of an XDMF file and report the mesh's metadata, without
-    /// touching any heavy data -- except for a mesh with submeshes, where each submesh's point
-    /// and cell membership is being parsed eagerly
+    /// Parse the light data (XML) of an XDMF file and report the mesh's metadata. No heavy data
+    /// is touched, except for a mesh with submeshes, whose point and cell memberships are read
+    /// here.
     ///
     /// A document written with a storage this reader cannot read is rejected here, rather than at
     /// the first call that reaches heavy data.
@@ -366,11 +354,8 @@ impl TimeSeriesReader {
     }
 
     /// The global cell indices the submesh at `submesh` (an index into [`Self::submesh_names`])
-    /// holds, in the order the submesh was written with -- what a caller writing this same split
-    /// back with
-    /// [`TimeSeriesWriter::write_mesh_with_submeshes`](crate::TimeSeriesWriter::write_mesh_with_submeshes)
-    /// would pass as that submesh's own index list. Indices are into the `cell_types`/
-    /// `connectivity` buffers [`Self::read_topology`] fills.
+    /// holds, in the order it was written with. Indices are into the `cell_types`/`connectivity`
+    /// buffers [`Self::read_topology`] fills.
     ///
     /// Empty (and `submesh` always out of range) for a mesh with no submeshes.
     pub fn submesh_cells(&self, submesh: usize) -> Result<Vec<usize>> {
@@ -380,7 +365,7 @@ impl TimeSeriesReader {
             .ok_or_else(|| self.submesh_out_of_range(submesh))
     }
 
-    /// The global point indices the submesh at `submesh` holds, ascending -- the points its own
+    /// The global point indices the submesh at `submesh` holds, ascending: the points its own
     /// cells use. Indices are into the `points` buffer [`Self::read_points`] fills. See
     /// [`Self::submesh_cells`] for the index and range rules.
     pub fn submesh_points(&self, submesh: usize) -> Result<Vec<usize>> {
@@ -403,8 +388,7 @@ impl TimeSeriesReader {
     /// cleared first, so its existing capacity is reused.
     ///
     /// Reading `f32` coordinates into a `Vec<f64>` is allowed; the narrowing direction is
-    /// [`Error::NumberTypeMismatch`] rather than a silent loss of precision, the same rule
-    /// [`ValueType`] states for field data.
+    /// [`Error::NumberTypeMismatch`], the same rule [`ValueType`] states for field data.
     pub fn read_points<C: Coordinate>(&self, points: &mut Vec<C>) -> Result<()> {
         points.clear();
 
@@ -423,9 +407,8 @@ impl TimeSeriesReader {
     /// existing capacity is reused.
     ///
     /// Unlike the widening rule the field data follows, the index type is checked against the
-    /// *values*: what comes back is a position in the mesh this reader put back together, not the
-    /// file's own array, so an index the requested type cannot hold is
-    /// [`Error::IntegerOutOfRange`] whatever the file was written as.
+    /// *values*, since these are positions in the reassembled mesh rather than the file's own
+    /// array. An index the requested type cannot hold is [`Error::IntegerOutOfRange`].
     pub fn read_topology<I: ConnectivityIndex>(
         &self,
         connectivity: &mut Vec<I>,
@@ -555,14 +538,9 @@ impl TimeSeriesReader {
 
     /// One field's values, over the whole mesh, for a mesh with submeshes.
     ///
-    /// A field with at least one ascending submesh is written once, whole, and every ascending
-    /// submesh's `<Attribute>` selects its own share out of it (`write_data_selected`,
-    /// `time_series_writer.rs`) -- so if any submesh's `DataItem` for this field is
-    /// selection-shaped, its nested source *is* the whole field and is read directly, exactly as
-    /// [`Self::read_points`] takes the mesh's own coordinates from the source rather than from the
-    /// submeshes. This is also what correctly recovers an entity that belongs to no submesh at all
-    /// (an unused point), since the global array covers every entity and the per-submesh scatter
-    /// below cannot.
+    /// A field with at least one ascending submesh is written once, whole, so a selection-shaped
+    /// `DataItem` has the whole field as its nested source and is read directly. That also
+    /// recovers an entity belonging to no submesh, such as an unused point.
     ///
     /// Only when *no* submesh holds a selection for this field (every submesh was given a private
     /// copy of its own share, which happens when none of them are ascending) is there no global
@@ -611,10 +589,9 @@ impl TimeSeriesReader {
 
     /// The grid for `submesh`'s (0 for a mesh with no submeshes) `step`-th time step.
     ///
-    /// `step` is bounded by the steps [`Self::num_steps`] reports, not by how many grids the
-    /// submesh has: a mesh whose steps were never written still has one grid per submesh, but
-    /// that grid is the mesh itself and carries no `Time` (see `Analysis`), so counting it would
-    /// hand out a step 0 the document does not have.
+    /// `step` is bounded by the steps [`Self::num_steps`] reports rather than by how many grids
+    /// the submesh has: a mesh whose steps were never written still has one grid per submesh,
+    /// carrying no `Time`, and counting it would hand out a step 0 the document does not have.
     fn step_grid(&self, step: usize, submesh: usize) -> Result<&Grid> {
         if step >= self.times.len() {
             return Err(Error::InvalidDocument {
@@ -632,11 +609,9 @@ impl TimeSeriesReader {
 
 /// Reject a document written with a storage this reader cannot read.
 ///
-/// The `data_storage` `Information` is written with the `Debug` formatting (`new_document`,
-/// `time_series_writer.rs`), so the HDF5 variants are followed by the `deflate_level` they were
-/// written with; only the variant name matters here. A document that names no storage, or names
-/// one this crate does not know, is a foreign file and is let through -- its `DataItem`s are
-/// checked for `Format="HDF"` one by one as they are read.
+/// The `data_storage` `Information` holds the `Debug` formatting of a [`DataStorage`], of which
+/// only the variant name matters here. A document naming no storage, or one this crate does not
+/// know, is a foreign file and is let through.
 fn check_readable(document: &Document) -> Result<()> {
     let Some(name) = document
         .information(DATA_STORAGE)
@@ -665,8 +640,8 @@ fn check_readable(document: &Document) -> Result<()> {
 /// One reconstructed connectivity index as the type the caller asked for.
 ///
 /// The mesh position a submesh's own point number maps to, which is what
-/// [`TimeSeriesReader::read_topology`] checks rather than the file's own array -- a submesh's
-/// numbering is local and always fits, its place in the whole mesh may not.
+/// [`TimeSeriesReader::read_topology`] checks: a submesh's local numbering always fits, its place
+/// in the whole mesh may not.
 fn to_connectivity_index<I: ConnectivityIndex>(index: usize) -> Result<I> {
     I::from_index(index).ok_or_else(|| Error::IntegerOutOfRange {
         value: index as i128,
@@ -739,9 +714,8 @@ fn build_data_info(attribute: &attribute::Attribute, num_entities: usize) -> Res
     })
 }
 
-/// The inverse of `From<DataAttribute> for AttributeType` -- lossy for `Matrix`, which
-/// `Tensor6`, `Matrix(n, m)` and `Generic` all collapse onto in the file, see
-/// [`DataInfo::attribute`]'s doc.
+/// The inverse of `From<DataAttribute> for AttributeType`, lossy for `Matrix`, which `Tensor6`,
+/// `Matrix(n, m)` and `Generic` all collapse onto in the file.
 fn reconstruct_data_attribute(
     attribute_type: AttributeType,
     component_shape: &[usize],
@@ -788,9 +762,8 @@ fn read_points_plain<C: Coordinate>(
 
 /// Topology for a mesh with no submeshes: a plain, non-selection `DataItem`.
 ///
-/// The file's array is read into the caller's buffer and decoded there, so a mesh whose cells all
-/// share one type -- what this crate writes whenever it can -- costs exactly the one allocation
-/// the caller asked for.
+/// The file's array is read into the caller's buffer and decoded there, so a mesh whose cells
+/// share one type costs exactly the one allocation the caller asked for.
 fn read_topology_plain<I: ConnectivityIndex>(
     document: &Document,
     domain: &Domain,
@@ -811,13 +784,11 @@ fn read_topology_plain<I: ConnectivityIndex>(
     topology::decode_in_place(topology, connectivity, cell_types)
 }
 
-/// The mesh's own points, for a mesh with submeshes: read directly out of the source each
-/// submesh's `<Geometry>` selects from -- the global, per-direction coordinate arrays, written
-/// once regardless of how many submeshes there are.
+/// The mesh's own points, for a mesh with submeshes: read out of the source each submesh's
+/// `<Geometry>` selects from.
 ///
-/// One direction at a time, scattered straight into its stride of the interleaved output, so the
-/// three whole-mesh arrays are never live together and the second and third reads refill the
-/// buffer the first one allocated.
+/// One direction at a time, scattered into its stride of the interleaved output, so the three
+/// whole-mesh arrays are never live together.
 fn read_points_with_submeshes<C: Coordinate>(
     document: &Document,
     domain: &Domain,
@@ -877,11 +848,9 @@ fn read_points_with_submeshes<C: Coordinate>(
 /// topology decoded, then scattered into the mesh's own indexing through `cells_membership` and
 /// each submesh's own point membership.
 ///
-/// Two passes, because the mesh's cell offsets need *every* cell's type before *any* cell's points
-/// can be placed -- but only one submesh's decoded topology is live at a time, rather than the
-/// whole mesh's connectivity a second time. The first pass reads no heavy data at all for a
-/// uniform submesh, which states its one cell type in the light data; only `Mixed` is decoded
-/// twice.
+/// Two passes, because the mesh's cell offsets need *every* cell's type before *any* cell's
+/// points can be placed. Only one submesh's decoded topology is live at a time, and the first pass
+/// reads no heavy data for a uniform submesh; only `Mixed` is decoded twice.
 fn read_topology_with_submeshes<I: ConnectivityIndex>(
     document: &Document,
     analysis: &Analysis,
@@ -1089,12 +1058,9 @@ fn submesh_points_membership(
 
 /// Reject a membership naming an entity the mesh does not have, once, when the document is opened.
 ///
-/// The cell lists need no such check -- `mesh_num_cells_from_membership` takes the mesh's cell
-/// count *from* them -- but a submesh's points are named by its `<Geometry>` selector while the
-/// mesh's point count comes from the array that selector reads out of, so the two are independent
-/// statements of the file's and can disagree. Every later use of these indices treats them as
-/// positions: `scatter_field` writes at them, and [`TimeSeriesReader::submesh_points`] hands them
-/// out as indices into the buffer [`TimeSeriesReader::read_points`] fills.
+/// The cell lists need no such check, since the mesh's cell count is taken *from* them, but a
+/// submesh's points and the mesh's point count are independent statements of the file's and can
+/// disagree. Every later use treats these indices as positions.
 fn check_membership_in_range(
     membership: &[Membership],
     num_entities: usize,
@@ -1138,8 +1104,8 @@ fn submesh_geometry_membership(
 }
 
 /// Parse `<Information Name="submesh_cells">`'s value into one [`Membership`] per submesh, in
-/// submesh order -- see `write_submesh_index_list` (`time_series_writer.rs`) for the two shapes
-/// an entry may be.
+/// submesh order. An entry is either `<start>:<len>` or the name of the `DataItem` holding the
+/// submesh's indices.
 fn parse_submesh_cells(document: &Document, domain: &Domain) -> Result<Vec<Membership>> {
     let value = document
         .information(SUBMESH_CELLS)
@@ -1177,8 +1143,8 @@ fn parse_submesh_cells_entry(
 }
 
 /// Total mesh size for a mesh with no submeshes: `num_points` from the Geometry's own resolved
-/// `DataItem`, `num_cells` from the `Topology`'s `NumberOfElements` -- both plain XML metadata,
-/// no heavy data touched.
+/// `DataItem`, `num_cells` from the `Topology`'s `NumberOfElements`. Both are XML metadata, so no
+/// heavy data is touched.
 fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
     let geometry = grid
         .geometry
@@ -1231,7 +1197,7 @@ fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
 }
 
 /// `num_points` for a mesh with submeshes: the `Dimensions` of the *source* array a submesh's
-/// geometry selects out of, i.e. the mesh's own coordinates.
+/// geometry selects out of, which is the mesh's own coordinates.
 fn mesh_num_points_with_submeshes(first_grid: &Grid, domain: &Domain) -> Result<usize> {
     let geometry = first_grid
         .geometry
@@ -1264,20 +1230,16 @@ fn mesh_num_points_with_submeshes(first_grid: &Grid, domain: &Domain) -> Result<
 }
 
 /// `num_cells` for a mesh with submeshes: `1 + max` over every submesh's `submesh_cells` entry,
-/// sound because the writer's `check_all_cells_covered` makes every cell belong to at least one
-/// submesh.
+/// sound because the writer makes every cell belong to at least one submesh.
 fn mesh_num_cells_from_membership(cells_membership: &[Membership]) -> usize {
     let max_cell = cells_membership.iter().flat_map(Membership::iter).max();
 
     max_cell.map_or(0, |max| max + 1)
 }
 
-/// Scatter every submesh's own share of a field into the mesh's own indexing, through its
-/// membership -- the field-data counterpart of the connectivity scatter in
-/// [`read_topology_with_submeshes`]. Works uniformly whether a submesh's `DataItem` was a
-/// selection into a shared array or (not emitted by this crate's own writer, but not assumed
-/// against either) a private copy: either way `read_data_item` already reduced it to "this
-/// submesh's own values, in its own entity order".
+/// Scatter every submesh's own share of a field into the mesh's own indexing through its
+/// membership, the field-data counterpart of the connectivity scatter in
+/// [`read_topology_with_submeshes`].
 fn scatter_field(
     num_entities: usize,
     submesh_values: &[Values<'static>],

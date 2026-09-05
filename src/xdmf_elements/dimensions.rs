@@ -1,4 +1,4 @@
-//! Implementation of the `Dimensions` struct and its serialization, used to specify the shape of data arrays.
+//! The `Dimensions` struct, which specifies the shape of a data array.
 
 use serde::{Deserialize, Serialize};
 

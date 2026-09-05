@@ -1,6 +1,6 @@
-//! A library for writing XDMF files, which are commonly used in scientific simulations for visualizing datasets on meshes, for example with [Paraview](https://www.paraview.org/).
+//! Write meshes with data as [XDMF](https://www.xdmf.org/) files, for [ParaView](https://www.paraview.org/) or `VisIt` to read.
 //!
-//! The [XDMF](https://www.xdmf.org/) (e**X**tensible **D**ata **M**odel and **F**ormat) stores the metadata in XML files and the actual data in different formats, most commonly in HDF5 files.
+//! XDMF (e**X**tensible **D**ata **M**odel and **F**ormat) keeps the metadata in XML and the numbers in a separate format, most often HDF5.
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -80,10 +80,10 @@ impl FromStr for DataStorage {
     }
 }
 
-/// this trait defines the interface used to write the heavy data
+/// The interface used to write the heavy data.
 ///
 /// `Send + Sync` so the Python bindings can hold a writer in a `#[pyclass]` and release the GIL
-/// for the duration of a write
+/// for the duration of a write.
 pub(crate) trait DataWriter: Send + Sync {
     fn format(&self) -> Format;
 
@@ -93,20 +93,15 @@ pub(crate) trait DataWriter: Send + Sync {
     /// submesh at that position otherwise.
     ///
     /// Called once per mesh or once per submesh, before the matching
-    /// [`write_connectivity`](Self::write_connectivity), and never both ways for one mesh: a
-    /// submesh carries only the points its own cells use, so that a viewer holds each block's
-    /// geometry once rather than the whole mesh's once per block.
+    /// [`write_connectivity`](Self::write_connectivity), and never both ways for one mesh.
     fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent>;
 
     /// Write one component of the mesh's own coordinates: every X value, then every Y, then every
     /// Z.
     ///
-    /// Called instead of [`write_points`](Self::write_points) for a mesh whose submeshes select
-    /// their points out of the mesh's rather than carrying a copy of them, and then exactly three
-    /// times, in order. Split by component because that is what lets all three of a submesh's
-    /// selections share the one index list naming its points -- an interleaved array would need
-    /// one index per coordinate instead. Only reachable from a backend that answers
-    /// [`supports_selections`](Self::supports_selections) with `true`.
+    /// Called instead of [`write_points`](Self::write_points), exactly three times and in order,
+    /// for a mesh whose submeshes select their points out of the mesh's. Only reachable from a
+    /// backend that answers [`supports_selections`](Self::supports_selections) with `true`.
     fn write_point_component(
         &mut self,
         _component: usize,
@@ -120,9 +115,8 @@ pub(crate) trait DataWriter: Send + Sync {
     /// Write one connectivity array: the mesh's own when `submesh` is `None`, or that of the
     /// submesh at that position otherwise.
     ///
-    /// A mesh written with submeshes has no connectivity of its own -- each submesh carries the
-    /// cells it contains, indexed into its own points -- so a backend sees either one `None` call
-    /// or one `Some` call per submesh, never both.
+    /// A mesh written with submeshes has no connectivity of its own, so a backend sees either one
+    /// `None` call or one `Some` call per submesh, never both.
     fn write_connectivity(
         &mut self,
         submesh: Option<usize>,
@@ -133,30 +127,27 @@ pub(crate) trait DataWriter: Send + Sync {
     /// mesh the submesh was cut out of.
     ///
     /// Called once per scattered submesh, at mesh-write time; a contiguous one is a start and a
-    /// length and needs no array. Nothing in the light data references what this writes -- it is
-    /// there to read the file back with, not for `ParaView`.
+    /// length and needs no array. Nothing in the light data references it -- it is there to read
+    /// the file back with.
     fn write_submesh_cells(&mut self, submesh: usize, cells: &Values<'_>) -> Result<DataContent>;
 
     /// Write one submesh's global point indices, as the position of each of its points in the
     /// mesh the submesh was cut out of.
     ///
     /// The counterpart of [`write_submesh_cells`](Self::write_submesh_cells) for the points a
-    /// submesh's connectivity is renumbered against. A side channel for a reader where a submesh
-    /// carries a copy of its points, and the array its `<Geometry>` selects them through where it
-    /// does not -- in which case the light data references this and records it nowhere else.
+    /// submesh's connectivity is renumbered against, and the array its `<Geometry>` selects them
+    /// through where the storage supports selections.
     fn write_submesh_points(&mut self, submesh: usize, points: &Values<'_>) -> Result<DataContent>;
 
-    /// Write one array of attribute data, identified by its position among all the arrays
-    /// written in the current time step. Backends name their heavy data by this index
+    /// Write one array of attribute data, identified by its position among all the arrays written
+    /// in the current time step. Backends name their heavy data by this index.
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent>;
 
     /// Whether a submesh may reference this storage's arrays instead of being given a copy of
     /// its share of them.
     ///
-    /// Only the HDF5 storages can: `ParaView`'s XDMF2 reader honours a `HyperSlab`/`Coordinates`
-    /// selection for `Format="HDF"`, while for the ascii storages it reads the source array from
-    /// its start instead -- silently, so a selection there would put values in the viewer that
-    /// the file does not contain.
+    /// Only the HDF5 storages can. `ParaView` honours a `HyperSlab`/`Coordinates` selection for
+    /// `Format="HDF"` only; elsewhere it reads the source array from its start, without an error.
     fn supports_selections(&self) -> bool {
         false
     }
@@ -164,10 +155,9 @@ pub(crate) trait DataWriter: Send + Sync {
     /// Write one array of indices for a submesh's grids to select their share of a field with,
     /// identified by its position among all such arrays.
     ///
-    /// Written once, at the step that first needs it, and referenced by every step after --
-    /// which is why it belongs with the mesh's arrays rather than with a step's data, and why a
-    /// backend that removes a discarded step's data must leave it alone. Only reachable from a
-    /// backend that answers [`supports_selections`](Self::supports_selections) with `true`.
+    /// Written once, at the step that first needs it, and referenced by every step after, so a
+    /// backend removing a discarded step's data must leave it alone. Only reachable from a backend
+    /// that answers [`supports_selections`](Self::supports_selections) with `true`.
     fn write_selection(&mut self, _index: usize, _indices: &Values<'_>) -> Result<DataContent> {
         Err(Error::Internal(
             "this storage cannot be selected out of, so it is never asked to write a selection",
@@ -185,10 +175,8 @@ pub(crate) trait DataWriter: Send + Sync {
     /// End the current time step and remove the heavy data written for it.
     ///
     /// Called instead of [`write_data_finalize`](Self::write_data_finalize) when a time step is
-    /// abandoned rather than written -- an attribute was rejected, or the caller's closure
-    /// returned an error. Without it the step's heavy data would stay on disk with no `<Grid>`
-    /// in the XDMF file referencing it. Backends that write nothing until the step is complete
-    /// (e.g. `AsciiInline`) keep the default, which is just to finalize.
+    /// abandoned rather than written. Backends that write nothing until the step is complete (e.g.
+    /// `AsciiInline`) keep the default of finalizing.
     fn write_data_discard(&mut self) -> Result<()> {
         self.write_data_finalize()
     }
@@ -308,12 +296,11 @@ impl From<DataAttribute> for attribute::AttributeType {
 
 /// Create directories in a way that is safe for MPI applications.
 ///
-/// This function will create the directory if it does not exist, and wait for it to appear in the filesystem.
-/// This is particularly needed on systems such as clusters with slow filesystems, to ensure that
-/// all processes can see the created directory before proceeding.
+/// Creates the directory if it is missing and waits for it to appear, which a cluster's slow
+/// filesystem needs before every process can see it.
 ///
-/// For more details check the [reference](https://github.com/KratosMultiphysics/Kratos/pull/9247).
-/// Its a battle-tested solution tested with > 1000 processes
+/// Taken from [Kratos](https://github.com/KratosMultiphysics/Kratos/pull/9247), where it runs with
+/// more than 1000 processes.
 pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> Result<()> {
     if !&path.as_ref().exists() {
         std::fs::create_dir_all(&path)
@@ -331,10 +318,8 @@ pub fn mpi_safe_create_dir_all(path: impl AsRef<Path> + std::fmt::Debug) -> Resu
 /// Remove the files written for an abandoned time step, shared by the file-per-attribute backends
 /// (`Ascii`/`Binary`) implementing [`DataWriter::write_data_discard`].
 ///
-/// The paths are drained out of `step_files`, so they are forgotten even if a removal fails -- a
-/// second discard attempt on the same paths would only report the same failure again. Every file
-/// is attempted before reporting, so one failure does not leave the rest behind; the first error
-/// is the one returned.
+/// The paths are drained out of `step_files` even if a removal fails, and every file is attempted
+/// before the first error is returned.
 pub(crate) fn remove_step_files(step_files: &mut Vec<PathBuf>) -> Result<()> {
     let mut first_error = None;
 
@@ -360,13 +345,12 @@ pub(crate) const CELLS: &str = "cells";
 pub(crate) const SUBMESH_POINTS: &str = "submesh_points";
 pub(crate) const SUBMESH_CELLS: &str = "submesh_cells";
 /// Index arrays a submesh's grids select their share of a field with, see
-/// [`DataWriter::write_selection`]. Numbered like a submesh's own arrays, but by the order they
-/// were needed rather than by submesh -- one submesh needs one per shape of field it carries.
+/// [`DataWriter::write_selection`]. Numbered by the order they were needed, since one submesh
+/// needs one per shape of field it carries.
 pub(crate) const SELECTIONS: &str = "selections";
 
-/// Name of the `Information` element recording which [`DataStorage`] wrote the document. The
-/// reader takes it to reject a file it cannot read when the file is opened, rather than at the
-/// first read call that reaches heavy data.
+/// Name of the `Information` element recording which [`DataStorage`] wrote the document, so the
+/// reader can reject a file it cannot read at open time.
 pub(crate) const DATA_STORAGE: &str = "data_storage";
 
 /// Name of the file one of a mesh's arrays goes into, for the backends that write one file per

@@ -1,4 +1,4 @@
-//! This module contains the Grid element, which specifies (a port of) the computational domain.
+//! The Grid element, which specifies a part of the computational domain.
 
 use serde::{Deserialize, Serialize};
 
@@ -42,7 +42,7 @@ pub struct Grid {
 
 /// The Time element is a child of the Grid element and specifies the temporal information for the grid.
 ///
-///  Represented as string, such that the user has to make the decision about formatting.
+/// A string, so the formatting stays the caller's decision.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Time {
     #[serde(rename = "@Value")]

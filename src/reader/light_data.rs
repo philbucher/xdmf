@@ -18,8 +18,8 @@ use crate::{
 pub(super) struct Document {
     pub xdmf: Xdmf,
     pub base_dir: PathBuf,
-    /// The heavy-data file a read last opened, held open for the next one -- see [`FileCache`].
-    /// Lives here because it is exactly as long-lived as the paths it caches.
+    /// The heavy-data file a read last opened, held open for the next one. It lives here because
+    /// it is exactly as long-lived as the paths it caches.
     pub files: FileCache,
 }
 
@@ -72,9 +72,8 @@ impl Document {
 /// Where one grid sits under the `Domain`: the `grids` indices to follow from the `Domain`'s
 /// single root grid, so an empty path is the root grid itself.
 ///
-/// Positions rather than `&Grid` references: [`Analysis`] is built once, in
-/// [`TimeSeriesReader::new`](crate::TimeSeriesReader::new), and kept next to the [`Document`] it
-/// describes -- which a borrow of that same document could not be.
+/// Positions rather than `&Grid` references, so [`Analysis`] can be kept next to the [`Document`]
+/// it describes.
 #[derive(Clone, Debug)]
 pub(super) struct GridPath(Vec<usize>);
 
@@ -90,8 +89,7 @@ impl GridPath {
         Self(path)
     }
 
-    /// The grid this path names. Every path was produced by walking the same document, so a
-    /// missing step means the document changed underneath the reader.
+    /// The grid this path names; missing only if the document changed underneath the reader.
     pub(super) fn resolve<'a>(&self, domain: &'a Domain) -> Result<&'a Grid> {
         let mut grid = domain.grids.first().ok_or_else(|| Error::InvalidDocument {
             reason: "the Domain has no Grid".to_string(),
@@ -112,10 +110,8 @@ impl GridPath {
 /// How the document's single root `Grid` breaks down: which grids carry the mesh (one per named
 /// submesh, or a single unnamed one without submeshes), and, for each, its grids in step order.
 ///
-/// A submesh/mesh not yet carrying any time step has exactly one entry, with no `Time` and no
-/// `Attribute`s -- the shape [`crate::TimeSeriesWriter::write_mesh`]/
-/// [`crate::TimeSeriesWriter::write_mesh_with_submeshes`] themselves write, before any
-/// [`crate::TimeSeriesDataWriter::write_time_step`] call.
+/// A submesh or mesh not yet carrying a time step has one entry, with no `Time` and no
+/// `Attribute`s.
 pub(super) struct Analysis {
     /// Empty when the mesh has no submeshes.
     submesh_names: Vec<String>,
@@ -280,7 +276,7 @@ fn collection_children<'a>(grid: &'a Grid, path: &GridPath) -> Result<Vec<(&'a G
 }
 
 /// The one `Reference="XML"` shape this crate's writer emits: an `XPath` naming a `Domain`-level
-/// `DataItem` by its `Name` attribute. Any other `Reference` value, or any other `XPath` shape, is
+/// `DataItem` by its `Name` attribute. Any other `Reference` value or `XPath` shape is
 /// [`Error::Unsupported`] rather than guessed at.
 pub(super) fn resolve_reference<'a>(item: &DataItem, domain: &'a Domain) -> Result<&'a DataItem> {
     let Some(reference) = &item.reference else {
@@ -319,8 +315,8 @@ pub(super) fn resolve_reference<'a>(item: &DataItem, domain: &'a Domain) -> Resu
     })
 }
 
-/// Look up a `Domain`-level `DataItem` by its own `Name`, as a `submesh_cells_k`/`submesh_points_k`
-/// entry in an `<Information>` list does -- a plain name, not an `XPath`.
+/// Look up a `Domain`-level `DataItem` by its own `Name`, as a `submesh_cells_k`/
+/// `submesh_points_k` entry in an `<Information>` list does: a plain name rather than an `XPath`.
 pub(super) fn find_by_name<'a>(domain: &'a Domain, name: &str) -> Option<&'a DataItem> {
     domain
         .data_items

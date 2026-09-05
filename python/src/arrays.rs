@@ -1,16 +1,14 @@
 //! Zero-copy conversion from numpy arrays into what the core crate's API expects.
 //!
-//! Every numeric parameter of this crate arrives as one of these three borrowed-array types:
-//! [`PointArray`] and [`IndexArray`] name exactly the dtypes `xdmf::Coordinate` and
-//! `xdmf::ConnectivityIndex` accept, so a dtype the mesh cannot hold is rejected here, by name,
-//! instead of further down; [`ValueArray`] covers all six element types attribute data can have
-//! and maps each straight onto the matching `xdmf::Values` variant.
+//! Every numeric parameter arrives as one of three borrowed-array types. [`PointArray`] and
+//! [`IndexArray`] name exactly the dtypes `xdmf::Coordinate` and `xdmf::ConnectivityIndex` accept,
+//! so a dtype the mesh cannot hold is rejected here by name; [`ValueArray`] covers all six element
+//! types attribute data can have and maps each onto the matching `xdmf::Values` variant.
 //!
-//! Shape is otherwise free -- a C-contiguous `(N, 3)` array has exactly the flat memory layout the
-//! Rust API wants, so the natural numpy layout for points and vector fields needs no `reshape(-1)`.
-//! The one exception is [`PointArray::validate_shape`]: points are always 3 components, so a
-//! trailing dimension that is not 3 is rejected rather than read as interleaved xyz. Arrays that
-//! are not C-contiguous are rejected rather than silently copied.
+//! Shape is otherwise free: a C-contiguous `(N, 3)` array has the flat memory layout the Rust API
+//! wants, so the natural numpy layout for points and vector fields needs no `reshape(-1)`. The
+//! exception is [`PointArray::validate_shape`], since points are always 3 components. An array
+//! that is not C-contiguous is rejected rather than copied.
 
 use numpy::{Element, PyReadonlyArrayDyn, PyUntypedArray, PyUntypedArrayMethods};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -21,9 +19,8 @@ const NOT_CONTIGUOUS: &str =
 /// Describes what `obj` actually is, so a rejection names the real problem ("dtype int16", "a
 /// list") instead of only restating what was expected.
 ///
-/// The array case is told apart by the type, not by having a `dtype`: a numpy *scalar* -- what
-/// indexing an array yields, and an easy thing to pass by accident -- has a `dtype` too, and
-/// calling it "a numpy array with dtype float64" would contradict the sentence it lands in.
+/// The array case is told apart by the type rather than by having a `dtype`, since a numpy
+/// *scalar* has one too.
 fn describe(obj: &Bound<'_, PyAny>) -> String {
     if obj.cast::<PyUntypedArray>().is_ok()
         && let Ok(dtype) = obj.getattr("dtype")
@@ -50,10 +47,9 @@ pub(crate) fn contiguous_slice<'a, T: Element>(
 
 /// Rejects a point array whose trailing dimension is not 3.
 ///
-/// Shape is otherwise ignored -- a C-contiguous `(N, 3)` array is the same memory as the flat one,
-/// which is what makes the natural numpy layout free. The transposed `(3, N)` layout (an x row, a
-/// y row, a z row) is C-contiguous too, though, so without this it would be accepted and silently
-/// read as interleaved xyz: a valid file holding a mesh the caller never passed.
+/// Shape is otherwise ignored, since a C-contiguous `(N, 3)` array is the same memory as the flat
+/// one. The transposed `(3, N)` layout is C-contiguous too, so without this check it would be read
+/// as interleaved xyz.
 fn validate_point_shape(shape: &[usize]) -> PyResult<()> {
     match shape {
         // a flat array is the layout the Rust API takes, so its length is a count, not a
@@ -141,7 +137,7 @@ impl PointArray<'_> {
 }
 
 impl ValueArray<'_> {
-    /// Borrows the buffer as `xdmf::Values` -- each dtype maps onto the matching variant, so the
+    /// Borrows the buffer as `xdmf::Values`. Each dtype maps onto the matching variant, so the
     /// data lands in the file as the type it was passed in, without a copy or a cast.
     pub(crate) fn to_values(&self) -> PyResult<xdmf::Values<'_>> {
         match self {

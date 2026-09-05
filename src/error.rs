@@ -10,10 +10,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The error type for all fallible operations in this crate.
 ///
-/// Most variants carry a `reason` describing the specific failure in prose rather than as their
-/// own variant/fields, so callers wanting to react to a *category* of failure (a bad mesh, a bad
-/// time step, ...) can match on the variant, while the exact wording is covered by this crate's
-/// own message-family tests rather than being part of the API contract.
+/// Most variants carry a `reason` in prose rather than fields of their own, so a caller matches on
+/// the variant. The wording is not part of the API contract.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A filesystem operation failed.
@@ -79,8 +77,8 @@ pub enum Error {
     /// An integer value is outside the range that can be written and read back correctly.
     ///
     /// The `reason` says which limit was hit, and with it whether another [`DataStorage`] would
-    /// accept the value: the `Binary` backend's 32-bit narrowing is storage-specific, while the
-    /// cap on `u64` data applies to every backend.
+    /// accept the value: `Binary`'s refusal of 64-bit integers is storage-specific, while the cap
+    /// on `u64` data applies to every backend.
     ///
     /// [`DataStorage`]: crate::DataStorage
     #[error("integer value {value} is out of range: {reason}")]
@@ -91,9 +89,9 @@ pub enum Error {
         /// Which limit was hit, and whether a different `DataStorage` would avoid it.
         reason: String,
     },
-    /// An internal invariant was violated. Not reachable through the public API; guards against
-    /// a future regression in the state-machine pairing between a backend's
-    /// `write_data_initialize`/`write_data_finalize` calls, or in this crate's own path handling.
+    /// An internal invariant was violated. Not reachable through the public API; it guards the
+    /// state-machine pairing between a backend's `write_data_initialize`/`write_data_finalize`
+    /// calls, and this crate's own path handling.
     #[error("internal invariant violated: {0}")]
     Internal(&'static str),
     /// An XDMF document does not describe a mesh this crate's reader can reconstruct: malformed or
@@ -104,23 +102,19 @@ pub enum Error {
         /// What is wrong with the document.
         reason: String,
     },
-    /// The document uses an XDMF construct or value this crate's reader does not (yet) support --
-    /// a `Format`, `ItemType`, `TopologyType` or `GeometryType` outside this crate's own output
-    /// and the common subset around it, or `Format="HDF"` data read by a build with the `hdf5`
-    /// feature disabled. Its own variant, rather than folded into
-    /// [`InvalidDocument`](Self::InvalidDocument), since a caller reading a foreign file has a
-    /// reasonable reason to catch this one specifically: falling back to another loader.
+    /// The document uses an XDMF construct this crate's reader does not support: a `Format`,
+    /// `ItemType`, `TopologyType` or `GeometryType` outside this crate's own output and the common
+    /// subset around it, or `Format="HDF"` data read by a build without the `hdf5` feature. Its
+    /// own variant so a caller reading a foreign file can catch it and fall back to another
+    /// loader.
     #[error("unsupported: {reason}")]
     Unsupported {
         /// What was found and why this reader cannot read it.
         reason: String,
     },
     /// A [`TimeSeriesReader`](crate::TimeSeriesReader) read call requested a type the file's data
-    /// cannot be read as without losing precision (e.g. `u64` data read as `Vec<u32>`, or `f64`
-    /// data read as `Vec<f32>`) -- see the widening rules on
-    /// [`TimeSeriesReader::read_point_data`](crate::TimeSeriesReader::read_point_data). Its own
-    /// variant so a caller can catch it and retry with the widened type [`DataInfo`] reports, or
-    /// convert explicitly.
+    /// cannot be read as without losing precision, such as `u64` data read as `Vec<u32>`. Its own
+    /// variant so a caller can catch it and retry at the width [`DataInfo`] reports.
     ///
     /// [`DataInfo`]: crate::DataInfo
     #[error("number type mismatch: {reason}")]
@@ -206,8 +200,8 @@ pub(crate) fn io_ctx<'a>(
 /// codebase. `Error::Io`'s original [`std::io::ErrorKind`] is preserved; every other variant
 /// (a validation failure, not a filesystem failure) becomes [`std::io::ErrorKind::InvalidInput`].
 ///
-/// The [`Error`] is kept as the payload rather than flattened into a string, so the original
-/// cause (and with it e.g. `raw_os_error`) stays reachable via [`std::io::Error::get_ref`].
+/// The [`Error`] is kept as the payload rather than flattened into a string, so the original cause
+/// stays reachable via [`std::io::Error::get_ref`].
 impl From<Error> for std::io::Error {
     fn from(err: Error) -> Self {
         let kind = match &err {

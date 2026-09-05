@@ -1,6 +1,6 @@
-//! This module contains the main XDMF elements along with their serialization logic.
+//! The XDMF elements and their serialization.
 //!
-//! The official documentation for these can be found [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
+//! The format's own documentation is [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
 
 use serde::{Deserialize, Serialize};
 
@@ -65,10 +65,7 @@ impl Default for Xdmf {
     }
 }
 
-/// Stores application-specific metadata that doesn't fit into the standard data model.
-///
-/// The `Information` element is designed to hold additional, system- or code-specific
-/// details that can be safely ignored by other components.
+/// Application-specific metadata outside the standard data model, which other readers may ignore.
 ///
 /// See <https://www.xdmf.org/index.php/XDMF_Model_and_Format.html#Information>
 #[derive(Debug, Serialize, Deserialize)]
@@ -140,14 +137,12 @@ macro_rules! define_cell_types {
         impl CellType {
             /// Every cell type this crate knows, in the order they are declared.
             ///
-            /// A slice rather than a sized array, so that adding a cell type is not a breaking
-            /// change for a caller naming the type. Consumers mapping these onto their own cell
-            /// types use it to check they have covered all of them.
+            /// A slice rather than a sized array, so adding a cell type is not a breaking change
+            /// for a caller naming the type.
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
 
             /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None`
-            /// for a code this crate does not know. The inverse of the `as u8` cast
-            /// `prepare_cells` (`time_series_writer.rs`) writes with.
+            /// for a code this crate does not know.
             pub(crate) fn from_code(code: u8) -> Option<Self> {
                 match code {
                     $($code => Some(Self::$variant),)+
@@ -294,8 +289,8 @@ mod tests {
         assert_eq!(codes.len(), declared);
     }
 
-    /// A cell has at least one point, and a point count is what the connectivity is walked in
-    /// strides of — a zero would make a mesh of such cells read as an endless one.
+    /// A cell has at least one point, and the connectivity is walked in strides of that count, so
+    /// a zero would make a mesh of such cells read as an endless one.
     #[test]
     fn every_cell_type_has_points() {
         for cell_type in CellType::ALL {

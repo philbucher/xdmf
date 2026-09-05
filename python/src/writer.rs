@@ -1,16 +1,10 @@
 //! `TimeSeriesWriter`/`TimeSeriesDataWriter` pyclasses wrapping the core crate's writer API.
 //!
-//! Both classes are ordinary (non-`unsendable`) pyclasses: the core crate's `DataWriter` trait is
-//! `Send + Sync` (see the crate's `src/lib.rs`), so `xdmf::TimeSeriesWriter`/`TimeSeriesDataWriter`
-//! are too, which is what lets the writes here release the GIL (`Python::detach`) -- otherwise
-//! every other Python thread would block for the duration of a large write, defeating the point of
-//! a library whose selling point is large-data throughput.
+//! Both classes are ordinary (non-`unsendable`) pyclasses, since the core crate's `DataWriter`
+//! trait is `Send + Sync`, which is what lets the writes here release the GIL.
 //!
-//! The Rust `write_time_step` hands a `TimeStep` to a closure so that each attribute is written the
-//! moment it is passed and one buffer can serve them all. A `TimeStep` borrows its writer, which a
-//! pyclass cannot hold, and reusing one numpy array for several fields is not how numpy is used
-//! anyway -- so the Python method takes all attributes of a step at once and runs the closure
-//! itself, over arrays it borrows without copying.
+//! A Rust `TimeStep` borrows its writer, which a pyclass cannot hold, so the Python method takes
+//! all attributes of a step at once and runs the closure itself.
 
 use std::path::{Path, PathBuf};
 
@@ -80,19 +74,16 @@ impl PyTimeSeriesWriter {
     /// Write the mesh, returning the writer for the time step data.
     ///
     /// `points` is a numpy `float64`/`float32` array of x/y/z coordinates, `connectivity` a numpy
-    /// `uint64`/`uint32`/`int64`/`int32` array of point indices, and `cell_types` either a sequence
-    /// of `xdmf.CellType` or a numpy array of the XDMF topology type codes those values have
-    /// -- *not* the VTK cell codes, which differ (a hexahedron is 9 here and 12 in VTK).
+    /// `uint64`/`uint32`/`int64`/`int32` array of point indices, and `cell_types` either a
+    /// sequence of `xdmf.CellType` or a numpy array of the XDMF topology type codes those values
+    /// have -- *not* the VTK cell codes, which differ (a hexahedron is 9 here and 12 in VTK).
     ///
-    /// Both arrays are stored at the dtype they are passed in, so the connectivity dtype is what
-    /// caps the mesh size. Their shape only has to be C-contiguous -- the natural `(N, 3)` layout
-    /// for points is the same memory as the flat one, so it needs no reshape.
+    /// Both arrays are stored at the dtype they are passed in, so the connectivity dtype caps the
+    /// mesh size. Their shape only has to be C-contiguous: the natural `(N, 3)` layout for points
+    /// is the same memory as the flat one and needs no reshape.
     ///
-    /// Consumes this writer, matching the Rust API where `write_mesh` takes `self` by value;
-    /// calling it a second time raises `RuntimeError`. A call *rejected* here leaves the writer
-    /// usable, so a dtype or shape the caller can fix does not also cost them the writer -- the
-    /// arguments are all checked before `self.inner` is taken, and only the core crate's own
-    /// `write_mesh(self)` consumes it.
+    /// Consumes this writer, matching the Rust API, and calling it twice raises `RuntimeError`. A
+    /// call *rejected* here leaves the writer usable.
     fn write_mesh(
         &mut self,
         py: Python<'_>,
@@ -131,11 +122,11 @@ impl PyTimeSeriesWriter {
     /// Write the mesh split into named submeshes, returning the writer for the time step data, as
     /// [`write_mesh`](Self::write_mesh) does.
     ///
-    /// `submeshes` is a sequence of `(name, cells)` pairs, `cells` naming which cells (indices into
-    /// `cell_types`) belong to that submesh, as a `range`, a numpy integer array or a sequence of
-    /// `int`. A `range(start, stop)` is taken as the block of cells it names without its indices
-    /// ever being built, so a submesh covering part of a huge mesh costs two numbers. Every cell
-    /// must be in at least one submesh; submeshes may overlap.
+    /// `submeshes` is a sequence of `(name, cells)` pairs, `cells` naming which cells (indices
+    /// into `cell_types`) belong to that submesh, as a `range`, a numpy integer array or a
+    /// sequence of `int`. A `range(start, stop)` is taken as the block it names without its
+    /// indices ever being built, so a submesh of a huge mesh costs two numbers. Every cell must be
+    /// in at least one submesh; submeshes may overlap.
     fn write_mesh_with_submeshes(
         &mut self,
         py: Python<'_>,
@@ -183,7 +174,7 @@ impl PyTimeSeriesWriter {
 }
 
 /// Extracts and validates the three arguments `write_mesh`/`write_mesh_with_submeshes` share,
-/// before either takes ownership of the writer -- so a call rejected here leaves it usable.
+/// before either takes ownership of the writer, so a call rejected here leaves it usable.
 fn extract_mesh_args<'py>(
     points: &Bound<'py, PyAny>,
     connectivity: &Bound<'py, PyAny>,
@@ -196,8 +187,8 @@ fn extract_mesh_args<'py>(
     Ok((points, connectivity, cell_types))
 }
 
-/// Wraps the core crate's data writer, taking the file name off it while it is still there to
-/// take it off -- `close()` drops the writer, and the name should outlive that.
+/// Wraps the core crate's data writer, copying the file name off it up front: `close()` drops the
+/// writer, and the name should outlive that.
 fn data_writer(inner: xdmf::TimeSeriesDataWriter) -> PyTimeSeriesDataWriter {
     PyTimeSeriesDataWriter {
         file_name: inner.file_name().to_path_buf(),
@@ -227,14 +218,13 @@ impl PyTimeSeriesDataWriter {
     /// `time` is the time as a string, leaving its formatting to the caller. `point_data` and
     /// `cell_data` are sequences of `(name, DataAttribute, array)`, `array` being a C-contiguous
     /// numpy array of dtype `float64`, `float32`, `uint64`, `uint32`, `int64` or `int32`, borrowed
-    /// without a copy (see `arrays.rs`).
+    /// without a copy.
     ///
-    /// The step is all-or-nothing: if any attribute is rejected, nothing is written for this time
-    /// and the time stays available. A step needs at least one attribute.
+    /// The step is all-or-nothing: one rejected attribute writes nothing for this time and leaves
+    /// the time available. A step needs at least one attribute.
     ///
-    /// Since the arrays are borrowed rather than copied and the write releases the GIL, another
-    /// thread must not modify an array while a write of it is running. Single-threaded code cannot
-    /// hit this: this method returns before the next statement runs.
+    /// The arrays are borrowed and the write releases the GIL, so another thread must not modify
+    /// an array while a write of it is running.
     #[pyo3(signature = (time, point_data=None, cell_data=None))]
     fn write_time_step(
         &mut self,
@@ -269,8 +259,8 @@ impl PyTimeSeriesDataWriter {
         .map_err(to_py_err)
     }
 
-    /// Close the writer, releasing any open file handles -- most relevant for the HDF5 backends,
-    /// whose file otherwise stays open, and thus locked, until this object is garbage-collected.
+    /// Close the writer, releasing any open file handles. This matters most for the HDF5
+    /// backends, whose file otherwise stays open and locked until this object is collected.
     ///
     /// Safe to call more than once; writing after it raises `RuntimeError`.
     fn close(&mut self) {
