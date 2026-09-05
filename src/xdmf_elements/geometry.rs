@@ -1,4 +1,4 @@
-//! This module contains the Geometry element, which describes the XYZ values of the mesh points.
+//! The Geometry element, which describes the XYZ values of the mesh points.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ pub struct Geometry {
     #[doc(hidden)]
     pub geometry_type: GeometryType,
 
-    /// One item for `XYZ`, three -- X, then Y, then Z -- for `X_Y_Z`.
+    /// One item for `XYZ`; three for `X_Y_Z`, in the order X, Y, Z.
     #[serde(rename = "DataItem")]
     #[doc(hidden)]
     pub data_items: Vec<DataItem>,
@@ -26,9 +26,9 @@ pub enum GeometryType {
     #[doc(hidden)]
     XY,
 
-    /// One array per coordinate direction rather than one of interleaved tuples. What a submesh
-    /// selecting its points out of the mesh's is written as, since all three of its selections
-    /// then share the one index list naming the points it holds.
+    /// One array per coordinate direction rather than interleaved tuples. A mesh whose submeshes
+    /// select their points out of it is written this way, so all three of a submesh's selections
+    /// share the one index list naming its points.
     #[serde(rename = "X_Y_Z")]
     #[doc(hidden)]
     XYZSeparate,

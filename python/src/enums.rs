@@ -197,8 +197,8 @@ code_dtypes!(
 );
 
 /// Accepts either a Python sequence of `CellType` values or a numpy integer array of raw XDMF
-/// topology type codes (copied into a `Vec` either way, since this runs once per mesh rather than
-/// per time step, unlike the attribute data path in `arrays.rs`).
+/// topology type codes. Copied into a `Vec` either way, since this runs once per mesh rather than
+/// once per time step.
 pub(crate) fn extract_cell_types(obj: &Bound<'_, PyAny>) -> PyResult<Vec<xdmf::CellType>> {
     if let Ok(list) = obj.extract::<Vec<PyCellType>>() {
         return Ok(list.into_iter().map(Into::into).collect());

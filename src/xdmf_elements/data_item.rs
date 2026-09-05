@@ -1,4 +1,4 @@
-//! This module contains the core datastructure used to specify data storage in XDMF files.
+//! The core datastructure specifying data storage in XDMF files.
 
 use serde::{Deserialize, Serialize};
 
@@ -167,9 +167,9 @@ impl XInclude {
 
 /// Specifies where (ascii) data is stored, either inline or in an external file.
 ///
-/// Only [`Serialize`]s: `DataItem`'s hand-written [`Deserialize`] builds this directly from a
-/// non-flattened intermediate rather than through this enum's own derive, which `quick-xml`
-/// cannot deserialize combined with `#[serde(flatten)]` -- see the impl on [`DataItem`].
+/// Only [`Serialize`]s: `DataItem`'s hand-written [`Deserialize`] builds this from a non-flattened
+/// intermediate, since `quick-xml` cannot deserialize this enum's own derive combined with
+/// `#[serde(flatten)]` -- see the impl on [`DataItem`].
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum DataContent {
     #[serde(rename = "$value")]
@@ -229,11 +229,12 @@ pub enum NumberType {
 /// How a `DataItem` gets its values: from the storage it names, or by selecting out of another
 /// item.
 ///
-/// The selecting types take two nested items -- what to select, then what to select it from -- and
-/// are only read correctly by `ParaView` when that source is stored as [`Format::HDF`]; the ascii
-/// storages ignore a selection and read the source from its start instead, and `Format::Binary`
-/// does the same for `Coordinates`.
-/// `Uniform`, the default, is left out of the XML rather than written, and has no variant here.
+/// The selecting types take two nested items, what to select and what to select it from, and
+/// `ParaView` reads them correctly only when that source is stored as [`Format::HDF`]: the ascii
+/// storages ignore a selection and read the source from its start, as does `Format::Binary` for
+/// `Coordinates`.
+///
+/// `Uniform`, the default, is left out of the XML and has no variant here.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ItemType {
     #[doc(hidden)]
@@ -536,9 +537,9 @@ mod tests {
     // `xi:include` child to the `Raw::include` field once `DataItem` sits inside another struct
     // (verified -- it resolves fine as the directly-deserialized root type, but every real
     // document nests it inside `Domain`/`Geometry`/`Topology`/`Attribute`). Not a gap the reader
-    // hits today: `Format::HDF` never writes `DataContent::Include`, only the `Ascii` backend's
-    // external-file mode does (`ascii_writer.rs`), so it only needs solving once the ascii
-    // storages can be read -- most likely with a hand-rolled event-loop parse of that one child.
+    // hits today: only the `Ascii` backend's external-file mode writes `DataContent::Include`, so
+    // it needs solving once the ascii storages can be read -- most likely with a hand-rolled
+    // event-loop parse of that one child.
 
     #[test]
     fn data_item_selection_deserialize() {

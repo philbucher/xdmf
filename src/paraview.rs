@@ -1,16 +1,13 @@
 //! Everything this crate restricts only because of `ParaView`.
 //!
-//! None of the limits enforced here come from XDMF. Each one is a defect of `ParaView`'s legacy
-//! Xdmf2 reader that would otherwise show a value the file does not contain -- silently, without
-//! any reader error -- so the value is refused rather than written. A file that broke them would
-//! be valid XDMF and would read back correctly elsewhere.
+//! None of the limits enforced here come from XDMF. Each is a defect of `ParaView`'s legacy Xdmf2
+//! reader that would otherwise show a value the file does not contain, without any reader error,
+//! so the value is refused rather than written. A file that broke them would be valid XDMF and
+//! would read back correctly elsewhere.
 //!
-//! [`validate`] is the single entry point, and it is called by [`TimeSeriesWriter`] and
-//! [`TimeStep`], never by a [`DataWriter`] backend. It only ever *rejects*: the backends write
-//! each element type at its natural width, so nothing here rewrites, narrows or casts the caller's
-//! data on its way out, and what lands in the file is the type that was passed in. A path that
-//! does not care about `ParaView` -- writing data only to read it back with this crate, restart
-//! files and the like -- is therefore this one call away, with nothing else to undo.
+//! [`validate`] is the single entry point, called by [`TimeSeriesWriter`] and [`TimeStep`], never
+//! by a [`DataWriter`] backend. It only ever *rejects*, never rewrites, so a caller that does not
+//! care about `ParaView` skips this one call.
 //!
 //! Each limit below was measured against `ParaView` 5.13 and 6.1; see `examples/paraview_smoke.rs`
 //! and `tests/paraview_smoke/`.
@@ -24,19 +21,18 @@ use crate::{Error, Result, Values, xdmf_elements::data_item::Format};
 /// Largest magnitude an `i64` may have in the ascii storage methods.
 ///
 /// `ParaView` parses their integers through a `double`, whose mantissa holds 53 bits, so a value
-/// past this comes back rounded -- and `i64::MAX` comes back as `i64::MIN`, sign flipped, which
-/// looks like data rather than like a failure. The digits written to the file are exact either
-/// way, so this is the reader's limit and not the writer's.
+/// past this comes back rounded, and `i64::MAX` comes back as `i64::MIN` with the sign flipped.
+/// The digits written to the file are exact either way.
 ///
-/// Values above this that happen to be even do survive the `double`. The check stays on the range
-/// that is exact for *every* value rather than the one that is exact if you are lucky.
+/// Some values above this survive the `double`. The check stays on the range exact for *every*
+/// value.
 const MAX_EXACT_ASCII_INT: u64 = 1 << 53;
 
 /// Reject data `ParaView` would read back as different numbers than it was given.
 ///
-/// `format` selects the restrictions that apply on top of the one every format shares, and covers
-/// them exactly: the ascii storages ([`Format::XML`]) are read through a `double`,
-/// [`Format::Binary`] cannot carry 64-bit integers at all, and [`Format::HDF`] adds nothing.
+/// `format` selects the restrictions on top of the one every format shares: the ascii storages
+/// ([`Format::XML`]) are read through a `double`, [`Format::Binary`] cannot carry 64-bit integers
+/// at all, and [`Format::HDF`] adds nothing.
 pub(crate) fn validate(data: &Values<'_>, format: Format) -> Result<()> {
     validate_uint_range(data)?;
 
@@ -51,8 +47,7 @@ pub(crate) fn validate(data: &Values<'_>, format: Format) -> Result<()> {
 /// `Precision` the light data declares, so a `u64` above `u32::MAX` comes back truncated (ascii)
 /// or clamped (HDF5).
 ///
-/// Values *within* that range are read back exactly at either width, so this caps the value and
-/// says nothing about how wide it is stored -- `u64` is written as 8 bytes like any other type.
+/// A cap on the value, not on the width: `u64` is still written as 8 bytes.
 fn validate_uint_range(data: &Values<'_>) -> Result<()> {
     let Values::U64(values) = data else {
         return Ok(());
@@ -96,14 +91,13 @@ fn validate_ascii_int_range(data: &Values<'_>) -> Result<()> {
 
 /// `Format="Binary"` is the one format whose 64-bit integers `ParaView` cannot read at all.
 ///
-/// It reads the raw bytes at the wrong stride rather than misinterpreting a value, so the damage
-/// does not depend on how large the numbers are: an `i64`/`u64` attribute comes back with every
-/// second value replaced by zero, and 64-bit connectivity makes the reader give up outright
-/// (`vtkXdmfReader: Failed to read data`). Both were reproduced on 5.13 and 6.1.
+/// It reads the raw bytes at the wrong stride, so the damage does not depend on the values: an
+/// `i64`/`u64` attribute comes back with every second value replaced by zero, and 64-bit
+/// connectivity makes the reader give up (`vtkXdmfReader: Failed to read data`). Both reproduced
+/// on 5.13 and 6.1.
 ///
-/// So this rejects the *type*, whatever it holds, rather than a range. Narrowing to 32 bits on the
-/// way out would also load, but it would put a different type in the file than the caller passed,
-/// silently -- the caller narrowing deliberately is the same file with none of the surprise.
+/// So this rejects the *type* rather than a range. Narrowing to 32 bits would also load, but would
+/// put a different type in the file than the caller passed.
 fn reject_64_bit_integers(data: &Values<'_>) -> Result<()> {
     let element_type = match data {
         Values::I64(_) => "i64",

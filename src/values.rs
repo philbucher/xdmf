@@ -1,4 +1,4 @@
-//! This module contains the wrapper type for using a common interface for different data types.
+//! A wrapper type giving one interface over the different element types.
 
 use std::borrow::Cow;
 
@@ -58,10 +58,9 @@ macro_rules! define_values {
 define_values!(F64(f64), F32(f32), I64(i64), I32(i32), U64(u64), U32(u32));
 
 impl Values<'_> {
-    /// Width in bytes each element type is written at, which is simply its own width.
-    ///
-    /// No storage writes anything narrower: a backend that cannot carry a type says so through
-    /// [`crate::paraview`] instead of quietly storing fewer bytes than the caller handed over.
+    /// Width in bytes each element type is written at, which is simply its own width. A backend
+    /// that cannot carry a type says so through [`crate::paraview`] rather than storing fewer
+    /// bytes than the caller handed over.
     pub(crate) fn precision(&self) -> u8 {
         match self {
             Self::F64(_) | Self::I64(_) | Self::U64(_) => 8,
@@ -233,22 +232,16 @@ pub(crate) mod sealed {
     use super::Values;
     use crate::{Error, Result, reader::sealed::SealedValueType};
 
-    /// Conversion backing [`Coordinate`](super::Coordinate), not nameable outside the crate
-    ///
-    /// [`SealedValueType`] is a supertrait because every type a mesh's points can have is also one
-    /// a field can have, which is what lets a coordinate array be read straight into the caller's
-    /// buffer (see `reader::hdf5_reader::read_exact_into`).
+    /// Conversion backing [`Coordinate`](super::Coordinate), not nameable outside the crate.
+    /// [`SealedValueType`] is a supertrait so a coordinate array can be read straight into the
+    /// caller's buffer.
     pub trait SealedCoordinate: SealedValueType {
         /// Borrow a slice of coordinates as [`Values`]
         fn as_values(points: &[Self]) -> Values<'_>;
 
-        /// Take a read coordinate array as this type, widening `f32` to `f64` but rejecting the
-        /// narrowing direction rather than silently losing precision -- the same rule
-        /// [`ValueType`](crate::ValueType) states for field data.
-        ///
-        /// Named apart from [`SealedValueType::from_values`], which every implementor also has,
-        /// because the two differ: that one is about the element *type*, this one says the same
-        /// thing in the wording a coordinate mismatch deserves.
+        /// Take a read coordinate array as this type, widening `f32` to `f64` and rejecting the
+        /// narrowing direction. Named apart from [`SealedValueType::from_values`] so a mismatch is
+        /// reported as a coordinate.
         fn coordinates_from_values(values: Values<'_>) -> Result<Vec<Self>>;
     }
 
@@ -289,16 +282,12 @@ pub(crate) mod sealed {
     }
 
     /// Conversion backing [`ConnectivityIndex`](super::ConnectivityIndex), not nameable outside
-    /// the crate
-    ///
-    /// [`SealedValueType`] is a supertrait for the same reason it is on [`SealedCoordinate`].
+    /// the crate. [`SealedValueType`] is a supertrait for the reason it is on
+    /// [`SealedCoordinate`].
     pub trait SealedIndex: SealedValueType {
-        /// The largest index this type can hold.
-        ///
-        /// Deliberately the type's own limit and nothing else: the lower cap `ParaView` puts on
-        /// `UInt` connectivity is a restriction on the *values*, so it is enforced once, with
-        /// every other one, by [`crate::paraview`] -- not duplicated here, where it could not be
-        /// skipped along with the rest.
+        /// The largest index this type can hold. Deliberately the type's own limit: the lower cap
+        /// `ParaView` puts on `UInt` connectivity restricts the *values*, so [`crate::paraview`]
+        /// enforces it with the rest, where it can be skipped.
         const MAX_INDEX: i128;
 
         /// Borrow a slice of indices as [`Values`]
@@ -318,15 +307,10 @@ pub(crate) mod sealed {
 
         /// Take a read connectivity array as this type.
         ///
-        /// Unlike [`SealedCoordinate::coordinates_from_values`], the file's own element type has
-        /// neither to match nor to widen: what a connectivity holds are positions, so any integer
-        /// array is acceptable and it is the *values* that are checked -- against
-        /// [`Self::MAX_INDEX`] and against being negative. Every value in the result is therefore
-        /// a valid position, which is what lets the reader treat a later [`Self::as_index`] on one
-        /// as infallible.
-        ///
-        /// Named apart from [`SealedValueType::from_values`] for the reason
-        /// [`SealedCoordinate::coordinates_from_values`] is.
+        /// Any integer array is acceptable, since a connectivity holds positions; the *values* are
+        /// checked instead, against [`Self::MAX_INDEX`] and against being negative. Every value in
+        /// the result is therefore a valid position, which lets a later [`Self::as_index`] be
+        /// infallible.
         fn indices_from_values(values: Values<'_>) -> Result<Vec<Self>>;
     }
 
@@ -424,23 +408,21 @@ pub(crate) mod sealed {
     );
 }
 
-/// A type usable as a point coordinate: `f32` or `f64`
-///
-/// Also what [`TimeSeriesReader::read_points`](crate::TimeSeriesReader::read_points) fills a
-/// buffer of, so a mesh written as `f32` can be read back at that width.
+/// A type usable as a point coordinate: `f32` or `f64`. Also what
+/// [`TimeSeriesReader::read_points`](crate::TimeSeriesReader::read_points) fills, so a mesh written
+/// as `f32` reads back at that width.
 pub trait Coordinate: sealed::SealedCoordinate {}
 
 impl Coordinate for f64 {}
 
 impl Coordinate for f32 {}
 
-/// A type usable as a connectivity index: `u32`, `u64`, `i32` or `i64`
+/// A type usable as a connectivity index: `u32`, `u64`, `i32` or `i64`.
 ///
-/// The connectivity is written as the type it is passed in, so this choice is what sets the
-/// largest mesh that can be written -- see
-/// [`TimeSeriesWriter::write_mesh`](crate::TimeSeriesWriter::write_mesh). It is equally what
-/// [`TimeSeriesReader::read_topology`](crate::TimeSeriesReader::read_topology) fills a buffer of,
-/// and there it caps what can be read back: an index the type cannot hold is
+/// The connectivity is written as the type it is passed in, so this choice sets the largest mesh
+/// that can be written. It is also what
+/// [`TimeSeriesReader::read_topology`](crate::TimeSeriesReader::read_topology) fills, and there it
+/// caps what can be read back: an index the type cannot hold is
 /// [`Error::IntegerOutOfRange`](crate::Error::IntegerOutOfRange).
 pub trait ConnectivityIndex: sealed::SealedIndex {}
 

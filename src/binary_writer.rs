@@ -1,4 +1,4 @@
-//! Implementation of a writer for uncompressed raw binary data storage in separate files.
+//! Writer for uncompressed raw binary data, one file per array.
 
 use std::{
     fs::File,

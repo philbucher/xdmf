@@ -17,7 +17,7 @@ You can compose an xdmf file out of the individual xdmf elements (see [here](./t
 
 Its interface writes a mesh, then adds time-step data to it:
 
-~~~rs
+~~~rust,no_run
 use xdmf::TimeSeriesWriter;
 
 // construct the writer (using HDF5 for heavy data storage)
@@ -128,7 +128,7 @@ independent, repeatable query. The reader handles the two HDF5 storages
 (`Hdf5SingleFile`/`Hdf5MultipleFiles`) so far, and opening a file written with
 `Ascii`/`AsciiInline`/`Binary` fails right there.
 
-~~~rs
+~~~rust,no_run
 use xdmf::TimeSeriesReader;
 
 // open the file the writer example above produced

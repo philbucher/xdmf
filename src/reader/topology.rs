@@ -1,6 +1,6 @@
-//! The inverse of `time_series_writer.rs`'s `prepare_cells`: a `Topology`'s raw connectivity
-//! array -> per-cell [`CellType`]s and a plain (type-code-free) connectivity, local to whatever
-//! submesh wrote it.
+//! The inverse of `time_series_writer.rs`'s `prepare_cells`: a `Topology`'s raw connectivity array
+//! into per-cell [`CellType`]s and a connectivity without the type codes, local to whatever submesh
+//! wrote it.
 
 use crate::{
     CellType, ConnectivityIndex, Error, Result,
@@ -9,11 +9,9 @@ use crate::{
 
 /// Decode a connectivity the caller has already read, in place, per `topology.topology_type`.
 ///
-/// `connectivity` arrives holding the array as the file does and leaves holding the mesh's own:
-/// for a uniform topology those are the same array and nothing is moved at all, and `Mixed` is
-/// compacted where it stands by dropping each cell's type code (and a poly-cell's point count).
-/// So neither shape needs a second array, which is what lets the whole read be one allocation --
-/// the caller's buffer.
+/// `connectivity` arrives holding the array as the file does and leaves holding the mesh's own.
+/// For a uniform topology those are the same array; `Mixed` is compacted where it stands. Neither
+/// shape needs a second array, so the whole read is one allocation.
 ///
 /// `cell_types` is filled to match and is cleared first.
 pub(super) fn decode_in_place<I: ConnectivityIndex>(
@@ -34,7 +32,7 @@ pub(super) fn decode_in_place<I: ConnectivityIndex>(
     }
 }
 
-/// Every cell shares one type, so the connectivity is already what the file holds -- only the
+/// Every cell shares one type, so the connectivity is already what the file holds and only the
 /// per-cell types have to be produced.
 fn decode_uniform_in_place<I: ConnectivityIndex>(
     topology_type: TopologyType,
@@ -62,8 +60,8 @@ fn decode_uniform_in_place<I: ConnectivityIndex>(
 /// `Mixed` prepends each cell's type code (and, for a poly-cell, its point count) to its points,
 /// so the points are moved down over the entries dropped ahead of them.
 ///
-/// The write position only ever trails the read position -- every cell drops at least the one
-/// entry its type code takes -- so nothing is overwritten before it has been read.
+/// The write position always trails the read position, since every cell drops at least the entry
+/// its type code takes, so nothing is overwritten before it has been read.
 fn decode_mixed_in_place<I: ConnectivityIndex>(
     connectivity: &mut Vec<I>,
     cell_types: &mut Vec<CellType>,
@@ -135,11 +133,9 @@ fn decode_mixed_in_place<I: ConnectivityIndex>(
     Ok(())
 }
 
-/// The single `CellType` every cell of a uniform topology has, or `None` for `Mixed` -- whose
-/// per-cell types only its connectivity itself states.
-///
-/// This is what lets `read_topology_with_submeshes` learn a submesh's cell types without reading
-/// its heavy data at all, in the common case that the submesh is uniform.
+/// The single `CellType` every cell of a uniform topology has, or `None` for `Mixed`, whose
+/// per-cell types only its connectivity states. This is what lets `read_topology_with_submeshes`
+/// learn a uniform submesh's cell types without reading its heavy data.
 pub(super) fn uniform_cell_type(topology: &Topology) -> Result<Option<CellType>> {
     match topology.topology_type {
         TopologyType::Mixed => Ok(None),
@@ -147,7 +143,7 @@ pub(super) fn uniform_cell_type(topology: &Topology) -> Result<Option<CellType>>
     }
 }
 
-/// The one `CellType` a uniform `TopologyType` decodes to -- the inverse of
+/// The one `CellType` a uniform `TopologyType` decodes to, the inverse of
 /// `topology.rs`'s `From<CellType> for TopologyType`.
 fn cell_type_of(topology_type: TopologyType, nodes_per_element: Option<u8>) -> Result<CellType> {
     let cell_type = match topology_type {
@@ -196,8 +192,8 @@ fn cell_type_of(topology_type: TopologyType, nodes_per_element: Option<u8>) -> R
     Ok(cell_type)
 }
 
-/// Same table `prepare_mesh` (`time_series_writer.rs`) uses to decide whether a `Mixed`
-/// connectivity's cell carries a point count.
+/// Whether a `Mixed` connectivity's cell carries a point count -- the same table `prepare_mesh`
+/// (`time_series_writer.rs`) decides it with.
 fn poly_cell_points(cell_type: CellType) -> Option<u8> {
     match cell_type {
         CellType::Vertex => Some(1),
@@ -266,8 +262,8 @@ mod tests {
         assert_eq!(connectivity, [0, 1, 2, 1, 2, 3, 2, 3, 4]);
     }
 
-    /// The index type is checked against the *values*, whatever type the file itself holds -- a
-    /// connectivity is positions, not a number format.
+    /// The index type is checked against the *values* whatever type the file holds, since a
+    /// connectivity carries positions rather than a number format.
     #[test]
     fn an_index_beyond_the_requested_type_is_rejected() {
         std::assert_matches!(

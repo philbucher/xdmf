@@ -1,10 +1,9 @@
 //! Reading a `Format="HDF"` `DataItem`'s heavy data: `file.h5:group/dataset` -> [`Values`].
 //!
-//! An HDF5 dataset is self-describing, so this does not need `NumberType`/`Precision` from the
-//! light data at all -- the dataset's own `H5Type` says which of the six [`Values`] variants to
-//! read it as. Splitting the light data's `file:path` text is `selection.rs`'s job, so nothing
-//! here touches a `DataItem`: this module is entirely gated on the `hdf5` feature (see
-//! `reader.rs`) and holds no `cfg` of its own.
+//! An HDF5 dataset is self-describing, so the light data's `NumberType`/`Precision` is not needed:
+//! the dataset's own `H5Type` picks the [`Values`] variant. Splitting `file:path` is
+//! `selection.rs`'s job, so nothing here touches a `DataItem`; the whole module is gated on the
+//! `hdf5` feature and holds no `cfg` of its own.
 
 use std::{
     path::{Path, PathBuf},
@@ -17,15 +16,11 @@ use crate::{Error, Result, Values, reader::sealed::SealedValueType};
 
 /// The HDF5 file a read last opened, kept open for the next read that names the same one.
 ///
-/// One slot rather than a map of every file seen: `Hdf5SingleFile` holds every array of a whole
-/// time series in one file, so a single slot never misses there, and `Hdf5MultipleFiles` reads a
-/// step's fields out of that step's one file before moving on to the next. A map would instead
-/// hold one open file descriptor per time step, which a long run would run the process out of.
+/// One slot rather than a map, which would hold one open file descriptor per time step and run a
+/// long run out of them. Reads come in file order, so a single slot rarely misses.
 ///
-/// A `Mutex` rather than a `RefCell` because every read method takes `&self`, and
-/// [`TimeSeriesReader`](crate::TimeSeriesReader) stays `Sync` this way. It is never contended in
-/// practice -- the reader is used from one thread at a time -- and the work it guards is a
-/// pointer comparison plus a handle refcount.
+/// A `Mutex` rather than a `RefCell` because the read methods take `&self`, which keeps
+/// [`TimeSeriesReader`](crate::TimeSeriesReader) `Sync`. It guards a pointer comparison.
 #[derive(Default)]
 pub(super) struct FileCache {
     last: Mutex<Option<(PathBuf, H5File)>>,
@@ -67,18 +62,12 @@ pub(super) fn read(
     values_of(&dataset)
 }
 
-/// The same read, straight into `into` where the dataset's own element type is already `T` --
-/// reporting whether it was.
+/// The same read, straight into `into` where the dataset's own element type is already `T`,
+/// reporting whether it was. `false` leaves `into` untouched: only the caller knows how another
+/// type converts -- a field widens it, a connectivity checks its values, a coordinate rejects it.
 ///
-/// `false` leaves `into` untouched: the dataset holds another type, and only the caller knows how
-/// that one converts. Widening is what a field wants, a check against the index type is what a
-/// connectivity wants, and a rejection is what a coordinate wants; each says so in its own words,
-/// which is why that decision is not made here.
-///
-/// The matching case is the common one -- a mesh or a field read back at the width it was written
-/// -- and it is the only one that can skip the intermediate array: `into` is resized to the
-/// dataset and HDF5 fills it in place, so a caller looping with the same buffer allocates once
-/// rather than once per call.
+/// The matching case is the common one and the only one that skips the intermediate array, so a
+/// caller looping with the same buffer allocates once rather than once per call.
 pub(super) fn read_exact_into<T: SealedValueType>(
     file_path: &Path,
     dataset_path: &str,

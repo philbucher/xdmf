@@ -1,4 +1,4 @@
-//! Implementations of writers for ASCII data storage (inline and in separate files).
+//! Writers for ASCII data storage, inline and in separate files.
 
 use std::{
     fs::File,
@@ -66,8 +66,8 @@ impl DataWriter for AsciiInlineWriter {
     }
 }
 
-/// This writer uses the XML format, but instead of writing the data directly into the xdmf file,
-/// it writes it to a separate file and includes it in the xdmf file using an `xi:include` tag.
+/// Writes ASCII data to a separate file per array, referenced from the xdmf file with an
+/// `xi:include` tag rather than inlined.
 pub(crate) struct AsciiWriter {
     txt_files_dir: PathBuf,
     folder_name: PathBuf,
@@ -243,7 +243,7 @@ impl_format_number!(u32, "{}");
 impl_format_number!(u64, "{}");
 impl_format_number!(usize, "{}");
 
-/// Generic formatter for arrays of scalar numeric types
+/// Formatter for arrays of scalar numeric types.
 pub fn array_to_string_fmt<T>(vec: &[T]) -> String
 where
     T: FormatNumber,
@@ -254,7 +254,7 @@ where
         .join(" ")
 }
 
-/// Generic formatter for arrays of either f64 or i32
+/// The same, written straight to `writer` instead of collected into a `String`.
 pub fn array_to_writer_fmt<T, W>(vec: &[T], writer: &mut W) -> std::io::Result<()>
 where
     T: FormatNumber,

@@ -1,6 +1,6 @@
-//! This module contains the main XDMF elements along with their serialization logic.
+//! The XDMF elements and their serialization.
 //!
-//! The official documentation for these can be found [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
+//! The format's own documentation is [here](https://www.xdmf.org/index.php/XDMF_Model_and_Format.html).
 
 use serde::{Deserialize, Serialize};
 
@@ -65,10 +65,7 @@ impl Default for Xdmf {
     }
 }
 
-/// Stores application-specific metadata that doesn't fit into the standard data model.
-///
-/// The `Information` element is designed to hold additional, system- or code-specific
-/// details that can be safely ignored by other components.
+/// Application-specific metadata outside the standard data model, which other readers may ignore.
 ///
 /// See <https://www.xdmf.org/index.php/XDMF_Model_and_Format.html#Information>
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,12 +111,10 @@ impl Domain {
     }
 }
 
-// Declares the cell types, their XDMF codes and their point counts as one list, so that a type
-// added to the crate cannot reach `ALL`, `from_code` or `num_points` as an omission — unlike
-// `define_values!`, where the methods are left out on purpose, `from_code` maps a code *to* a
-// variant and so cannot be made exhaustive by hand. The one decision still left to the compiler
-// is `From<CellType> for TopologyType` (`xdmf_elements/topology.rs`), whose exhaustive match asks
-// which XDMF name a new type serialises as.
+// Declares the cell types, their XDMF codes and their point counts as one list, so a new type
+// cannot be added while missing from `ALL`, `from_code` or `num_points`. Adding one still needs an
+// arm in `From<CellType> for TopologyType` (`xdmf_elements/topology.rs`), which the compiler asks
+// for.
 macro_rules! define_cell_types {
     ($($variant:ident = $code:literal => $num_points:literal),+ $(,)?) => {
         /// The cell types this crate can write, i.e. the XDMF topology types it supports.
@@ -140,9 +135,9 @@ macro_rules! define_cell_types {
         impl CellType {
             /// Every cell type this crate knows, in the order they are declared.
             ///
-            /// A slice rather than a sized array, so that adding a cell type is not a breaking
-            /// change for a caller naming the type. Consumers mapping these onto their own cell
-            /// types use it to check they have covered all of them.
+            /// A slice rather than a sized array, so adding a cell type is not a breaking change
+            /// for a caller naming the type, and so consumers mapping these onto their own cell
+            /// types can check coverage.
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
 
             /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None`
@@ -294,8 +289,8 @@ mod tests {
         assert_eq!(codes.len(), declared);
     }
 
-    /// A cell has at least one point, and a point count is what the connectivity is walked in
-    /// strides of — a zero would make a mesh of such cells read as an endless one.
+    /// A cell has at least one point, and the connectivity is walked in strides of that count, so
+    /// a zero would make a mesh of such cells read as an endless one.
     #[test]
     fn every_cell_type_has_points() {
         for cell_type in CellType::ALL {

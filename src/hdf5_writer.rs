@@ -1,4 +1,4 @@
-//! Implementations of writers for HDF5 data storage (single and multiple files).
+//! Writers for HDF5 data storage, single-file and one file per time step.
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,6 @@ pub(crate) struct SingleFileHdf5Writer {
     deflate_level: u8,
 }
 
-/// TODO show file hierarchy, and how data is structured
 impl SingleFileHdf5Writer {
     pub(crate) fn new(file_name: impl AsRef<Path>, deflate_level: u8) -> Result<Self> {
         let h5_file_name_full = file_name.as_ref().to_path_buf().with_extension("h5");
@@ -471,22 +470,16 @@ fn create_and_write<T: H5Type>(
 
 /// How many raw bytes one chunk of a dataset holds, give or take its last one.
 ///
-/// Every dataset written here is compressed, so HDF5 chunks it whether or not a size is given --
-/// and the size it picks on its own is the whole dataset (up to 16M elements). That makes reading
-/// any *part* of an array cost the whole array: a submesh's `HyperSlab` has to inflate every chunk
-/// it overlaps, and a chunk this far over HDF5's 1 MB chunk cache is never held, so the next read
-/// -- the next submesh, the next time step -- inflates it again.
-///
-/// A megabyte tested well: it costs next to nothing on disk, and below it the reads stop getting
-/// faster.
+/// Every dataset here is compressed, so HDF5 chunks it either way, defaulting to the whole
+/// dataset (up to 16M elements) -- which makes reading any part of it cost the whole array,
+/// repeatedly, once a chunk that large no longer fits HDF5's 1 MB cache. A megabyte tested well:
+/// it costs next to nothing on disk, and below it the reads stop getting faster.
 const CHUNK_BYTES: usize = 1 << 20; // 1MB
 
 /// The chunk shape for a dataset of `shape` holding [`CHUNK_BYTES`] of raw data each, or [`None`]
-/// to leave it to HDF5.
-///
-/// [`None`] for a dataset that fits one chunk anyway, and for any shape that is not flat: every
-/// dataset this module writes is flat (see `write_values`), so a shape of another rank is a
-/// future caller's, whose layout this has no business guessing at.
+/// to leave it to HDF5: for a dataset that fits one chunk anyway, or a shape that is not flat --
+/// every dataset this module writes is flat, so another rank is a future caller's, whose layout
+/// this has no business guessing at.
 fn chunk_shape<T>(shape: &[usize]) -> Option<Vec<usize>> {
     let [len] = *shape else { return None };
 
@@ -970,8 +963,7 @@ mod tests {
     }
 
     /// Every dataset here is compressed and so chunked either way; left to HDF5 the chunk is the
-    /// whole array, which makes reading any part of it -- a submesh's share, at every time step --
-    /// cost all of it. See `CHUNK_BYTES`.
+    /// whole array, which makes reading a submesh's share at every time step cost all of it.
     #[test]
     fn a_dataset_past_the_target_size_is_chunked_to_it() {
         let tmp_dir = temp_dir::TempDir::new().unwrap();

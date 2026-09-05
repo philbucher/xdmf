@@ -13,10 +13,9 @@ use crate::{
     },
 };
 
-/// Which positions of a source array one submesh holds -- its cells or points, out of the mesh's,
-/// or its share of a per-step field out of the step's whole array. Both selector shapes this
-/// crate's writer emits (`HyperSlab`'s `<start> 1 <count>`, `Coordinates`' explicit index list)
-/// collapse to this.
+/// Which positions of a source array one submesh holds: its cells or points out of the mesh's, or
+/// its share of a per-step field. Both selector shapes this crate's writer emits (`HyperSlab`'s
+/// `<start> 1 <count>` and `Coordinates`' explicit index list) collapse to this.
 #[derive(Debug, Clone)]
 pub(super) enum Membership {
     Contiguous { start: usize, len: usize },
@@ -31,8 +30,8 @@ impl Membership {
         }
     }
 
-    /// The source position the entry at `local` sits at, or `None` if the membership is shorter
-    /// than that -- which a document read out of a file can always turn out to be.
+    /// The source position the entry at `local` sits at, or `None` beyond the membership's end,
+    /// which a document read out of a file can always turn out to be.
     pub(super) fn get(&self, local: usize) -> Option<usize> {
         match self {
             Self::Contiguous { start, len } => (local < *len).then(|| start + local),
@@ -50,9 +49,9 @@ impl Membership {
 
     /// The values this membership picks out of a fully-read source array.
     ///
-    /// Both selector shapes name positions the file itself states, so neither is trusted to stay
-    /// inside the array it selects from -- a truncated or foreign document is reported rather than
-    /// indexed past the end of.
+    /// The positions come from the file, so neither shape is trusted to stay inside the array it
+    /// selects from: a truncated or foreign document is reported rather than indexed past the end
+    /// of.
     fn apply(&self, source: &Values<'_>) -> Result<Values<'static>> {
         let out_of_range = |position: usize| Error::InvalidDocument {
             reason: format!(
@@ -109,10 +108,8 @@ pub(super) fn read_data_item(
 /// The same read, into a caller's buffer rather than into a fresh [`Values`].
 ///
 /// Only the plain array a reference chain ends at can be filled in place, and only when the
-/// dataset already holds `T`. Everything else -- another element type, or a selection, which has
-/// to evaluate its whole source before it knows what to keep -- goes through `convert`, which is
-/// what each kind of array does with a `Values` of its own: widen it (field data), check its
-/// values against the index type (a connectivity), or reject it (coordinates).
+/// dataset already holds `T`. Another element type, or a selection (which must evaluate its whole
+/// source before it knows what to keep), goes through `convert` instead.
 pub(super) fn read_data_item_into<T, F>(
     item: &DataItem,
     document: &Document,
@@ -162,8 +159,7 @@ fn read_heavy_exact_into<T: SealedValueType>(
 /// Where one `DataItem`'s heavy data lives: the file, and the path inside it.
 ///
 /// Light-data parsing rather than heavy-data reading, so it happens on this side of the boundary
-/// and a `Format` this reader does not support is reported as such even in a build without the
-/// `hdf5` feature.
+/// and a `Format` this reader does not support is reported as such in either build.
 fn heavy_data_path<'i>(item: &'i DataItem, document: &Document) -> Result<(PathBuf, &'i str)> {
     if item.format != Some(Format::HDF) {
         return Err(Error::Unsupported {
@@ -207,9 +203,9 @@ pub(super) fn selection_parts(item: &DataItem) -> Result<(&DataItem, &DataItem)>
     }
 }
 
-/// The membership a selector names: which positions of the source it picks. Used both to
-/// evaluate a selection's values (see [`read_data_item`]) and, for a `Geometry`'s selector alone,
-/// to learn which mesh points a submesh holds without reading the (whole-mesh) source at all.
+/// The membership a selector names: which positions of the source it picks. Used to evaluate a
+/// selection's values (see [`read_data_item`]) and, for a `Geometry`'s selector alone, to learn
+/// which mesh points a submesh holds without reading the whole-mesh source at all.
 pub(super) fn parse_selector(
     selector: &DataItem,
     document: &Document,
