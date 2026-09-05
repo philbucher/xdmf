@@ -1,6 +1,16 @@
 //! Write meshes with data as [XDMF](https://www.xdmf.org/) files, for [ParaView](https://www.paraview.org/) or `VisIt` to read.
 //!
 //! XDMF (e**X**tensible **D**ata **M**odel and **F**ormat) keeps the metadata in XML and the numbers in a separate format, most often HDF5.
+
+/// Compiles the readme's examples as doctests, so they cannot drift from the API they show.
+///
+/// `cfg(doctest)` holds only while rustdoc collects tests, so the readme is checked without being
+/// pulled into the rendered docs -- where its relative links, pointing at files `cargo package`
+/// does not ship, would not resolve.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
+
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
