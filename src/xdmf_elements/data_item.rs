@@ -90,7 +90,10 @@ impl<'de> Deserialize<'de> for DataItem {
             reference: Option<String>,
             #[serde(rename = "$text", default)]
             text: Option<String>,
-            #[serde(rename = "xi:include", default)]
+            // `include`, not `xi:include`. `quick-xml`'s deserializer matches an element by its
+            // local name, with the namespace prefix already stripped, so the prefixed spelling
+            // that `Serialize` writes would match nothing here.
+            #[serde(rename = "include", default)]
             include: Option<XInclude>,
             #[serde(rename = "DataItem", default)]
             items: Vec<DataItem>,
@@ -162,6 +165,11 @@ impl XInclude {
             file_path: file_path.to_string(),
             parse: include_as_text.then(|| "text".to_string()), // xml is default
         }
+    }
+
+    /// The included file, relative to the document that names it.
+    pub(crate) fn file_path(&self) -> &str {
+        &self.file_path
     }
 }
 
@@ -533,13 +541,32 @@ mod tests {
         pretty_assertions::assert_eq!(round_tripped.data_item, ref_item);
     }
 
-    // No `data_item_include_deserialize` round-trip: `quick-xml` fails to route a nested
-    // `xi:include` child to the `Raw::include` field once `DataItem` sits inside another struct
-    // (verified -- it resolves fine as the directly-deserialized root type, but every real
-    // document nests it inside `Domain`/`Geometry`/`Topology`/`Attribute`). Not a gap the reader
-    // hits today: only the `Ascii` backend's external-file mode writes `DataContent::Include`, so
-    // it needs solving once the ascii storages can be read -- most likely with a hand-rolled
-    // event-loop parse of that one child.
+    // The asymmetry this guards: `Serialize` writes the prefixed `xi:include`, while `quick-xml`'s
+    // deserializer matches the local name alone, so the `Raw::include` field is spelled without the
+    // prefix. Getting that wrong drops the element without a word -- the item still deserializes,
+    // as an empty `DataContent::Raw`.
+    #[test]
+    fn data_item_include_deserialize() {
+        let data_item = DataItem {
+            name: Some("custom_data_item".to_string()),
+            item_type: None,
+            dimensions: Some(Dimensions(vec![2, 3])),
+            number_type: Some(NumberType::Int),
+            format: Some(Format::XML),
+            precision: Some(8),
+            endian: None,
+            data: XInclude::new("mesh.txt/coords.txt", true).into(),
+            reference: None,
+        };
+
+        let xml = to_string(&XmlRoot {
+            data_item: data_item.clone(),
+        })
+        .unwrap();
+        let round_tripped: XmlRoot = quick_xml::de::from_str(&xml).unwrap();
+
+        pretty_assertions::assert_eq!(round_tripped.data_item, data_item);
+    }
 
     #[test]
     fn data_item_selection_deserialize() {

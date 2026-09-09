@@ -104,7 +104,9 @@ pub(crate) trait DataWriter: Send + Sync {
     ///
     /// Called once per mesh or once per submesh, before the matching
     /// [`write_connectivity`](Self::write_connectivity), and never both ways for one mesh: a
-    /// submesh carries only the points its own cells use.
+    /// submesh carries only the points its own cells use. The first submesh of a storage with no
+    /// whole-mesh coordinate array to select out of also carries the points *no* cell uses, which
+    /// no file would otherwise hold.
     fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent>;
 
     /// Write one component of the mesh's own coordinates: every X value, then every Y, then every

@@ -101,10 +101,10 @@ pub enum Error {
         /// What is wrong with the document.
         reason: String,
     },
-    /// The document uses an XDMF construct this crate's reader does not support -- a `Format`,
-    /// `ItemType` or `TopologyType` outside its own output, or `Format="HDF"` data in a build
-    /// without the `hdf5` feature. Its own variant so a caller reading a foreign file can catch it
-    /// and fall back to another loader.
+    /// The document uses an XDMF construct this crate's reader does not support -- an `ItemType`,
+    /// `TopologyType` or `NumberType`/`Precision` pair outside its own output, or `Format="HDF"`
+    /// data in a build without the `hdf5` feature. Its own variant so a caller reading a foreign
+    /// file can catch it and fall back to another loader.
     #[error("unsupported: {reason}")]
     Unsupported {
         /// What was found and why this reader cannot read it.

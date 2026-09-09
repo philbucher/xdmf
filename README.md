@@ -124,9 +124,10 @@ A mesh too large for the type it is written with is rejected up front, rather th
 ## Reading
 
 `TimeSeriesReader::new` parses the whole file up front, so every read call after it is a plain,
-independent, repeatable query. The reader handles the two HDF5 storages
-(`Hdf5SingleFile`/`Hdf5MultipleFiles`) so far, and opening a file written with
-`Ascii`/`AsciiInline`/`Binary` fails right there.
+independent, repeatable query. Every storage reads back, and reads back the same: the mesh and the
+data you get are what was written, whichever of the five held them. A build compiled without the
+`hdf5` feature is the one exception, and it says so when you open the file rather than at your
+first read.
 
 ~~~rust,no_run
 use xdmf::TimeSeriesReader;
@@ -173,7 +174,9 @@ narrowing fails. `read_points` follows the same rule (`f32`/`f64`, see `Coordina
 
 A mesh written with `write_mesh_with_submeshes` reads back as the single, whole mesh it started
 from, and `submesh_names()`/`submesh_cells()`/`submesh_points()` recover which mesh cells and points
-each submesh holds.
+each submesh holds. The two storage families keep such a mesh differently (the HDF5 ones write the
+coordinates once and let each submesh select its own, the others give each a compacted copy), and
+that difference stops at the reader.
 
 See [`tests/reader.rs`](./tests/reader.rs) for more examples.
 

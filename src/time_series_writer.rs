@@ -152,6 +152,10 @@ impl TimeSeriesWriter {
     /// submeshes. The ascii and binary storages -- and any submesh whose cells are not listed in
     /// ascending order, on any storage -- get a copy per submesh instead.
     ///
+    /// Either way the mesh reads back whole, points included. Where the file has no whole-mesh
+    /// coordinate array for a reader to find a point in, the writer gives one that no cell uses to
+    /// the first submesh, whose `<Geometry>` may list a point its own cells do not reference.
+    ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
     /// let xdmf_writer = TimeSeriesWriter::new("xdmf_write_submeshes", xdmf::DataStorage::AsciiInline)
@@ -245,17 +249,30 @@ impl TimeSeriesWriter {
             None
         };
 
-        for (index, submesh) in submeshes.into_iter().enumerate() {
-            // each submesh holds only the points its own cells use, renumbered against them --
-            // never the mesh's coordinates whole, which would duplicate every point field per
-            // block
-            let points_of_submesh = submesh_points(
-                &mesh.cells,
-                &offsets,
-                cell_types,
-                mesh.topology_type,
-                &submesh.cells,
-            )?;
+        // each submesh holds only the points its own cells use, renumbered against them -- never
+        // the mesh's coordinates whole, which would duplicate every point field per block
+        let mut submesh_point_lists = submeshes
+            .iter()
+            .map(|submesh| {
+                submesh_points(
+                    &mesh.cells,
+                    &offsets,
+                    cell_types,
+                    mesh.topology_type,
+                    &submesh.cells,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // ...with one exception, for a storage that has no whole-mesh coordinate array to fall
+        // back on: a point no cell uses belongs to no submesh, so no file would hold it
+        if mesh_coordinates.is_none() {
+            adopt_unused_points(&mut submesh_point_lists, mesh.num_points);
+        }
+
+        for (index, (submesh, points_of_submesh)) in
+            submeshes.into_iter().zip(submesh_point_lists).enumerate()
+        {
             let (topology_type, nodes_per_element) = submesh_topology(
                 cell_types,
                 mesh.topology_type,
@@ -897,10 +914,10 @@ fn prepare_submeshes<'c, N: AsRef<str>, B: Into<SubmeshCells<'c>>>(
     let mut names = HashSet::new();
 
     // which cells any submesh has claimed, for the coverage check below
-    let mut covered = CellBitSet::new(num_cells);
+    let mut covered = IndexBitSet::new(num_cells);
     // which cells the submesh being read has claimed, to tell a cell repeated within one submesh
     // apart from two submeshes overlapping on it; cleared per submesh, not per mesh
-    let mut claimed_here = CellBitSet::new(num_cells);
+    let mut claimed_here = IndexBitSet::new(num_cells);
 
     for (name, cells) in submeshes {
         let name = name.as_ref();
@@ -997,16 +1014,17 @@ fn prepare_submeshes<'c, N: AsRef<str>, B: Into<SubmeshCells<'c>>>(
     Ok(prepared)
 }
 
-/// One bit per cell, for `prepare_submeshes`'s two membership questions.
+/// One bit per entity, for `prepare_submeshes`'s two cell-membership questions and for
+/// `adopt_unused_points`'s one about points.
 ///
 /// A `Vec<usize>` naming which submesh last claimed each cell would cost 8 bytes per cell (800 MB
 /// on a 100M-cell mesh); two bit sets cost a quarter of a byte between them.
-struct CellBitSet {
+struct IndexBitSet {
     words: Vec<u64>,
     len: usize,
 }
 
-impl CellBitSet {
+impl IndexBitSet {
     const BITS: usize = u64::BITS as usize;
 
     fn new(len: usize) -> Self {
@@ -1016,7 +1034,7 @@ impl CellBitSet {
         }
     }
 
-    // every index reaching these was already checked against the cell count, keeping the word
+    // every index reaching these was already checked against the entity count, keeping the word
     // lookup in bounds
     fn contains(&self, index: usize) -> bool {
         self.words[index / Self::BITS] & (1 << (index % Self::BITS)) != 0
@@ -1030,7 +1048,7 @@ impl CellBitSet {
         self.words[index / Self::BITS] &= !(1 << (index % Self::BITS));
     }
 
-    /// The cells whose bit is unset, in ascending order.
+    /// The entities whose bit is unset, in ascending order.
     fn missing(&self) -> impl Iterator<Item = usize> + '_ {
         (0..self.len).filter(move |&index| !self.contains(index))
     }
@@ -1059,9 +1077,42 @@ fn collapse_indices(cells: &[usize]) -> IndexList {
     }
 }
 
+/// Give the points no submesh holds to the first one, for a storage whose submeshes carry a copy
+/// of their points rather than selecting them out of the mesh's.
+///
+/// Every cell belongs to a submesh, but a point no cell uses belongs to none. Where the file has
+/// no whole-mesh coordinate array either, that point and its value in every point field would go
+/// unwritten. A `<Geometry>` may list a point its own cells do not reference, so the first submesh
+/// adopts them and the mesh reads back whole. Costs nothing on a mesh where every point is used.
+fn adopt_unused_points(point_lists: &mut [IndexList], num_points: usize) {
+    let mut used = IndexBitSet::new(num_points);
+    for list in point_lists.iter() {
+        for point in list.iter() {
+            used.insert(point);
+        }
+    }
+
+    let mut unused = used.missing().peekable();
+    if unused.peek().is_none() {
+        return;
+    }
+
+    let Some(first) = point_lists.first() else {
+        // unreachable: `prepare_submeshes` rejects a mesh with no submeshes
+        return;
+    };
+
+    // ascending, like every other point list, so the numbering a submesh's connectivity is
+    // remapped to still follows the mesh's own
+    let mut points: Vec<usize> = first.iter().chain(unused).collect();
+    points.sort_unstable();
+
+    point_lists[0] = collapse_indices(&points);
+}
+
 /// Reject a mesh with cells in no submesh: such a cell reaches none of the grids, so it would
 /// vanish from the visualization rather than fail.
-fn check_all_cells_covered(covered: &CellBitSet) -> Result<()> {
+fn check_all_cells_covered(covered: &IndexBitSet) -> Result<()> {
     const MAX_LISTED: usize = 10;
 
     let mut uncovered = covered.missing();
@@ -2910,6 +2961,47 @@ mod tests {
     }
 
     #[test]
+    fn adopt_unused_points_leaves_a_fully_used_mesh_alone() {
+        let mut lists = vec![
+            IndexList::Contiguous { start: 0, len: 3 },
+            IndexList::Scattered(vec![2, 3, 4]),
+        ];
+
+        adopt_unused_points(&mut lists, 5);
+
+        std::assert_matches!(lists[0], IndexList::Contiguous { start: 0, len: 3 });
+        std::assert_matches!(&lists[1], IndexList::Scattered(points) if points == &[2, 3, 4]);
+    }
+
+    #[test]
+    fn adopt_unused_points_gives_the_leftovers_to_the_first_submesh() {
+        // points 2, 3 and 6 are in neither list, and 6 is the mesh's last, so without this the
+        // mesh would read back as one of 6 points with 2 and 3 blank as well
+        let mut lists = vec![
+            IndexList::Contiguous { start: 0, len: 2 },
+            IndexList::Scattered(vec![4, 5]),
+        ];
+
+        adopt_unused_points(&mut lists, 7);
+
+        // ascending, like every point list, rather than the adopted ones tacked on at the end
+        std::assert_matches!(
+            &lists[0],
+            IndexList::Scattered(points) if points == &[0, 1, 2, 3, 6]
+        );
+        std::assert_matches!(&lists[1], IndexList::Scattered(points) if points == &[4, 5]);
+    }
+
+    #[test]
+    fn adopt_unused_points_collapses_back_to_a_run_where_the_leftovers_close_the_gap() {
+        let mut lists = vec![IndexList::Contiguous { start: 0, len: 2 }];
+
+        adopt_unused_points(&mut lists, 4);
+
+        std::assert_matches!(lists[0], IndexList::Contiguous { start: 0, len: 4 });
+    }
+
+    #[test]
     fn prepare_submeshes_rejects_no_submeshes() {
         let empty: Vec<(&str, &[usize])> = Vec::new();
 
@@ -2970,7 +3062,7 @@ mod tests {
 
     #[test]
     fn prepare_submeshes_spans_the_bit_sets_words() {
-        // every other test here fits within `CellBitSet`'s first word, hiding word-arithmetic
+        // every other test here fits within `IndexBitSet`'s first word, hiding word-arithmetic
         // bugs; this one straddles three words instead
         let low: Vec<usize> = (0..70).collect();
         let high: Vec<usize> = (64..150).collect();

@@ -1,5 +1,4 @@
-//! Round-trip tests for `TimeSeriesReader`, which reads `Format="HDF"` documents only.
-#![cfg(feature = "hdf5")]
+//! Round-trip tests for `TimeSeriesReader`, run against every storage it can read.
 
 use std::ops::Range;
 
@@ -7,23 +6,56 @@ use float_cmp::assert_approx_eq;
 use temp_dir::TempDir;
 use xdmf::{CellType, DataAttribute, DataStorage, TimeSeriesReader, TimeSeriesWriter};
 
-const STORAGES: [DataStorage; 2] = [
-    DataStorage::Hdf5SingleFile {
-        deflate_level: None,
-    },
-    DataStorage::Hdf5MultipleFiles {
-        deflate_level: None,
-    },
-];
+/// Every storage a document can be written with and read back at, which in a build without the
+/// `hdf5` feature is the three that need no library.
+///
+/// A test looping over these asserts that all of them behave the same. That is the property worth
+/// holding: the ascii and binary storages keep a submesh's points as a compacted copy where the
+/// HDF5 ones select them out of the mesh's, and neither difference may reach the caller.
+fn storages() -> Vec<DataStorage> {
+    let mut storages = vec![
+        DataStorage::Ascii,
+        DataStorage::AsciiInline,
+        DataStorage::Binary,
+    ];
+
+    if xdmf::is_hdf5_enabled() {
+        storages.extend([
+            DataStorage::Hdf5SingleFile {
+                deflate_level: None,
+            },
+            DataStorage::Hdf5MultipleFiles {
+                deflate_level: None,
+            },
+        ]);
+    }
+
+    storages
+}
+
+/// The same, without `Binary`, which refuses 64-bit integers outright, since `ParaView` reads them
+/// at the wrong stride (see `src/paraview.rs`). Only the tests that deliberately write an
+/// `i64`/`u64` need this; the rest use 32-bit indices so they cover every storage.
+fn storages_holding_64_bit_integers() -> Vec<DataStorage> {
+    storages()
+        .into_iter()
+        .filter(|storage| *storage != DataStorage::Binary)
+        .collect()
+}
+
+/// What the tests that hand-edit a document into a shape no writer emits are written against.
+/// `AsciiInline` keeps its documents self-contained, so an edit needs no second file kept in step,
+/// and those tests are about the reader's response to the document rather than about the storage.
+const HAND_EDITED: DataStorage = DataStorage::AsciiInline;
 
 #[test]
 fn round_trip_mesh_only() {
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
         let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
-        let connectivity = [0_u64, 1, 0, 2, 1, 1, 2, 3];
+        let connectivity = [0_u32, 1, 0, 2, 1, 1, 2, 3];
         let cell_types = [CellType::Edge, CellType::Triangle, CellType::Triangle];
 
         TimeSeriesWriter::new(&file_name, storage)
@@ -45,7 +77,7 @@ fn round_trip_mesh_only() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -63,7 +95,7 @@ fn round_trip_mesh_only() {
 /// it reads back as such a mesh, not as empty `connectivity`/`cell_types`.
 #[test]
 fn write_mesh_with_no_cells_reads_back_as_vertex_cells() {
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -125,10 +157,10 @@ fn round_trip_every_cell_type() {
     let coords: Vec<f64> = (0..num_points * 3).map(|i| i as f64).collect();
     let mut connectivity = Vec::new();
     for cell_type in ALL {
-        connectivity.extend(0..cell_type.num_points() as u64);
+        connectivity.extend(0..cell_type.num_points() as u32);
     }
 
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -138,7 +170,7 @@ fn round_trip_every_cell_type() {
             .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
 
         let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -149,17 +181,20 @@ fn round_trip_every_cell_type() {
     }
 }
 
-fn quad_mesh() -> ([f64; 12], [u64; 8], [CellType; 3]) {
+/// 32-bit connectivity, so the mesh can be written to every storage: `Binary` refuses a 64-bit
+/// one. The width a connectivity comes *back* at is the caller's own choice either way, which
+/// [`points_and_connectivity_are_read_at_the_requested_width`] covers.
+fn quad_mesh() -> ([f64; 12], [u32; 8], [CellType; 3]) {
     (
         [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
-        [0_u64, 1, 0, 2, 1, 1, 2, 3],
+        [0_u32, 1, 0, 2, 1, 1, 2, 3],
         [CellType::Edge, CellType::Triangle, CellType::Triangle],
     )
 }
 
 #[test]
 fn round_trip_point_and_cell_data_over_several_steps() {
-    for storage in STORAGES {
+    for storage in storages() {
         let (coords, connectivity, cell_types) = quad_mesh();
 
         let tmp_dir = TempDir::new().unwrap();
@@ -236,7 +271,7 @@ fn reading_a_field_repeatedly_allocates_nothing_of_its_size() {
     const NUM_POINTS: usize = 50_000;
     let field_bytes = NUM_POINTS * size_of::<f64>();
 
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -296,7 +331,7 @@ fn re_reading_the_mesh_allocates_nothing_of_its_size() {
     const NUM_POINTS: usize = 50_000;
     let num_cells = NUM_POINTS - 2;
 
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -368,12 +403,12 @@ fn re_reading_a_mesh_with_submeshes_holds_one_submesh_at_a_time() {
     const NUM_SUBMESHES: usize = 4;
     let num_points = NUM_CELLS + 7;
 
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
         let coords: Vec<f64> = (0..num_points * 3).map(|i| i as f64).collect();
-        let connectivity: Vec<u64> = (0..NUM_CELLS as u64)
+        let connectivity: Vec<u32> = (0..NUM_CELLS as u32)
             .flat_map(|cell| cell..cell + 8)
             .collect();
         let cell_types = vec![CellType::Hexahedron; NUM_CELLS];
@@ -397,7 +432,7 @@ fn re_reading_a_mesh_with_submeshes_holds_one_submesh_at_a_time() {
 
         // the first read of each is what sizes the buffers
         let mut points: Vec<f64> = Vec::new();
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_points(&mut points)
@@ -421,17 +456,25 @@ fn re_reading_a_mesh_with_submeshes_holds_one_submesh_at_a_time() {
              once instead of one"
         );
 
-        let connectivity_bytes = connectivity.len() * size_of::<u64>();
+        // what the two-pass reassembly costs whatever the storage: the mesh's cell offsets, which
+        // pass 2 needs for every cell before it can place any, plus one submesh's decoded
+        // topology. Holding every submesh's decoded topology at once would add a second copy of
+        // the whole connectivity on top of that, which is what the budget rules out.
+        let connectivity_bytes = connectivity.len() * size_of::<u32>();
+        let offsets_bytes = (NUM_CELLS + 1) * size_of::<usize>();
+        let budget = offsets_bytes + connectivity_bytes / 2;
+
         let before = counting_allocator::allocated_bytes();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
             .unwrap();
         let allocated = counting_allocator::allocated_bytes() - before;
         assert!(
-            allocated < connectivity_bytes / 2,
-            "{storage:?}: re-reading the topology allocated {allocated} bytes against the \
-             {connectivity_bytes} bytes of the connectivity itself -- it is holding every \
-             submesh's decoded topology at once instead of one"
+            allocated < budget,
+            "{storage:?}: re-reading the topology allocated {allocated} bytes against a budget of \
+             {budget} ({offsets_bytes} for the cell offsets and half the {connectivity_bytes} \
+             bytes of the connectivity) -- it is holding every submesh's decoded topology at once \
+             instead of one"
         );
     }
 }
@@ -477,7 +520,7 @@ static ALLOCATOR: counting_allocator::Counting = counting_allocator::Counting;
 
 #[test]
 fn round_trip_f32_attributes() {
-    for storage in STORAGES {
+    for storage in storages() {
         let (coords, connectivity, cell_types) = quad_mesh();
 
         let tmp_dir = TempDir::new().unwrap();
@@ -533,7 +576,7 @@ fn round_trip_f32_attributes() {
 
 #[test]
 fn round_trip_u64_attributes() {
-    for storage in STORAGES {
+    for storage in storages_holding_64_bit_integers() {
         let (coords, connectivity, cell_types) = quad_mesh();
 
         let tmp_dir = TempDir::new().unwrap();
@@ -573,7 +616,7 @@ fn round_trip_u64_attributes() {
 
 #[test]
 fn round_trip_data_attribute_shapes() {
-    for storage in STORAGES {
+    for storage in storages() {
         let (coords, connectivity, cell_types) = quad_mesh();
 
         let tmp_dir = TempDir::new().unwrap();
@@ -640,13 +683,13 @@ fn round_trip_data_attribute_shapes() {
     }
 }
 
-fn submesh_test_mesh() -> ([f64; 12], [u64; 8], [CellType; 3]) {
+fn submesh_test_mesh() -> ([f64; 12], [u32; 8], [CellType; 3]) {
     quad_mesh()
 }
 
 #[test]
 fn round_trip_contiguous_submeshes() {
-    for storage in STORAGES {
+    for storage in storages() {
         let (coords, connectivity, cell_types) = submesh_test_mesh();
 
         let tmp_dir = TempDir::new().unwrap();
@@ -679,7 +722,7 @@ fn round_trip_contiguous_submeshes() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -715,13 +758,13 @@ fn round_trip_contiguous_submeshes() {
 
 #[test]
 fn round_trip_scattered_overlapping_submeshes_with_an_unused_point() {
-    for storage in STORAGES {
+    for storage in storages() {
         // 5 points, point 4 unused by any cell; 4 cells, cell 3 in no submesh's own patch but the
         // "both" submesh scatters cells [3, 0], and "quads" overlaps "tris" on cell 1
         let coords = [
             0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 5.0, 5.0, 5.0,
         ];
-        let connectivity = [0_u64, 1, 2, 1, 2, 3, 0, 1, 2, 3, 2, 1, 0];
+        let connectivity = [0_u32, 1, 2, 1, 2, 3, 0, 1, 2, 3, 2, 1, 0];
         let cell_types = [
             CellType::Triangle,
             CellType::Triangle,
@@ -762,7 +805,7 @@ fn round_trip_scattered_overlapping_submeshes_with_an_unused_point() {
             .read_points(&mut points)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
 
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -800,9 +843,9 @@ fn round_trip_scattered_overlapping_submeshes_with_an_unused_point() {
 
 #[test]
 fn round_trip_a_submesh_with_deliberately_unordered_cells() {
-    for storage in STORAGES {
+    for storage in storages() {
         let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
-        let connectivity = [0_u64, 1, 2, 1, 2, 3, 0, 1, 3];
+        let connectivity = [0_u32, 1, 2, 1, 2, 3, 0, 1, 3];
         let cell_types = [CellType::Triangle, CellType::Triangle, CellType::Triangle];
 
         let tmp_dir = TempDir::new().unwrap();
@@ -827,7 +870,7 @@ fn round_trip_a_submesh_with_deliberately_unordered_cells() {
 
         let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
 
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -848,7 +891,7 @@ fn round_trip_a_submesh_with_deliberately_unordered_cells() {
 /// reassembly does not change that.
 #[test]
 fn write_mesh_with_no_cells_and_submeshes_reads_back_as_vertex_cells() {
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -890,12 +933,12 @@ fn write_mesh_with_no_cells_and_submeshes_reads_back_as_vertex_cells() {
 /// identity run `0..n`) still reassembles back to the real, non-identity global connectivity.
 #[test]
 fn round_trip_vertex_cells_with_submeshes() {
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
         let coords = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
-        let connectivity = [2_u64, 0, 3];
+        let connectivity = [2_u32, 0, 3];
         let cell_types = [CellType::Vertex; 3];
 
         TimeSeriesWriter::new(&file_name, storage)
@@ -912,7 +955,7 @@ fn round_trip_vertex_cells_with_submeshes() {
         assert_eq!(reader.num_points(), 4, "{storage:?}");
         assert_eq!(reader.num_cells(), 3, "{storage:?}");
 
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -934,7 +977,7 @@ fn a_selector_past_the_end_of_its_source_is_rejected() {
     let tmp_dir = TempDir::new().unwrap();
     let file_name = tmp_dir.path().join("mesh");
 
-    TimeSeriesWriter::new(&file_name, STORAGES[0])
+    TimeSeriesWriter::new(&file_name, HAND_EDITED)
         .unwrap()
         .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap()
@@ -949,8 +992,8 @@ fn a_selector_past_the_end_of_its_source_is_rejected() {
     // the field's own DataItem, wrapped below in a selection that reaches past its 4 values
     let source = document
         .lines()
-        .find(|line| line.contains("t_0.0"))
-        .unwrap()
+        .find(|line| line.contains("1.3e1"))
+        .unwrap_or_else(|| panic!("the field's DataItem is not in\n{document}"))
         .trim();
 
     // a HyperSlab of 40 values out of the 4 the field holds, and a Coordinates selection through
@@ -985,6 +1028,12 @@ fn a_selector_past_the_end_of_its_source_is_rejected() {
 /// file's, so a hand-written or truncated document can have them disagree. Those indices are
 /// written *at* when a field is scattered back together, so one past the end is reported when the
 /// document is opened rather than indexed with.
+///
+/// Only the storages whose submeshes select their points can disagree this way. Where each keeps a
+/// copy instead, the mesh's point count comes *from* those same lists, and what can disagree is a
+/// list against its own submesh's coordinate array. See
+/// [`a_submesh_point_list_longer_than_its_own_coordinates_is_rejected`].
+#[cfg(feature = "hdf5")]
 #[test]
 fn a_submesh_holding_a_point_the_mesh_does_not_have_is_rejected() {
     let (coords, connectivity, cell_types) = submesh_test_mesh();
@@ -992,15 +1041,20 @@ fn a_submesh_holding_a_point_the_mesh_does_not_have_is_rejected() {
     let tmp_dir = TempDir::new().unwrap();
     let file_name = tmp_dir.path().join("mesh");
 
-    TimeSeriesWriter::new(&file_name, STORAGES[0])
-        .unwrap()
-        .write_mesh_with_submeshes(
-            &coords,
-            &connectivity,
-            &cell_types,
-            [("edge", &[0][..]), ("surface", &[1, 2][..])],
-        )
-        .unwrap();
+    TimeSeriesWriter::new(
+        &file_name,
+        DataStorage::Hdf5SingleFile {
+            deflate_level: None,
+        },
+    )
+    .unwrap()
+    .write_mesh_with_submeshes(
+        &coords,
+        &connectivity,
+        &cell_types,
+        [("edge", &[0][..]), ("surface", &[1, 2][..])],
+    )
+    .unwrap();
 
     let document_path = file_name.with_extension("xdmf2");
     let document = std::fs::read_to_string(&document_path).unwrap();
@@ -1030,7 +1084,7 @@ fn submeshes_disagreeing_about_a_shared_cell_type_are_rejected() {
     let file_name = tmp_dir.path().join("mesh");
 
     // both submeshes hold the one cell, so the document states its type twice
-    TimeSeriesWriter::new(&file_name, STORAGES[0])
+    TimeSeriesWriter::new(&file_name, HAND_EDITED)
         .unwrap()
         .write_mesh_with_submeshes(
             &coords,
@@ -1070,7 +1124,7 @@ fn submeshes_disagreeing_about_a_shared_cell_type_are_rejected() {
 /// counting it as a step would contradict `num_steps`.
 #[test]
 fn a_step_index_on_a_mesh_without_steps_is_rejected() {
-    for storage in STORAGES {
+    for storage in storages() {
         let (coords, connectivity, cell_types) = quad_mesh();
 
         for with_submeshes in [false, true] {
@@ -1122,46 +1176,53 @@ fn a_step_index_on_a_mesh_without_steps_is_rejected() {
     }
 }
 
-/// The reader answers nothing at all about a document written with a storage it cannot read:
-/// `new` is where that is reported, rather than the first call that reaches heavy data.
+/// HDF5 is the only storage a build can be unable to read, and only where it was compiled without
+/// the feature. `new` reports that, rather than the first call that reaches heavy data, so a caller
+/// can fall back to another loader before asking the reader anything.
+#[cfg(not(feature = "hdf5"))]
 #[test]
-fn opening_a_document_written_with_a_non_hdf5_storage_is_rejected() {
-    let (coords, _, cell_types) = quad_mesh();
-    // 32-bit, since `Binary` refuses to hold a 64-bit connectivity at all
-    let connectivity = [0_u32, 1, 0, 2, 1, 1, 2, 3];
-
-    for storage in [
-        DataStorage::Ascii,
-        DataStorage::AsciiInline,
-        DataStorage::Binary,
-    ] {
-        let tmp_dir = TempDir::new().unwrap();
-        let file_name = tmp_dir.path().join("mesh");
-
-        TimeSeriesWriter::new(&file_name, storage)
-            .unwrap()
-            .write_mesh(&coords, &connectivity, &cell_types)
-            .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
-
-        std::assert_matches!(
-            TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap_err(),
-            xdmf::Error::Unsupported { reason }
-                if reason.contains(&format!("written with the {storage:?} storage")),
-            "{storage:?}"
-        );
-    }
-}
-
-/// A document that names no storage at all is a foreign file: it is opened, and its `DataItem`s
-/// are checked for `Format="HDF"` one by one as they are read.
-#[test]
-fn a_document_without_a_data_storage_information_is_opened() {
+fn opening_an_hdf5_document_without_the_feature_is_rejected() {
     let (coords, connectivity, cell_types) = quad_mesh();
 
     let tmp_dir = TempDir::new().unwrap();
     let file_name = tmp_dir.path().join("mesh");
 
+    // no HDF5 document can be written here, so an ascii one is relabelled as one. `new` decides on
+    // the `data_storage` Information alone, which is what this pins down.
     TimeSeriesWriter::new(&file_name, DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    std::fs::write(
+        &document_path,
+        document.replace(
+            "Value=\"AsciiInline\"",
+            "Value=\"Hdf5SingleFile { deflate_level: Some(3) }\"",
+        ),
+    )
+    .unwrap();
+
+    std::assert_matches!(
+        TimeSeriesReader::new(&document_path).unwrap_err(),
+        xdmf::Error::Unsupported { reason }
+            if reason.contains("without the 'hdf5' feature")
+    );
+}
+
+/// A document that names no storage at all is a foreign file. The reader opens it and lets each
+/// `DataItem`'s own `Format` decide how that item is read, which is what makes a document this
+/// crate did not write readable at all.
+#[test]
+fn a_document_without_a_data_storage_information_is_read_by_its_data_items() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, HAND_EDITED)
         .unwrap()
         .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
@@ -1172,15 +1233,27 @@ fn a_document_without_a_data_storage_information_is_opened() {
         .lines()
         .find(|line| line.contains("data_storage"))
         .unwrap();
-    std::fs::write(&document_path, document.replace(information, "")).unwrap();
+    let anonymous = document.replace(information, "");
+    std::fs::write(&document_path, &anonymous).unwrap();
 
     let reader = TimeSeriesReader::new(&document_path).unwrap();
     assert_eq!(reader.num_points(), 4);
 
     let mut points: Vec<f64> = Vec::new();
+    reader.read_points(&mut points).unwrap();
+    assert_approx_eq!(&[f64], &points, &coords);
+
+    // Every `Format` the schema has a variant for is readable, so what is left to reject is an
+    // item stating none at all, reported at that item when it is read rather than guessed at. (A
+    // `Format` outside the schema never reaches here, since the document does not parse.)
+    std::fs::write(&document_path, anonymous.replacen(" Format=\"XML\"", "", 1)).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    let mut points: Vec<f64> = Vec::new();
     std::assert_matches!(
         reader.read_points(&mut points).unwrap_err(),
-        xdmf::Error::Unsupported { reason } if reason.contains("is not supported by this reader")
+        xdmf::Error::InvalidDocument { reason }
+            if reason == "a DataItem holding heavy data has no Format"
     );
 }
 
@@ -1189,7 +1262,7 @@ fn a_document_without_a_data_storage_information_is_opened() {
 /// `u32` when every index fits one.
 #[test]
 fn points_and_connectivity_are_read_at_the_requested_width() {
-    for storage in STORAGES {
+    for storage in storages_holding_64_bit_integers() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -1238,7 +1311,7 @@ fn reading_f64_points_as_f32_is_rejected() {
     let file_name = tmp_dir.path().join("mesh");
 
     let (coords, connectivity, cell_types) = quad_mesh();
-    TimeSeriesWriter::new(&file_name, STORAGES[0])
+    TimeSeriesWriter::new(&file_name, HAND_EDITED)
         .unwrap()
         .write_mesh(&coords, &connectivity, &cell_types)
         .unwrap();
@@ -1256,7 +1329,7 @@ fn reading_f64_points_as_f32_is_rejected() {
 /// back as such.
 #[test]
 fn submeshes_given_as_ranges_round_trip() {
-    for storage in STORAGES {
+    for storage in storages() {
         let tmp_dir = TempDir::new().unwrap();
         let file_name = tmp_dir.path().join("mesh");
 
@@ -1281,7 +1354,7 @@ fn submeshes_given_as_ranges_round_trip() {
         let mut points: Vec<f64> = Vec::new();
         reader.read_points(&mut points).unwrap();
 
-        let mut read_connectivity: Vec<u64> = Vec::new();
+        let mut read_connectivity: Vec<u32> = Vec::new();
         let mut read_cell_types = Vec::new();
         reader
             .read_topology(&mut read_connectivity, &mut read_cell_types)
@@ -1290,5 +1363,196 @@ fn submeshes_given_as_ranges_round_trip() {
         assert_approx_eq!(&[f64], &points, &coords);
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
+    }
+}
+
+/// The counterpart of [`a_submesh_holding_a_point_the_mesh_does_not_have_is_rejected`] for the
+/// storages whose submeshes keep a copy of their points. There the mesh's point count comes from
+/// the `submesh_points` lists themselves, so what can disagree is a list against the coordinate
+/// array of the submesh it belongs to.
+#[test]
+fn a_submesh_point_list_longer_than_its_own_coordinates_is_rejected() {
+    let (coords, connectivity, cell_types) = submesh_test_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, HAND_EDITED)
+        .unwrap()
+        .write_mesh_with_submeshes(
+            &coords,
+            &connectivity,
+            &cell_types,
+            [("edge", &[0][..]), ("surface", &[1, 2][..])],
+        )
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+
+    // the first submesh holds the mesh's points 0..2, which its own coordinate array has. Claiming
+    // a third leaves that array one point short of the list.
+    let listed = "Name=\"submesh_points\" Value=\"0:2 0:4\"";
+    assert!(document.contains(listed), "{document}");
+    std::fs::write(
+        &document_path,
+        document.replace(listed, "Name=\"submesh_points\" Value=\"0:3 0:4\""),
+    )
+    .unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    let mut points: Vec<f64> = Vec::new();
+
+    std::assert_matches!(
+        reader.read_points(&mut points).unwrap_err(),
+        xdmf::Error::InvalidDocument { reason }
+            if reason == "submesh 0 holds 6 coordinates, but 'submesh_points' names 3 points for it"
+    );
+}
+
+/// The heavy data of the ascii and binary storages sits in files the document only points at, so
+/// the two can be edited apart. An HDF5 dataset states its own size and cannot. A file disagreeing
+/// with the `Dimensions` naming it is reported as the document being wrong, rather than read short
+/// and reassembled into a different mesh.
+#[test]
+fn heavy_data_disagreeing_with_the_dimensions_is_rejected() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    for storage in [DataStorage::Ascii, DataStorage::Binary] {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh(&coords, &connectivity, &cell_types)
+            .unwrap();
+
+        let extension = if storage == DataStorage::Ascii {
+            "txt"
+        } else {
+            "bin"
+        };
+        let points_file = file_name
+            .with_extension(extension)
+            .join(format!("points.{extension}"));
+
+        // one value short of the 12 the document's Dimensions name
+        let truncated = std::fs::read(&points_file).unwrap();
+        let keep = truncated.len() - if storage == DataStorage::Ascii { 4 } else { 8 };
+        std::fs::write(&points_file, &truncated[..keep]).unwrap();
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+        let mut points: Vec<f64> = Vec::new();
+
+        std::assert_matches!(
+            reader.read_points(&mut points).unwrap_err(),
+            xdmf::Error::InvalidDocument { reason }
+                if reason.contains("Dimensions say it holds 12 values"),
+            "{storage:?}"
+        );
+    }
+}
+
+/// The ascii storages hold text, which anything can be edited into, so a token that is not a value
+/// of the declared type is reported rather than read as a different number.
+#[test]
+fn an_ascii_value_that_is_not_a_number_is_rejected() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, HAND_EDITED)
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+
+    // the connectivity is UInt, so a negative index is a value the array cannot hold. The mesh
+    // mixes cell types, so its array interleaves the cell type codes with the points, but the last
+    // entry is the last triangle's third point either way.
+    let cells = ">2 2 0 1 4 0 2 1 4 1 2 3<";
+    assert!(document.contains(cells), "{document}");
+    std::fs::write(
+        &document_path,
+        document.replace(cells, ">2 2 0 1 4 0 2 1 4 1 2 -3<"),
+    )
+    .unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    let mut read_connectivity: Vec<u32> = Vec::new();
+    let mut read_cell_types = Vec::new();
+
+    std::assert_matches!(
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap_err(),
+        xdmf::Error::InvalidDocument { reason } if reason.contains("'-3' is not a valid u32 value")
+    );
+}
+
+/// Every storage carries the mesh's points, including one no cell references. The HDF5 storages do
+/// it by selecting out of the mesh's own coordinate array; on the others the writer gives such a
+/// point to the first submesh, whose `<Geometry>` may list a point its cells do not use. Without
+/// that, no file would hold the point or its value in any point field.
+#[test]
+fn a_point_no_cell_uses_survives_a_mesh_with_submeshes() {
+    // 6 points; no cell uses 4 or 5, and 5 is the mesh's last, so a reader taking the point count
+    // from the used ones alone would report a mesh of 4
+    let coords = [
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 7.0, 7.0, 7.0, 8.0, 8.0, 8.0,
+    ];
+    let connectivity = [0_u32, 1, 2, 1, 2, 3];
+    let cell_types = [CellType::Triangle, CellType::Triangle];
+
+    for storage in storages() {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("mesh");
+
+        let mut writer = TimeSeriesWriter::new(&file_name, storage)
+            .unwrap()
+            .write_mesh_with_submeshes(
+                &coords,
+                &connectivity,
+                &cell_types,
+                [("first", &[0][..]), ("second", &[1][..])],
+            )
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to write mesh: {error}"));
+
+        writer
+            .write_time_step("0.0", |step| {
+                step.point_data(
+                    "p",
+                    DataAttribute::Scalar,
+                    vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+                )
+            })
+            .unwrap();
+        drop(writer);
+
+        let reader = TimeSeriesReader::new(file_name.with_extension("xdmf2")).unwrap();
+        assert_eq!(reader.num_points(), 6, "{storage:?}");
+        assert_eq!(reader.num_cells(), 2, "{storage:?}");
+
+        let mut points: Vec<f64> = Vec::new();
+        reader
+            .read_points(&mut points)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to read points: {error}"));
+        assert_approx_eq!(&[f64], &points, &coords);
+
+        let mut read_connectivity: Vec<u32> = Vec::new();
+        let mut read_cell_types = Vec::new();
+        reader
+            .read_topology(&mut read_connectivity, &mut read_cell_types)
+            .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
+        assert_eq!(read_connectivity, connectivity, "{storage:?}");
+        assert_eq!(read_cell_types, cell_types, "{storage:?}");
+
+        // the unused points' field values are there too, not just their coordinates
+        let mut p = Vec::new();
+        reader.read_point_data::<f64>(0, "p", &mut p).unwrap();
+        assert_approx_eq!(&[f64], &p, &[10.0, 11.0, 12.0, 13.0, 14.0, 15.0]);
     }
 }

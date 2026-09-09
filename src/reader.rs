@@ -1,15 +1,23 @@
-//! Reads XDMF time series written with the HDF5 storages (`Format="HDF"`). A document naming a
-//! different storage, or a foreign document whose data turns out to be `"XML"`/`"Binary"`, is
-//! rejected as [`Error::Unsupported`].
+//! Reads XDMF time series back, whichever [`crate::DataStorage`] wrote them. `Format="HDF"`,
+//! `"XML"` (inline or through an `<xi:include>`) and `"Binary"` heavy data all read the same, and
+//! a caller cannot tell from the mesh which one held it. A build compiled without the `hdf5`
+//! feature is the one that can refuse a document: [`TimeSeriesReader::new`] reports an HDF5 one as
+//! [`Error::Unsupported`] rather than leaving it to the first read.
 //!
 //! [`TimeSeriesReader::new`] parses the whole document once, up front, so every later read call is
 //! independent and can run in any order.
 //!
 //! A mesh written with [`crate::TimeSeriesWriter::write_mesh_with_submeshes`] has no points or
-//! connectivity of its own -- reading it reassembles the mesh from the mesh's own coordinates and
-//! each submesh's selector. Only the HDF5 storages keep enough to do this: ascii and binary write
-//! each submesh a compacted copy of its own points, dropping any point no cell uses.
+//! connectivity of its own, and the two storage families keep that differently. The HDF5 ones
+//! write the coordinates once and let every submesh select its own out of them; the ascii and
+//! binary ones give each submesh a compacted copy. This module reassembles both: the first out of
+//! the mesh's own array through each `<Geometry>`'s selector, the second by scattering the copies
+//! back through the `submesh_points` `Information`. A point no cell uses reaches the caller either
+//! way, since a storage with no whole-mesh array to find it in has the writer give it to the first
+//! submesh.
 
+mod ascii_reader;
+mod binary_reader;
 mod light_data;
 mod selection;
 mod topology;
@@ -63,7 +71,7 @@ use selection::Membership;
 
 use crate::{
     CellType, ConnectivityIndex, Coordinate, DATA_STORAGE, DataAttribute, DataStorage, Error,
-    Result, SUBMESH_CELLS, Values,
+    Result, SUBMESH_CELLS, SUBMESH_POINTS, Values,
     xdmf_elements::{
         Domain,
         attribute::{self, AttributeType},
@@ -109,19 +117,47 @@ impl ValueType for u64 {}
 impl ValueType for u32 {}
 
 pub(crate) mod sealed {
-    use super::{Error, Result, Values};
+    use std::str::FromStr;
+
+    use super::{Error, NumberType, Result, Values};
+    use crate::xdmf_elements::data_item::Endian;
 
     // `H5Type` is a supertrait only where there is an HDF5 to read: it lets
     // `hdf5_reader::read_exact_into` fill a caller's buffer straight from a dataset of the same
-    // type, without the intermediate `Values` array.
+    // type, without the intermediate `Values` array. `FromStr` is a supertrait in both builds,
+    // for the ascii storages, whose heavy data is text.
     cfg_select! {
         feature = "hdf5" => {
-            pub trait SealedValueType: Sized + Copy + Default + hdf5::H5Type {
+            pub trait SealedValueType: Sized + Copy + Default + FromStr + hdf5::H5Type {
+                /// How the light data names this type. An HDF5 dataset carries its own element
+                /// type; an ascii or binary file carries none, so those two storages have only
+                /// this pair to go on, and `read_exact_into` only this pair to recognize the type
+                /// it was asked for.
+                const NUMBER_TYPE: NumberType;
+                /// Width in bytes, as `Precision` states it.
+                const PRECISION: u8;
+
+                /// One value out of the `PRECISION` bytes it was written as. `None` if given a
+                /// different number of bytes.
+                fn from_bytes(bytes: &[u8], endian: Endian) -> Option<Self>;
+
                 fn from_values(values: Values<'static>) -> Result<Vec<Self>>;
             }
         }
         _ => {
-            pub trait SealedValueType: Sized + Copy + Default {
+            pub trait SealedValueType: Sized + Copy + Default + FromStr {
+                /// How the light data names this type. An HDF5 dataset describes its own element
+                /// type, but an ascii or binary file does not, so those two storages have only
+                /// this pair to go on -- and `read_exact_into` only this pair to recognize its own
+                /// type by.
+                const NUMBER_TYPE: NumberType;
+                /// Width in bytes, as `Precision` states it.
+                const PRECISION: u8;
+
+                /// One value out of the `PRECISION` bytes it was written as, `None` if given a
+                /// different number of them.
+                fn from_bytes(bytes: &[u8], endian: Endian) -> Option<Self>;
+
                 fn from_values(values: Values<'static>) -> Result<Vec<Self>>;
             }
         }
@@ -136,7 +172,32 @@ pub(crate) mod sealed {
         }
     }
 
+    // The one method whose body is the same for every element type. `from_le_bytes` and friends
+    // are inherent methods on each numeric type rather than trait methods, so a generic body
+    // cannot reach them. `from_values` stays written out per type, since what each one accepts
+    // differs.
+    macro_rules! impl_from_bytes {
+        ($ty:ty) => {
+            fn from_bytes(bytes: &[u8], endian: Endian) -> Option<Self> {
+                let bytes = bytes.try_into().ok()?;
+
+                Some(match endian {
+                    Endian::Little => <$ty>::from_le_bytes(bytes),
+                    Endian::Big => <$ty>::from_be_bytes(bytes),
+                    // XDMF's own default, and the only one that does not read the same on every
+                    // machine: it means the byte order of whichever machine wrote the file
+                    Endian::Native => <$ty>::from_ne_bytes(bytes),
+                })
+            }
+        };
+    }
+
     impl SealedValueType for f64 {
+        const NUMBER_TYPE: NumberType = NumberType::Float;
+        const PRECISION: u8 = 8;
+
+        impl_from_bytes!(f64);
+
         fn from_values(values: Values<'static>) -> Result<Vec<Self>> {
             match values {
                 Values::F64(v) => Ok(v.into_owned()),
@@ -147,6 +208,11 @@ pub(crate) mod sealed {
     }
 
     impl SealedValueType for f32 {
+        const NUMBER_TYPE: NumberType = NumberType::Float;
+        const PRECISION: u8 = 4;
+
+        impl_from_bytes!(f32);
+
         fn from_values(values: Values<'static>) -> Result<Vec<Self>> {
             match values {
                 Values::F32(v) => Ok(v.into_owned()),
@@ -156,6 +222,11 @@ pub(crate) mod sealed {
     }
 
     impl SealedValueType for i64 {
+        const NUMBER_TYPE: NumberType = NumberType::Int;
+        const PRECISION: u8 = 8;
+
+        impl_from_bytes!(i64);
+
         fn from_values(values: Values<'static>) -> Result<Vec<Self>> {
             match values {
                 Values::I64(v) => Ok(v.into_owned()),
@@ -166,6 +237,11 @@ pub(crate) mod sealed {
     }
 
     impl SealedValueType for i32 {
+        const NUMBER_TYPE: NumberType = NumberType::Int;
+        const PRECISION: u8 = 4;
+
+        impl_from_bytes!(i32);
+
         fn from_values(values: Values<'static>) -> Result<Vec<Self>> {
             match values {
                 Values::I32(v) => Ok(v.into_owned()),
@@ -175,6 +251,11 @@ pub(crate) mod sealed {
     }
 
     impl SealedValueType for u64 {
+        const NUMBER_TYPE: NumberType = NumberType::UInt;
+        const PRECISION: u8 = 8;
+
+        impl_from_bytes!(u64);
+
         fn from_values(values: Values<'static>) -> Result<Vec<Self>> {
             match values {
                 Values::U64(v) => Ok(v.into_owned()),
@@ -185,6 +266,11 @@ pub(crate) mod sealed {
     }
 
     impl SealedValueType for u32 {
+        const NUMBER_TYPE: NumberType = NumberType::UInt;
+        const PRECISION: u8 = 4;
+
+        impl_from_bytes!(u32);
+
         fn from_values(values: Values<'static>) -> Result<Vec<Self>> {
             match values {
                 Values::U32(v) => Ok(v.into_owned()),
@@ -201,10 +287,13 @@ pub(crate) mod sealed {
 /// had at that point; reopen it to pick up steps written since. A read holds its heavy-data file
 /// open until the reader is dropped.
 ///
+/// Which [`DataStorage`] wrote the document changes nothing here. All five read back, and read
+/// back the same mesh and the same values.
+///
 /// ```rust,no_run
 /// use xdmf::TimeSeriesReader;
 ///
-/// // open a file written with one of the two HDF5 storages
+/// // open a file written with any of the storages
 /// let reader = TimeSeriesReader::new("xdmf_writing.xdmf2").expect("failed to open XDMF file");
 ///
 /// // points and topology (connectivity + cell types) are independent reads, each filling a
@@ -253,6 +342,10 @@ pub struct TimeSeriesReader {
     /// One membership per submesh, empty without submeshes: which mesh points/cells each submesh holds.
     points_membership: Vec<Membership>,
     cells_membership: Vec<Membership>,
+    /// Whether each submesh keeps its own copy of the points it uses, rather than selecting them
+    /// out of the mesh's. `false` for a mesh with no submeshes. See
+    /// [`submesh_points_are_copied`], which decides it.
+    submesh_points_copied: bool,
 }
 
 impl std::fmt::Debug for TimeSeriesReader {
@@ -281,29 +374,39 @@ impl TimeSeriesReader {
         let submesh_names = analysis.submesh_names().to_vec();
         let times = analysis.times(domain)?;
 
+        // how a submesh states which mesh points it holds: as a `<Geometry>` selecting them out
+        // of the mesh's own coordinates, or as a copy of its own that the `submesh_points`
+        // `Information` names them for. The grid decides this, not the storage that wrote it,
+        // since a foreign document names no storage at all.
+        let submesh_points_copied = !submesh_names.is_empty()
+            && submesh_points_are_copied(analysis.mesh_grid(0, domain)?, domain)?;
+
         let (num_points, num_cells, points_membership, cells_membership) = if submesh_names
             .is_empty()
         {
             let (num_points, num_cells) = mesh_size_plain(analysis.mesh_grid(0, domain)?, domain)?;
             (num_points, num_cells, Vec::new(), Vec::new())
         } else {
-            let num_points =
-                mesh_num_points_with_submeshes(analysis.mesh_grid(0, domain)?, domain)?;
-            let points_membership = submesh_points_membership(&analysis, domain, &document)?;
+            let points_membership = if submesh_points_copied {
+                parse_submesh_index_lists(SUBMESH_POINTS, &document, domain)?
+            } else {
+                submesh_points_membership(&analysis, domain, &document)?
+            };
+            check_submesh_count(&points_membership, &submesh_names, SUBMESH_POINTS)?;
+
+            let num_points = if submesh_points_copied {
+                // no whole-mesh coordinate array to take a size from, so the point lists are it.
+                // Exact, since the writer folds a point no cell uses into the first submesh.
+                mesh_size_from_membership(&points_membership)
+            } else {
+                mesh_num_points_with_submeshes(analysis.mesh_grid(0, domain)?, domain)?
+            };
             check_membership_in_range(&points_membership, num_points, "point")?;
-            let cells_membership = parse_submesh_cells(&document, domain)?;
 
-            if cells_membership.len() != submesh_names.len() {
-                return Err(Error::InvalidDocument {
-                    reason: format!(
-                        "'{SUBMESH_CELLS}' lists {} submeshes, but the document has {}",
-                        cells_membership.len(),
-                        submesh_names.len()
-                    ),
-                });
-            }
+            let cells_membership = parse_submesh_index_lists(SUBMESH_CELLS, &document, domain)?;
+            check_submesh_count(&cells_membership, &submesh_names, SUBMESH_CELLS)?;
 
-            let num_cells = mesh_num_cells_from_membership(&cells_membership);
+            let num_cells = mesh_size_from_membership(&cells_membership);
             (num_points, num_cells, points_membership, cells_membership)
         };
 
@@ -316,6 +419,7 @@ impl TimeSeriesReader {
             submesh_names,
             points_membership,
             cells_membership,
+            submesh_points_copied,
         })
     }
 
@@ -386,10 +490,20 @@ impl TimeSeriesReader {
         let first_grid = self.analysis.mesh_grid(0, domain)?;
 
         if self.submesh_names.is_empty() {
-            read_points_plain(&self.document, domain, first_grid, points)
-        } else {
-            read_points_with_submeshes(&self.document, domain, first_grid, points)
+            return read_points_plain(&self.document, domain, first_grid, points);
         }
+
+        if self.submesh_points_copied {
+            return read_points_from_submesh_copies(
+                &self.document,
+                &self.analysis,
+                &self.points_membership,
+                self.num_points,
+                points,
+            );
+        }
+
+        read_points_with_submeshes(&self.document, domain, first_grid, points)
     }
 
     /// Read the mesh's connectivity into a buffer of `u32`, `u64`, `i32` or `i64` (see
@@ -593,12 +707,13 @@ impl TimeSeriesReader {
     }
 }
 
-/// Reject a document written with a storage this reader cannot read.
+/// Reject a document this build cannot read. HDF5 without the `hdf5` feature is the only such
+/// case.
 ///
 /// The `data_storage` `Information` is written with `Debug` formatting, so the HDF5 variants carry
 /// their `deflate_level`; only the variant name matters. A document naming no storage, or one this
-/// crate does not know, is a foreign file and is let through, its `DataItem`s checked for
-/// `Format="HDF"` as they are read.
+/// crate does not know, is a foreign file and is let through, each `DataItem`'s `Format` checked
+/// as it is read.
 fn check_readable(document: &Document) -> Result<()> {
     let Some(name) = document
         .information(DATA_STORAGE)
@@ -611,17 +726,23 @@ fn check_readable(document: &Document) -> Result<()> {
         return Ok(());
     };
 
-    match storage {
-        DataStorage::Hdf5SingleFile { .. } | DataStorage::Hdf5MultipleFiles { .. } => Ok(()),
-        DataStorage::Ascii | DataStorage::AsciiInline | DataStorage::Binary => {
-            Err(Error::Unsupported {
-                reason: format!(
-                    "the document was written with the {name} storage, which this reader cannot \
-                     read -- only Hdf5SingleFile and Hdf5MultipleFiles can be"
-                ),
-            })
-        }
+    let needs_hdf5 = match storage {
+        DataStorage::Ascii | DataStorage::AsciiInline | DataStorage::Binary => false,
+        DataStorage::Hdf5SingleFile { .. } | DataStorage::Hdf5MultipleFiles { .. } => true,
+    };
+
+    // asked through `is_hdf5_enabled` rather than a `cfg_select!` of two arms, which would spell
+    // the message below out once per build
+    if needs_hdf5 && !crate::is_hdf5_enabled() {
+        return Err(Error::Unsupported {
+            reason: format!(
+                "the document was written with the {name} storage, but this build was compiled \
+                 without the 'hdf5' feature"
+            ),
+        });
     }
+
+    Ok(())
 }
 
 /// One reconstructed connectivity index as the type the caller asked for: the mesh position a
@@ -717,6 +838,38 @@ fn reconstruct_data_attribute(
     }
 }
 
+/// Whether a submesh's grid keeps a copy of the points it uses, rather than selecting them out of
+/// the mesh's coordinates.
+///
+/// A selecting `<Geometry>` names one `DataItem` per direction, each a `HyperSlab`/`Coordinates`
+/// over the mesh's array; a copy is one plain, interleaved array. Reading either back takes
+/// knowing which, and the item itself is the evidence.
+fn submesh_points_are_copied(grid: &Grid, domain: &Domain) -> Result<bool> {
+    let item = first_geometry_item(grid)?;
+    let item = if item.reference.is_some() {
+        light_data::resolve_reference(item, domain)?
+    } else {
+        item
+    };
+
+    Ok(item.item_type.is_none())
+}
+
+/// A grid's `Geometry`'s first `DataItem`: the whole coordinate array where a grid has one, and
+/// the first of the three directions where its points are a selection out of the mesh's.
+fn first_geometry_item(grid: &Grid) -> Result<&DataItem> {
+    grid.geometry
+        .as_ref()
+        .ok_or_else(|| Error::InvalidDocument {
+            reason: format!("Grid '{}' has no Geometry", grid.name),
+        })?
+        .data_items
+        .first()
+        .ok_or_else(|| Error::InvalidDocument {
+            reason: format!("Geometry of Grid '{}' has no DataItem", grid.name),
+        })
+}
+
 /// Points for a mesh with no submeshes: a plain, non-selection `DataItem`.
 fn read_points_plain<C: Coordinate>(
     document: &Document,
@@ -724,26 +877,66 @@ fn read_points_plain<C: Coordinate>(
     grid: &Grid,
     points: &mut Vec<C>,
 ) -> Result<()> {
-    let geometry = grid
-        .geometry
-        .as_ref()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Grid '{}' has no Geometry", grid.name),
-        })?;
-    let points_item = geometry
-        .data_items
-        .first()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Geometry of Grid '{}' has no DataItem", grid.name),
-        })?;
-
     selection::read_data_item_into(
-        points_item,
+        first_geometry_item(grid)?,
         document,
         domain,
         points,
         C::coordinates_from_values,
     )
+}
+
+/// The mesh's points, for a mesh whose submeshes each hold a copy of their own.
+///
+/// The file holds no coordinate array for the mesh itself, only one compacted, interleaved array
+/// per submesh, so this scatters each of those through its own point list. One submesh's copy is
+/// live at a time, in a scratch the loop reuses.
+fn read_points_from_submesh_copies<C: Coordinate>(
+    document: &Document,
+    analysis: &Analysis,
+    points_membership: &[Membership],
+    num_points: usize,
+    points: &mut Vec<C>,
+) -> Result<()> {
+    let domain = document.domain()?;
+    let total = num_points
+        .checked_mul(3)
+        .ok_or(Error::Internal("the mesh's coordinate count overflows"))?;
+
+    points.clear();
+    points.resize(total, C::default());
+
+    let mut submesh_points: Vec<C> = Vec::new();
+
+    for (submesh, membership) in points_membership.iter().enumerate() {
+        let grid = analysis.mesh_grid(submesh, domain)?;
+        selection::read_data_item_into(
+            first_geometry_item(grid)?,
+            document,
+            domain,
+            &mut submesh_points,
+            C::coordinates_from_values,
+        )?;
+
+        if submesh_points.len() != membership.len() * 3 {
+            return Err(Error::InvalidDocument {
+                reason: format!(
+                    "submesh {submesh} holds {} coordinates, but '{SUBMESH_POINTS}' names {} \
+                     points for it",
+                    submesh_points.len(),
+                    membership.len()
+                ),
+            });
+        }
+
+        // every index is in range: `check_membership_in_range` ran when the document was opened
+        for (local, global) in membership.iter().enumerate() {
+            points[global * 3..global * 3 + 3]
+                .copy_from_slice(&submesh_points[local * 3..local * 3 + 3]);
+        }
+    }
+
+    Ok(())
 }
 
 /// Topology for a mesh with no submeshes: a plain, non-selection `DataItem`.
@@ -845,7 +1038,7 @@ fn read_topology_with_submeshes<I: ConnectivityIndex>(
     cell_types: &mut Vec<CellType>,
 ) -> Result<()> {
     let domain = document.domain()?;
-    let num_cells = mesh_num_cells_from_membership(cells_membership);
+    let num_cells = mesh_size_from_membership(cells_membership);
 
     if points_membership.len() != analysis.num_submeshes()
         || cells_membership.len() != analysis.num_submeshes()
@@ -1070,82 +1263,82 @@ fn submesh_geometry_membership(
     domain: &Domain,
     document: &Document,
 ) -> Result<Membership> {
-    let geometry = grid
-        .geometry
-        .as_ref()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Grid '{}' has no Geometry", grid.name),
-        })?;
-    let first_item = geometry
-        .data_items
-        .first()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Geometry of Grid '{}' has no DataItem", grid.name),
-        })?;
-    let selection_item = light_data::resolve_reference(first_item, domain)?;
+    let selection_item = light_data::resolve_reference(first_geometry_item(grid)?, domain)?;
     let (selector, _source) = selection::selection_parts(selection_item)?;
 
     selection::parse_selector(selector, document, domain)
 }
 
-/// Parse `<Information Name="submesh_cells">`'s value into one [`Membership`] per submesh, in
-/// submesh order. An entry is either `<start>:<len>` or the name of the `DataItem` holding its
-/// indices.
-fn parse_submesh_cells(document: &Document, domain: &Domain) -> Result<Vec<Membership>> {
+/// Parse the value of `<Information Name="submesh_cells">` or `<Information
+/// Name="submesh_points">` into one [`Membership`] per submesh, in submesh order. An entry is
+/// either `<start>:<len>` or the name of the `DataItem` holding its indices.
+fn parse_submesh_index_lists(
+    array: &str,
+    document: &Document,
+    domain: &Domain,
+) -> Result<Vec<Membership>> {
     let value = document
-        .information(SUBMESH_CELLS)
+        .information(array)
         .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("the document has submeshes but no '{SUBMESH_CELLS}' Information"),
+            reason: format!("the document has submeshes but no '{array}' Information"),
         })?;
 
     value
         .split_whitespace()
-        .map(|entry| parse_submesh_cells_entry(entry, document, domain))
+        .map(|entry| parse_submesh_index_list_entry(array, entry, document, domain))
         .collect()
 }
 
-fn parse_submesh_cells_entry(
+fn parse_submesh_index_list_entry(
+    array: &str,
     entry: &str,
     document: &Document,
     domain: &Domain,
 ) -> Result<Membership> {
     if let Some((start, len)) = entry.split_once(':') {
         let start = start.parse().map_err(|_source| Error::InvalidDocument {
-            reason: format!("'{SUBMESH_CELLS}' entry '{entry}' has an invalid start"),
+            reason: format!("'{array}' entry '{entry}' has an invalid start"),
         })?;
         let len = len.parse().map_err(|_source| Error::InvalidDocument {
-            reason: format!("'{SUBMESH_CELLS}' entry '{entry}' has an invalid length"),
+            reason: format!("'{array}' entry '{entry}' has an invalid length"),
         })?;
         return Ok(Membership::Contiguous { start, len });
     }
 
     let item = light_data::find_by_name(domain, entry).ok_or_else(|| Error::InvalidDocument {
-        reason: format!("'{SUBMESH_CELLS}' names a DataItem '{entry}' that does not exist"),
+        reason: format!("'{array}' names a DataItem '{entry}' that does not exist"),
     })?;
     let values = selection::read_data_item(item, document, domain)?;
 
     Ok(Membership::Explicit(selection::values_to_usize(&values)?))
 }
 
+/// Reject an index list naming a different number of submeshes than the document has grids for.
+fn check_submesh_count(
+    membership: &[Membership],
+    submesh_names: &[String],
+    array: &str,
+) -> Result<()> {
+    if membership.len() == submesh_names.len() {
+        return Ok(());
+    }
+
+    Err(Error::InvalidDocument {
+        reason: format!(
+            "'{array}' lists {} submeshes, but the document has {}",
+            membership.len(),
+            submesh_names.len()
+        ),
+    })
+}
+
 /// Total mesh size for a mesh with no submeshes: `num_points` from the Geometry's own resolved
 /// `DataItem`, `num_cells` from the `Topology`'s `NumberOfElements`. Both are XML metadata, so no
 /// heavy data is touched.
 fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
-    let geometry = grid
-        .geometry
-        .as_ref()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Grid '{}' has no Geometry", grid.name),
-        })?;
-    let item = geometry
-        .data_items
-        .first()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Geometry of Grid '{}' has no DataItem", grid.name),
-        })?;
     // the geometry's own DataItem is a `Reference="XML"` to the actual, named coordinate array --
     // resolve it to reach its Dimensions
-    let item = light_data::resolve_reference(item, domain)?;
+    let item = light_data::resolve_reference(first_geometry_item(grid)?, domain)?;
     let dims = item
         .dimensions
         .as_ref()
@@ -1184,20 +1377,7 @@ fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
 /// `num_points` for a mesh with submeshes: the `Dimensions` of the *source* array a submesh's
 /// geometry selects out of, which is the mesh's own coordinates.
 fn mesh_num_points_with_submeshes(first_grid: &Grid, domain: &Domain) -> Result<usize> {
-    let geometry = first_grid
-        .geometry
-        .as_ref()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Grid '{}' has no Geometry", first_grid.name),
-        })?;
-    let item = geometry
-        .data_items
-        .first()
-        .ok_or_else(|| Error::InvalidDocument {
-            reason: format!("Geometry of Grid '{}' has no DataItem", first_grid.name),
-        })?;
-
-    let selection_item = light_data::resolve_reference(item, domain)?;
+    let selection_item = light_data::resolve_reference(first_geometry_item(first_grid)?, domain)?;
     let (_selector, source) = selection::selection_parts(selection_item)?;
     let dims = source
         .dimensions
@@ -1214,13 +1394,15 @@ fn mesh_num_points_with_submeshes(first_grid: &Grid, domain: &Domain) -> Result<
         })
 }
 
-/// `num_cells` for a mesh with submeshes: `1 + max` over every submesh's `submesh_cells` entry,
-/// sound because the writer's `check_all_cells_covered` makes every cell belong to at least one
-/// submesh.
-fn mesh_num_cells_from_membership(cells_membership: &[Membership]) -> usize {
-    let max_cell = cells_membership.iter().flat_map(Membership::iter).max();
+/// How many entities a mesh with submeshes has: `1 + max` over every submesh's index list.
+///
+/// Sound for cells because the writer's `check_all_cells_covered` makes every cell belong to at
+/// least one submesh. Sound for points because the writer folds a point no cell uses, the one
+/// entity no submesh's own cells would name, into the first submesh's point list.
+fn mesh_size_from_membership(membership: &[Membership]) -> usize {
+    let max_entity = membership.iter().flat_map(Membership::iter).max();
 
-    max_cell.map_or(0, |max| max + 1)
+    max_entity.map_or(0, |max| max + 1)
 }
 
 /// Scatter every submesh's own share of a field into the mesh's own indexing through its
