@@ -75,8 +75,8 @@ pub(super) fn read(
 }
 
 /// The same read, straight into `into` where the declared element type is already `T`, reporting
-/// whether it was -- see [`hdf5_reader::read_exact_into`](super::hdf5_reader::read_exact_into),
-/// whose contract this mirrors. `false` leaves `into` untouched.
+/// whether it was. `false` leaves `into` untouched. Mirrors the contract of
+/// [`hdf5_reader::read_exact_into`](super::hdf5_reader::read_exact_into).
 pub(super) fn read_exact_into<T: SealedValueType>(
     source: &Source<'_>,
     number_type: NumberType,
@@ -383,8 +383,7 @@ mod tests {
     }
 
     // The file is streamed rather than read whole, so a number can land across the boundary
-    // between two reads -- the case a whole-file parse could never get wrong, and the one this
-    // has to.
+    // between two reads. A whole-file parse could never get that wrong; this one has to.
     #[test]
     fn a_value_split_across_two_reads_is_parsed_as_one() {
         // written so that a value straddles every boundary in turn: each is 21 bytes with its

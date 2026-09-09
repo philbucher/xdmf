@@ -48,8 +48,8 @@ pub(super) fn read(
 }
 
 /// The same read, straight into `into` where the declared element type is already `T`, reporting
-/// whether it was -- see [`hdf5_reader::read_exact_into`](super::hdf5_reader::read_exact_into),
-/// whose contract this mirrors. `false` leaves `into` untouched.
+/// whether it was. `false` leaves `into` untouched. Mirrors the contract of
+/// [`hdf5_reader::read_exact_into`](super::hdf5_reader::read_exact_into).
 pub(super) fn read_exact_into<T: SealedValueType>(
     path: &Path,
     number_type: NumberType,
