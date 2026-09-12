@@ -13,7 +13,7 @@ xdmf readers: <https://discourse.paraview.org/t/xmdf-reader-names-xdmf2-reader/4
 
 ## Example
 
-You can compose an xdmf file out of the individual xdmf elements (see [here](./tests/xdmf_elements.rs)), but for most cases reach for `TimeSeriesWriter` instead. [This file](./tests/time_series_writer.rs) has elaborate examples.
+You can compose an xdmf file out of the individual xdmf elements (see [here](./tests/xdmf_elements.rs)), but for most cases reach for `TimeSeriesWriter` instead. [This file](./tests/writer.rs) has elaborate examples.
 
 Its interface writes a mesh, then adds time-step data to it:
 

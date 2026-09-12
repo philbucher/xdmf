@@ -649,7 +649,7 @@ fn write_data_rejects_u64_above_u32_max_for_every_storage() {
     let cell_types = [xdmf::CellType::Triangle];
 
     // Binary is absent on purpose: it refuses u64 outright, whatever the value, which
-    // `write_mesh_rejects_64_bit_connectivity_for_binary` and the binary_writer tests cover
+    // `write_mesh_rejects_64_bit_connectivity_for_binary` and the `writer_binary` tests cover
     let storages = [
         xdmf::DataStorage::Ascii,
         xdmf::DataStorage::AsciiInline,
@@ -2275,10 +2275,10 @@ fn debug_output_summarizes_the_writers_without_their_data() {
 
     // The point of the manual impls: the light data is summarized, not dumped. With `AsciiInline`
     // the `DataItem`s hold the values themselves, so a derived `Debug` would print the whole time
-    // series -- "1e0" is how the first temperature above is written. Strip the temp dir's path
-    // first: its randomly-generated name can itself contain "1e0".
-    assert!(debug.contains(".."), "{debug}");
+    // series -- "1e0" is how the first temperature above is written. Asserted on the debug output
+    // with the temp dir's path taken out: its randomly-generated name can itself contain "1e0".
     let debug_without_tmp_path = debug.replace(&tmp_dir.path().display().to_string(), "");
+    assert!(debug_without_tmp_path.contains(".."), "{debug}");
     assert!(!debug_without_tmp_path.contains("1e0"), "{debug}");
 }
 

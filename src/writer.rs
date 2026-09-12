@@ -151,10 +151,14 @@ impl TimeSeriesWriter {
     /// Writes the mesh split into named submeshes, returning a `TimeSeriesDataWriter`.
     ///
     /// A submesh is a named subset of the mesh's cells, shown as its own block in `ParaView`'s
-    /// Multi-block Inspector. Submeshes may overlap, but every cell must belong to at least one.
+    /// Multi-block Inspector. Submeshes may overlap, but every cell must belong to at least one. A
+    /// name may be any non-blank string without control characters.
     ///
     /// Field data is still passed once per step over the whole mesh; the writer cuts each
-    /// submesh's share automatically.
+    /// submesh's share automatically. The HDF5 storages write the coordinates and each field once
+    /// and let every submesh select its share, so the heavy data does not grow with the number of
+    /// submeshes. The ascii and binary storages -- and any submesh whose cells are not listed in
+    /// ascending order, on any storage -- get a copy per submesh instead.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -801,11 +805,15 @@ impl TimeSeriesDataWriter {
 
     /// Write one time step, passing a [`TimeStep`] to `write_step` to write its data into.
     ///
-    /// `time` must parse as a finite `f64`; it takes `impl Into<String>` so a number can't be
-    /// passed directly and silently reformatted.
+    /// `time` must parse as a finite `f64`, the caller is responsible for the formatting.
     ///
-    /// `Ok` adds the step's `<Grid>`; `Err` discards it and its heavy data instead. A step keeps
-    /// only the attributes actually written -- only an empty step is rejected.
+    /// `write_step` may fail with any error type this crate's [`Error`] converts into, returned
+    /// unchanged; a closure mixing error types needs it stated explicitly, most readably as
+    /// `|step| -> Result<(), MyError> { ... }`.
+    ///
+    /// `Ok` adds the step's `<Grid>`; `Err` discards it and its heavy data instead, leaving the
+    /// time available for another attempt. A step keeps only the attributes actually written --
+    /// only an empty step is rejected.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -853,12 +861,13 @@ impl TimeSeriesDataWriter {
         E: From<Error>,
     {
         let time = time.into();
-        let parsed_time = time
-            .parse::<f64>()
-            .map_err(|_parse_error| Error::InvalidTimeStep {
-                time: time.clone(),
+        let Ok(parsed_time) = time.parse::<f64>() else {
+            return Err(Error::InvalidTimeStep {
+                time,
                 reason: "must be a valid float".to_string(),
-            })?;
+            }
+            .into());
+        };
 
         // `f64::from_str` accepts "NaN"/"inf"/"infinity" and overflows large literals to infinity,
         // none of which name an instant a reader can place on a time line
