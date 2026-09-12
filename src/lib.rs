@@ -22,22 +22,18 @@ use xdmf_elements::{
     data_item::{DataContent, Format},
 };
 
-mod ascii_writer;
-mod binary_writer;
 mod error;
-#[cfg(feature = "hdf5")]
-mod hdf5_writer;
 mod paraview;
 mod reader;
-mod time_series_writer;
 mod values;
+mod writer;
 pub mod xdmf_elements;
 
 // Re-export types used in the public API
 pub use error::{Error, ErrorKind, Result};
 pub use reader::{DataInfo, TimeSeriesReader, ValueType};
-pub use time_series_writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use values::{ConnectivityIndex, Coordinate, Values};
+pub use writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use xdmf_elements::CellType;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
@@ -221,14 +217,14 @@ pub(crate) fn create_writer(
     data_storage: DataStorage,
 ) -> Result<Box<dyn DataWriter>> {
     match data_storage {
-        DataStorage::Ascii => Ok(Box::new(ascii_writer::AsciiWriter::new(file_name)?)),
-        DataStorage::AsciiInline => Ok(Box::new(ascii_writer::AsciiInlineWriter::new())),
+        DataStorage::Ascii => Ok(Box::new(writer::ascii::AsciiWriter::new(file_name)?)),
+        DataStorage::AsciiInline => Ok(Box::new(writer::ascii::AsciiInlineWriter::new())),
         DataStorage::Hdf5SingleFile { deflate_level } => {
             validate_deflate_level(deflate_level)?;
             cfg_select! {
-                feature = "hdf5" => Ok(Box::new(hdf5_writer::SingleFileHdf5Writer::new(
+                feature = "hdf5" => Ok(Box::new(writer::hdf5::SingleFileHdf5Writer::new(
                     file_name,
-                    deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
+                    deflate_level.unwrap_or(writer::hdf5::DEFAULT_DEFLATE_LEVEL),
                 )?)),
                 _ => Err(Error::InvalidConfiguration {
                     reason: format!(
@@ -240,9 +236,9 @@ pub(crate) fn create_writer(
         DataStorage::Hdf5MultipleFiles { deflate_level } => {
             validate_deflate_level(deflate_level)?;
             cfg_select! {
-                feature = "hdf5" => Ok(Box::new(hdf5_writer::MultipleFilesHdf5Writer::new(
+                feature = "hdf5" => Ok(Box::new(writer::hdf5::MultipleFilesHdf5Writer::new(
                     file_name,
-                    deflate_level.unwrap_or(hdf5_writer::DEFAULT_DEFLATE_LEVEL),
+                    deflate_level.unwrap_or(writer::hdf5::DEFAULT_DEFLATE_LEVEL),
                 )?)),
                 _ => Err(Error::InvalidConfiguration {
                     reason: format!(
@@ -251,7 +247,7 @@ pub(crate) fn create_writer(
                 }),
             }
         }
-        DataStorage::Binary => Ok(Box::new(binary_writer::BinaryWriter::new(file_name)?)),
+        DataStorage::Binary => Ok(Box::new(writer::binary::BinaryWriter::new(file_name)?)),
     }
 }
 

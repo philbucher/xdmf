@@ -184,7 +184,7 @@ fn heavy_data_path<'i>(item: &'i DataItem, document: &Document) -> Result<(PathB
 }
 
 /// The `<selector, source>` pair a `HyperSlab`/`Coordinates` `DataItem` carries as its nested
-/// items, in that order -- the shape `selection()` (`time_series_writer.rs`) writes.
+/// items, in that order -- the shape `selection()` (`writer.rs`) writes.
 pub(super) fn selection_parts(item: &DataItem) -> Result<(&DataItem, &DataItem)> {
     let DataContent::Items(children) = &item.data else {
         return Err(Error::InvalidDocument {
@@ -256,7 +256,7 @@ pub(super) fn parse_selector(
 }
 
 /// Convert an index array's values (small signed integers by construction, see
-/// `time_series_writer.rs`'s `index_values`) to source positions.
+/// `writer/submesh.rs`'s `index_values`) to source positions.
 pub(super) fn values_to_usize(values: &Values<'_>) -> Result<Vec<usize>> {
     let to_usize = |value: i128| {
         usize::try_from(value).map_err(|_source| Error::InvalidDocument {
