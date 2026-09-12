@@ -1,0 +1,44 @@
+name: Actions static analysis
+
+permissions: {}
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      security-events: write # to upload the SARIF results to the Security tab
+      contents: read
+      actions: read
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+      pull-requests: write
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - uses: reviewdog/action-actionlint@d290e336d5a743810aef4404f757dc862276d2ae # v1.73.4
+      with:
+        github_token: ${{ github.token }}
+        fail_level: error # otherwise reviewdog only comments and always exits 0
