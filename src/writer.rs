@@ -7,7 +7,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -593,6 +592,7 @@ impl TimeSeriesWriter {
             next_selection_index: 0,
             gather_buffers: GatherBuffers::default(),
             written_times: HashMap::new(),
+            last_xml_len: 0,
             num_points,
             num_cells,
         };
@@ -671,6 +671,9 @@ pub struct TimeSeriesDataWriter {
     // keyed on `f64::to_bits` of the parsed time, so two spellings of the same instant (e.g.
     // "0.1" and "0.10") are recognized as duplicates
     written_times: HashMap<u64, String>,
+    // length of the last serialized document, so the next one allocates its buffer in one go --
+    // the file is rewritten in full after every step, and it only ever grows
+    last_xml_len: usize,
     num_points: usize,
     num_cells: usize,
 }
@@ -923,16 +926,16 @@ impl TimeSeriesDataWriter {
         // written to a temporary file first, then renamed, to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
 
-        let mut xdmf_file = BufWriter::new(
-            std::fs::File::create(&temp_xdmf_file_name)
-                .map_err(io_ctx("creating XDMF file", &temp_xdmf_file_name))?,
-        );
+        // serialized into memory first to keep the two failures apart: a `Vec` never fails on I/O,
+        // so a failing `write_to` is a bug in the element types rather than a filesystem problem
+        let mut xdmf_xml = Vec::with_capacity(self.last_xml_len);
         self.xdmf
-            .write_to(&mut xdmf_file)
-            .map_err(io_ctx("writing XDMF XML", &temp_xdmf_file_name))?;
-        xdmf_file
-            .flush()
-            .map_err(io_ctx("flushing XDMF file", &temp_xdmf_file_name))?;
+            .write_to(&mut xdmf_xml)
+            .map_err(|_serialization_failed| Error::Internal("serializing the XDMF XML failed"))?;
+        self.last_xml_len = xdmf_xml.len();
+
+        std::fs::write(&temp_xdmf_file_name, &xdmf_xml)
+            .map_err(io_ctx("writing XDMF file", &temp_xdmf_file_name))?;
 
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
             .map_err(io_ctx("renaming XDMF file", &temp_xdmf_file_name))
@@ -2282,6 +2285,7 @@ mod tests {
             next_selection_index: 0,
             gather_buffers: GatherBuffers::default(),
             written_times: HashMap::new(),
+            last_xml_len: 0,
         };
 
         let write_step = |writer: &mut TimeSeriesDataWriter, time: &str| {
@@ -2494,6 +2498,7 @@ mod tests {
             next_selection_index: 0,
             gather_buffers: GatherBuffers::default(),
             written_times: HashMap::new(),
+            last_xml_len: 0,
         }
     }
 

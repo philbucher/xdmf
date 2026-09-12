@@ -191,15 +191,28 @@ pub(crate) fn io_ctx<'a>(
 }
 
 /// Converts to a `std::io::Error` for consumers that plumb `io::Error` throughout their own
-/// codebase. `Error::Io`'s original [`std::io::ErrorKind`] is preserved; every other variant (a
-/// validation failure, not a filesystem failure) becomes [`std::io::ErrorKind::InvalidInput`]. The
+/// codebase. `Error::Io` keeps its own [`std::io::ErrorKind`]; the variants blaming the caller
+/// become [`std::io::ErrorKind::InvalidInput`]. `Hdf5` and `Internal` blame no one, so they map to
+/// [`std::io::ErrorKind::Other`] instead of reporting a full disk inside HDF5 as bad input. The
 /// [`Error`] is kept as the payload rather than flattened into a string, so the original cause
 /// stays reachable via [`std::io::Error::get_ref`].
 impl From<Error> for std::io::Error {
     fn from(err: Error) -> Self {
+        // exhaustive, so a new variant has to pick a kind
         let kind = match &err {
             Error::Io { source, .. } => source.kind(),
-            _ => std::io::ErrorKind::InvalidInput,
+            #[cfg(feature = "hdf5")]
+            Error::Hdf5 { .. } => std::io::ErrorKind::Other,
+            Error::Internal(_) => std::io::ErrorKind::Other,
+            Error::Unsupported { .. } => std::io::ErrorKind::Unsupported,
+            Error::InvalidDocument { .. } => std::io::ErrorKind::InvalidData,
+            Error::InvalidFileName { .. }
+            | Error::InvalidConfiguration { .. }
+            | Error::InvalidMesh { .. }
+            | Error::InvalidTimeStep { .. }
+            | Error::InvalidData { .. }
+            | Error::IntegerOutOfRange { .. }
+            | Error::NumberTypeMismatch { .. } => std::io::ErrorKind::InvalidInput,
         };
         Self::new(kind, err)
     }
@@ -247,10 +260,10 @@ mod error_messages {
         );
         assert_eq!(
             Error::InvalidConfiguration {
-                reason: "using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature".to_string(),
+                reason: "the Hdf5SingleFile DataStorage requires the 'hdf5' feature".to_string(),
             }
             .to_string(),
-            "invalid configuration: using Hdf5SingleFile { deflate_level: None } DataStorage requires the 'hdf5' feature"
+            "invalid configuration: the Hdf5SingleFile DataStorage requires the 'hdf5' feature"
         );
     }
 
@@ -386,12 +399,43 @@ mod error_messages {
     }
 
     #[test]
-    fn from_error_for_io_error_defaults_to_invalid_input() {
+    fn from_error_for_io_error_maps_bad_input_to_invalid_input() {
         let io_err: std::io::Error = Error::InvalidMesh {
             reason: "at least one point is required".to_string(),
         }
         .into();
         assert_eq!(io_err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn from_error_for_io_error_maps_a_malformed_document_to_invalid_data() {
+        let io_err: std::io::Error = Error::InvalidDocument {
+            reason: "no Domain element".to_string(),
+        }
+        .into();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::InvalidData);
+
+        let io_err: std::io::Error = Error::Unsupported {
+            reason: "Format='XML' is not supported".to_string(),
+        }
+        .into();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn from_error_for_io_error_maps_non_caller_failures_to_other() {
+        let io_err: std::io::Error = Error::Internal("writing data was not initialized").into();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::Other);
+
+        #[cfg(feature = "hdf5")]
+        {
+            let io_err: std::io::Error = Error::Hdf5 {
+                operation: "writing dataset",
+                source: hdf5::Error::from("boom".to_string()),
+            }
+            .into();
+            assert_eq!(io_err.kind(), std::io::ErrorKind::Other);
+        }
     }
 }
 
