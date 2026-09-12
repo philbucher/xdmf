@@ -60,7 +60,7 @@ fn write_xdmf() {
 
         // deliberately not in alphabetical order: attributes must come out in the order written
         xdmf_writer
-            .write_time_step(&i.to_string(), |step| {
+            .write_time_step(i.to_string(), |step| {
                 step.point_data(
                     "point_data_scalar",
                     xdmf::DataAttribute::Scalar,
@@ -375,7 +375,7 @@ fn write_xdmf_point_mesh() {
         let point_data_scalar: Vec<f64> = (0..17).map(|j| j as f64 + i as f64).collect();
 
         xdmf_writer
-            .write_time_step(&i.to_string(), |step| {
+            .write_time_step(i.to_string(), |step| {
                 step.point_data(
                     "point_data_scalar",
                     xdmf::DataAttribute::Scalar,
@@ -649,7 +649,7 @@ fn write_data_rejects_u64_above_u32_max_for_every_storage() {
     let cell_types = [xdmf::CellType::Triangle];
 
     // Binary is absent on purpose: it refuses u64 outright, whatever the value, which
-    // `write_mesh_rejects_64_bit_connectivity_for_binary` and the binary_writer tests cover
+    // `write_mesh_rejects_64_bit_connectivity_for_binary` and the `writer_binary` tests cover
     let storages = [
         xdmf::DataStorage::Ascii,
         xdmf::DataStorage::AsciiInline,
@@ -2275,9 +2275,11 @@ fn debug_output_summarizes_the_writers_without_their_data() {
 
     // The point of the manual impls: the light data is summarized, not dumped. With `AsciiInline`
     // the `DataItem`s hold the values themselves, so a derived `Debug` would print the whole time
-    // series -- "1e0" is how the first temperature above is written.
-    assert!(debug.contains(".."), "{debug}");
-    assert!(!debug.contains("1e0"), "{debug}");
+    // series -- "1e0" is how the first temperature above is written. Asserted on the debug output
+    // with the temp dir's path taken out: its randomly-generated name can itself contain "1e0".
+    let debug_without_tmp_path = debug.replace(&tmp_dir.path().display().to_string(), "");
+    assert!(debug_without_tmp_path.contains(".."), "{debug}");
+    assert!(!debug_without_tmp_path.contains("1e0"), "{debug}");
 }
 
 #[test]

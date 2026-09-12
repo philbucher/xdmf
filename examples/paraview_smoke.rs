@@ -431,7 +431,7 @@ fn write_fixture(
             stress: stress.clone(),
         });
 
-        xdmf_writer.write_time_step(&step.to_string(), |time_step| {
+        xdmf_writer.write_time_step(step.to_string(), |time_step| {
             // `as_flattened` reinterprets `&[[f64; N]]` as `&[f64]` without copying, so the
             // natural per-point/per-cell layout needs no intermediate `Vec`
             time_step.point_data(
@@ -580,7 +580,7 @@ fn write_submesh_fixture(
             blocks,
         });
 
-        xdmf_writer.write_time_step(&step.to_string(), |time_step| {
+        xdmf_writer.write_time_step(step.to_string(), |time_step| {
             // point and cell data are passed over the whole mesh, exactly as without submeshes --
             // the writer gives each block its share
             time_step.point_data("temperature", DataAttribute::Scalar, &temperature)?;

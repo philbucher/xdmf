@@ -1,4 +1,4 @@
-//! The inverse of `time_series_writer.rs`'s `prepare_cells`: a `Topology`'s raw connectivity array
+//! The inverse of `writer/submesh.rs`'s `prepare_cells`: a `Topology`'s raw connectivity array
 //! into per-cell [`CellType`]s and a connectivity without the type codes, local to whatever submesh
 //! wrote it.
 
@@ -193,7 +193,7 @@ fn cell_type_of(topology_type: TopologyType, nodes_per_element: Option<u8>) -> R
 }
 
 /// Whether a `Mixed` connectivity's cell carries a point count -- the same table `prepare_mesh`
-/// (`time_series_writer.rs`) decides it with.
+/// (`writer.rs`) decides it with.
 fn poly_cell_points(cell_type: CellType) -> Option<u8> {
     match cell_type {
         CellType::Vertex => Some(1),

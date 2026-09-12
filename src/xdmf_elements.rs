@@ -142,7 +142,7 @@ macro_rules! define_cell_types {
 
             /// The cell type a `Mixed`-topology connectivity's per-cell code decodes to, `None`
             /// for a code this crate does not know. The inverse of the `as u8` cast
-            /// `prepare_cells` (`time_series_writer.rs`) writes with.
+            /// `prepare_cells` (`writer/submesh.rs`) writes with.
             pub(crate) fn from_code(code: u8) -> Option<Self> {
                 match code {
                     $($code => Some(Self::$variant),)+

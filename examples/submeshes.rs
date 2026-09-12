@@ -98,7 +98,7 @@ fn main() -> xdmf::Result<()> {
             *value = index as f64 + time * 10.0;
         }
 
-        ts_writer.write_time_step(&time.to_string(), |step| {
+        ts_writer.write_time_step(time.to_string(), |step| {
             step.point_data("height", DataAttribute::Scalar, &height)?;
             step.point_data("displacement", DataAttribute::Vector, &displacement)?;
             step.cell_data("cell_id", DataAttribute::Scalar, &cell_id)?;
