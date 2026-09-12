@@ -28,17 +28,19 @@ jobs:
         hdf5: [YES, NO]
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
       with:
         components: clippy
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       with:
         shared-key: "cross-platform-${{ matrix.os }}-${{ matrix.hdf5 }}"
 
-    - uses: taiki-e/install-action@v2.86.5
+    - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
       with:
         tool: nextest
 
@@ -118,17 +120,19 @@ jobs:
         hdf5: [YES, NO]
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
       with:
         components: clippy
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       with:
         shared-key: "python-bindings-${{ matrix.hdf5 }}"
 
-    - uses: actions/setup-python@v7
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: "3.x"
 
@@ -164,15 +168,17 @@ jobs:
     name: "Building and testing a wheel (static HDF5)"
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       with:
         shared-key: "wheel-static" # also caches the from-source HDF5, which builds under target/
 
-    - uses: actions/setup-python@v7
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: "3.x"
 
@@ -197,9 +203,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
       with:
         toolchain: nightly
         components: rustfmt
@@ -212,7 +220,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Check spelling
-      uses: crate-ci/typos@v1.50.1
+      uses: crate-ci/typos@c8866b658f1eb6ff60473fee711ef5304c63f898 # v1.50.1
