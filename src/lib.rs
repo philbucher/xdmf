@@ -227,9 +227,8 @@ pub(crate) fn create_writer(
                     deflate_level.unwrap_or(writer::hdf5::DEFAULT_DEFLATE_LEVEL),
                 )?)),
                 _ => Err(Error::InvalidConfiguration {
-                    reason: format!(
-                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
-                    ),
+                    reason: "the Hdf5SingleFile DataStorage requires the 'hdf5' feature"
+                        .to_string(),
                 }),
             }
         }
@@ -241,9 +240,8 @@ pub(crate) fn create_writer(
                     deflate_level.unwrap_or(writer::hdf5::DEFAULT_DEFLATE_LEVEL),
                 )?)),
                 _ => Err(Error::InvalidConfiguration {
-                    reason: format!(
-                        "using {data_storage:?} DataStorage requires the 'hdf5' feature"
-                    ),
+                    reason: "the Hdf5MultipleFiles DataStorage requires the 'hdf5' feature"
+                        .to_string(),
                 }),
             }
         }
@@ -545,6 +543,37 @@ mod tests {
                 panic!("expected an error for deflate_level 10");
             };
             std::assert_matches!(err, Error::InvalidConfiguration { reason } if reason.contains("deflate level 10"));
+        }
+    }
+
+    #[cfg(not(feature = "hdf5"))]
+    #[test]
+    fn create_writer_reports_the_missing_hdf5_feature() {
+        let tmp_dir = temp_dir::TempDir::new().unwrap();
+        let file_name = tmp_dir.path().join("test.xdmf");
+
+        for (storage, exp_name) in [
+            (
+                DataStorage::Hdf5SingleFile {
+                    deflate_level: None,
+                },
+                "Hdf5SingleFile",
+            ),
+            (
+                DataStorage::Hdf5MultipleFiles {
+                    deflate_level: Some(9),
+                },
+                "Hdf5MultipleFiles",
+            ),
+        ] {
+            let Err(err) = create_writer(&file_name, storage) else {
+                panic!("expected an error for {exp_name} without the hdf5 feature");
+            };
+            std::assert_matches!(
+                err,
+                Error::InvalidConfiguration { reason }
+                    if reason == format!("the {exp_name} DataStorage requires the 'hdf5' feature")
+            );
         }
     }
 }
