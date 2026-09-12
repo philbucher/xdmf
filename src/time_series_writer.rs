@@ -75,10 +75,8 @@ impl TimeSeriesWriter {
 
     /// Writes the mesh to the XDMF file, returning a `TimeSeriesDataWriter` for writing time steps.
     ///
-    /// Coordinates go in as `f32` or `f64`, connectivity as `u32`, `i32`, `u64` or `i64`, each at
-    /// the width it was passed. The connectivity type caps the mesh size: `u32` and `u64` at
-    /// `u32::MAX` points, since `ParaView` decodes `UInt` at 32 bits whatever precision is
-    /// declared, `i64` at the full 64 bits but only in the HDF5 storages.
+    /// Connectivity type caps mesh size: `u32`/`u64` at `u32::MAX` points, `i64` at the full 64
+    /// bits but only in the HDF5 storages.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -140,17 +138,11 @@ impl TimeSeriesWriter {
 
     /// Writes the mesh split into named submeshes, returning a `TimeSeriesDataWriter`.
     ///
-    /// A submesh is a named subset of the mesh's cells (or, for a mesh of points only, of the
-    /// points), and becomes a separately selectable block in `ParaView`'s Multi-block Inspector.
-    /// Submeshes may overlap, but every cell must belong to at least one -- otherwise it would
-    /// silently disappear from the visualization rather than fail. A name may be any non-blank
-    /// string without control characters.
+    /// A submesh is a named subset of the mesh's cells, shown as its own block in `ParaView`'s
+    /// Multi-block Inspector. Submeshes may overlap, but every cell must belong to at least one.
     ///
     /// Field data is still passed once per step over the whole mesh; the writer cuts each
-    /// submesh's share automatically. The HDF5 storages write the coordinates and each field once
-    /// and let every submesh select its share, so the heavy data does not grow with the number of
-    /// submeshes. The ascii and binary storages -- and any submesh whose cells are not listed in
-    /// ascending order, on any storage -- get a copy per submesh instead.
+    /// submesh's share automatically.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -1584,17 +1576,11 @@ impl TimeSeriesDataWriter {
 
     /// Write one time step, passing a [`TimeStep`] to `write_step` to write its data into.
     ///
-    /// On `Ok` the step's `<Grid>` is added to the XDMF file; on `Err` the step is discarded and
-    /// its heavy data removed again (the caller's error is still the one reported even if that
-    /// removal itself fails).
+    /// `time` must parse as a finite `f64`; it takes `impl Into<String>` so a number can't be
+    /// passed directly and silently reformatted.
     ///
-    /// `write_step` may fail with any error type this crate's [`Error`] converts into, returned
-    /// unchanged; a closure mixing error types needs it stated explicitly, most readably as
-    /// `|step| -> Result<(), MyError> { ... }`.
-    ///
-    /// A step contains exactly the attributes that were written successfully, so a closure that
-    /// swallows a rejected attribute's error and returns `Ok` gets a step without it -- only a
-    /// step with no attributes at all is rejected.
+    /// `Ok` adds the step's `<Grid>`; `Err` discards it and its heavy data instead. A step keeps
+    /// only the attributes actually written -- only an empty step is rejected.
     ///
     /// ```rust
     /// use xdmf::TimeSeriesWriter;
@@ -1619,7 +1605,7 @@ impl TimeSeriesDataWriter {
     /// // write the data for 10 time steps
     /// for i in 0..10 {
     ///     time_series_writer
-    ///         .write_time_step(&i.to_string(), |step| {
+    ///         .write_time_step(i.to_string(), |step| {
     ///             step.point_data("point_data", xdmf::DataAttribute::Vector, &point_values)?;
     ///
     ///             point_values.fill(i as f64); // refill the same buffer for the next attribute
@@ -1636,15 +1622,20 @@ impl TimeSeriesDataWriter {
     /// # // hidden: doctests run in the crate root, so the example cleans up after itself
     /// # std::fs::remove_file("xdmf_write_data.xdmf2").expect("the example writes this file");
     /// ```
-    pub fn write_time_step<F, E>(&mut self, time: &str, write_step: F) -> Result<(), E>
+    pub fn write_time_step<F, E>(
+        &mut self,
+        time: impl Into<String>,
+        write_step: F,
+    ) -> Result<(), E>
     where
         F: FnOnce(&mut TimeStep<'_>) -> Result<(), E>,
         E: From<Error>,
     {
+        let time = time.into();
         let parsed_time = time
             .parse::<f64>()
             .map_err(|_parse_error| Error::InvalidTimeStep {
-                time: time.to_string(),
+                time: time.clone(),
                 reason: "must be a valid float".to_string(),
             })?;
 
@@ -1652,7 +1643,7 @@ impl TimeSeriesDataWriter {
         // none of which name an instant a reader can place on a time line
         if !parsed_time.is_finite() {
             return Err(Error::InvalidTimeStep {
-                time: time.to_string(),
+                time,
                 reason: "must be a finite float".to_string(),
             }
             .into());
@@ -1665,22 +1656,18 @@ impl TimeSeriesDataWriter {
         // instant are caught too (e.g. "0.1" == "0.10")
         if let Some(existing) = self.written_times.get(&time_bits) {
             // naming the earlier spelling is only informative if it differs from this one
-            let reason = if existing == time {
+            let reason = if existing == &time {
                 "already written".to_string()
             } else {
                 format!("already written (as '{existing}')")
             };
-            return Err(Error::InvalidTimeStep {
-                time: time.to_string(),
-                reason,
-            }
-            .into());
+            return Err(Error::InvalidTimeStep { time, reason }.into());
         }
 
         let mut step = TimeStep {
             per_submesh: vec![Vec::new(); self.submeshes.len()],
             writer: self,
-            time: time.to_string(),
+            time,
             time_bits,
             attributes: Vec::new(),
             point_names: HashSet::new(),
@@ -1725,14 +1712,8 @@ impl TimeSeriesDataWriter {
 /// A single time step being written, handed to the closure passed to
 /// [`TimeSeriesDataWriter::write_time_step`].
 ///
-/// Each [`point_data`](Self::point_data)/[`cell_data`](Self::cell_data) call writes its heavy data
-/// before returning, so one buffer can
-/// serve every field of the step; the light data (XML) is written once, after the closure
-/// returns.
-///
-/// A step needs at least one attribute; returning from the closure without writing any is an
-/// error. Returning an error discards the step: no `<Grid>` reaches the XDMF file, its heavy data
-/// is removed, and the time stays available.
+/// Each [`point_data`](Self::point_data)/[`cell_data`](Self::cell_data) call writes its heavy
+/// data immediately, so one buffer can serve every field of the step.
 pub struct TimeStep<'a> {
     writer: &'a mut TimeSeriesDataWriter,
     time: String,
