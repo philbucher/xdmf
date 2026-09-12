@@ -14,20 +14,22 @@ jobs:
     name: "Building a wheel from the sdist"
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions/setup-python@v7
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: "3.x"
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1 # the build below runs on the host, not in a container
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1, the build below runs on the host, not in a container
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       with:
         shared-key: "sdist" # also caches the from-source HDF5, which builds under target/
 
     - name: Build the sdist
-      uses: PyO3/maturin-action@v1
+      uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
       with:
         working-directory: python
         command: sdist
@@ -45,7 +47,7 @@ jobs:
         python -m pip install ./python/dist/*.tar.gz --config-settings=build-args='--features pyo3/extension-module,hdf5-static'
         python -c "import xdmf; assert xdmf.is_hdf5_enabled()"
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: sdist
         path: python/dist/*.tar.gz

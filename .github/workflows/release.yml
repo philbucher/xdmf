@@ -19,7 +19,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Compare the tag against the workspace version
       run: |
@@ -53,16 +55,18 @@ jobs:
           - { platform: "windows-x86_64", runner: windows-latest,   target: x64,     manylinux: auto }
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions/setup-python@v7
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         # Any version >= 3.9 exercises the same wheel: what makes the >= 3.9 claim true is abi3,
         # which is a build-time property of the extension module and not of the interpreter here.
         python-version: "3.x"
 
     - name: Build the wheel
-      uses: PyO3/maturin-action@v1
+      uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
       with:
         working-directory: python
         target: ${{ matrix.target }}
@@ -86,7 +90,7 @@ jobs:
         python -c "import xdmf; assert xdmf.is_hdf5_enabled(), 'the wheel was built without HDF5'"
         cd python && python -m pytest tests
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: wheel-${{ matrix.platform }}
         path: python/dist/*.whl
@@ -101,11 +105,13 @@ jobs:
     name: "Packaging the crate"
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       with:
         shared-key: "crate-dry-run"
 
@@ -130,7 +136,7 @@ jobs:
       id-token: write # PyPI trusted publishing (OIDC), instead of a long-lived API token
 
     steps:
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
         path: dist
         merge-multiple: true
@@ -138,7 +144,7 @@ jobs:
     - name: List what is about to be published
       run: ls -l dist
 
-    - uses: pypa/gh-action-pypi-publish@release/v1
+    - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
       with:
         skip-existing: true # a failure halfway leaves some of the files up; a re-run lands the rest
 
@@ -153,9 +159,11 @@ jobs:
       id-token: write # crates.io trusted publishing (OIDC), instead of a long-lived API token
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
 
     - name: Install HDF5 (apt) # the publish verifies the package by building it
       env:
@@ -165,7 +173,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends libhdf5-dev
 
-    - uses: rust-lang/crates-io-auth-action@v1
+    - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
       id: auth # the token it mints lasts for this job only, and its post step revokes it
 
     - run: cargo publish --locked -p xdmf
