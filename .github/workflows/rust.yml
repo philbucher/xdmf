@@ -59,14 +59,32 @@ jobs:
         brew install hdf5
         echo "HDF5_DIR=$(brew --prefix hdf5)" >> "$GITHUB_ENV"
 
-    - name: Install HDF5 (vcpkg)
+    # vcpkg builds HDF5 (and zlib and szip) from source, which is by far the longest step of the
+    # Windows job -- so the tree it installs into is cached, keyed on the runner image's own vcpkg
+    # commit, and `vcpkg install` only runs when that key misses.
+    - name: Locate the vcpkg HDF5 installation
       if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' }}
       shell: pwsh
       run: |
-        vcpkg install hdf5:x64-windows
         $hdf5Dir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
         echo "HDF5_DIR=$hdf5Dir" >> $env:GITHUB_ENV
         echo "$hdf5Dir\bin" >> $env:GITHUB_PATH
+        $rev = git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD
+        if (-not $rev) { throw "cannot determine the vcpkg revision, refusing to cache blindly" }
+        echo "VCPKG_REV=$rev" >> $env:GITHUB_ENV
+
+    - name: Cache the vcpkg HDF5 build
+      id: hdf5-cache
+      if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' }}
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ env.HDF5_DIR }}
+        key: vcpkg-hdf5-x64-windows-${{ env.VCPKG_REV }}
+
+    - name: Install HDF5 (vcpkg)
+      if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' && steps.hdf5-cache.outputs.cache-hit != 'true' }}
+      shell: pwsh
+      run: vcpkg install hdf5:x64-windows
 
     - name: Run clippy
       shell: bash
