@@ -74,7 +74,9 @@ jobs:
         # `abi3-py39` (see `python/Cargo.toml`) makes this one wheel cover every CPython >= 3.9, and
         # `hdf5-static` builds HDF5 into it, so `pip install xdmf` needs no system library.
         args: --release --out dist --features pyo3/extension-module,hdf5-static
-        sccache: "true"
+        # no caching in this workflow: a tag run restores the default branch's caches, and a
+        # poisoned entry would reach a job holding `id-token: write`
+        sccache: "false"
         before-script-linux: | # the manylinux image has a compiler, but not CMake
           if command -v dnf > /dev/null; then dnf install -y cmake; else yum install -y cmake; fi
       env:
@@ -109,11 +111,9 @@ jobs:
       with:
         persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-
-    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+    - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
-        shared-key: "crate-dry-run"
+        cache: false # see the wheel build above
 
     - name: Install HDF5 (apt) # `cargo publish` verifies the package by building it, with default features
       env:
@@ -163,7 +163,9 @@ jobs:
       with:
         persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+    - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      with:
+        cache: false # see the wheel build above
 
     - name: Install HDF5 (apt) # the publish verifies the package by building it
       env:

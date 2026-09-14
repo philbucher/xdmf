@@ -27,11 +27,13 @@ jobs:
         storage: [ "Ascii", "AsciiInline", "Hdf5SingleFile", "Hdf5MultipleFiles", "Binary" ]
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         shared-key: "paraview-${{ matrix.storage }}"
 
@@ -45,8 +47,10 @@ jobs:
         sudo apt-get install -y --no-install-recommends libhdf5-dev
 
     - name: Build fixture-writer example
+      env: # through the environment, not an expansion: `${{ }}` inside `[[ ]]` reads as a literal
+        STORAGE: ${{ matrix.storage }}
       run: |
-        if [[ "${{ matrix.storage }}" == *Hdf5* ]]; then
+        if [[ "$STORAGE" == *Hdf5* ]]; then
           cargo build --locked --example paraview_smoke
         else
           cargo build --locked --example paraview_smoke --no-default-features
