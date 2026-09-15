@@ -101,7 +101,7 @@ missing_debug_implementations = "warn"
 [package]
 authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]
-description = "Small library to write XDMF files for Paraview"
+description = "Small library to write and read XDMF files for ParaView"
 edition.workspace = true
 include = ["/src", "/README.md", "/LICENSE"]
 keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
