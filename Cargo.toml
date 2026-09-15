@@ -3,7 +3,7 @@ members = ["python"]
 
 [workspace.package]
 edition = "2024"
-version = "0.2.4"
+version = "1.0.0"
 
 [workspace.lints.clippy]
 allow_attributes = "warn"
@@ -101,7 +101,7 @@ missing_debug_implementations = "warn"
 [package]
 authors = ["Philipp Bucher"]
 categories = ["science", "simulation", "visualization"]
-description = "Small library to write XDMF files for Paraview"
+description = "Small library to write and read XDMF files for ParaView"
 edition.workspace = true
 include = ["/src", "/README.md", "/LICENSE"]
 keywords = ["xdmf", "paraview", "hpc", "postprocessing", "io"]
