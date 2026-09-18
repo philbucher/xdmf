@@ -33,6 +33,8 @@ pub mod xdmf_elements;
 pub use error::{Error, ErrorKind, Result};
 pub use reader::{DataInfo, TimeSeriesReader, ValueType};
 pub use values::{ConnectivityIndex, Coordinate, Values};
+#[cfg(feature = "mpi")]
+pub use writer::{ParallelTimeSeriesDataWriter, ParallelTimeSeriesWriter, ParallelTimeStep};
 pub use writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use xdmf_elements::CellType;
 
@@ -173,6 +175,54 @@ pub(crate) trait DataWriter: Send + Sync {
         ))
     }
 
+    /// Whether this backend can create a mesh array's or a time step's dataset collectively
+    /// across MPI ranks and let each write its own share, instead of one rank writing the whole
+    /// array. Only the single-file HDF5 backend can.
+    #[cfg(feature = "mpi")]
+    fn supports_parallel(&self) -> bool {
+        false
+    }
+
+    /// Create one of the mesh's own arrays (points or connectivity) at its final `global_len`,
+    /// collectively across every rank -- every rank must call this the same number of times, with
+    /// the same `array`/`global_len`, even a rank contributing nothing (`local.len() == 0`) --
+    /// then write this rank's own contiguous share into it at `offset`.
+    ///
+    /// Called instead of [`write_points`](Self::write_points)/
+    /// [`write_connectivity`](Self::write_connectivity) by
+    /// [`crate::ParallelTimeSeriesWriter::write_mesh`]. Only reachable from a backend that
+    /// answers [`supports_parallel`](Self::supports_parallel) with `true`.
+    #[cfg(feature = "mpi")]
+    fn write_mesh_array_parallel(
+        &mut self,
+        _array: &'static str,
+        _local: &Values<'_>,
+        _offset: usize,
+        _global_len: usize,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage does not support parallel writing",
+        ))
+    }
+
+    /// The parallel counterpart of [`write_data`](Self::write_data): create the step's array at
+    /// its final `global_len`, collectively, then write this rank's own share at `offset`.
+    ///
+    /// Only reachable from a backend that answers
+    /// [`supports_parallel`](Self::supports_parallel) with `true`.
+    #[cfg(feature = "mpi")]
+    fn write_data_parallel(
+        &mut self,
+        _index: usize,
+        _local: &Values<'_>,
+        _offset: usize,
+        _global_len: usize,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage does not support parallel writing",
+        ))
+    }
+
     fn write_data_initialize(&mut self, _time: &str) -> Result<()> {
         Ok(())
     }
@@ -200,7 +250,7 @@ pub(crate) trait DataWriter: Send + Sync {
 // zlib/deflate only accepts levels 0-9; anything else is a caller mistake that should be
 // rejected before a writer is constructed, rather than surfacing as a raw HDF5 error later
 // (`H5Pset_deflate(): invalid deflate level`) from inside `write_mesh`.
-fn validate_deflate_level(deflate_level: Option<u8>) -> Result<()> {
+pub(crate) fn validate_deflate_level(deflate_level: Option<u8>) -> Result<()> {
     if let Some(level) = deflate_level
         && level > 9
     {

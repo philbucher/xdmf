@@ -10,6 +10,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(feature = "mpi")]
+pub use parallel::{ParallelTimeSeriesDataWriter, ParallelTimeSeriesWriter, ParallelTimeStep};
 pub use submesh::SubmeshCells;
 use submesh::{
     IndexList, LocalPoints, PreparedMesh, SelectionKey, Submesh, cell_offsets, entities_of,
@@ -38,6 +40,8 @@ pub(crate) mod ascii;
 pub(crate) mod binary;
 #[cfg(feature = "hdf5")]
 pub(crate) mod hdf5;
+#[cfg(feature = "mpi")]
+mod parallel;
 mod submesh;
 
 /// Writer for time series data in XDMF format.
@@ -144,6 +148,7 @@ impl TimeSeriesWriter {
             Vec::new(),
             mesh.num_points,
             mesh.num_cells,
+            true,
         )
     }
 
@@ -332,7 +337,14 @@ impl TimeSeriesWriter {
 
         let grid = Grid::new_collection("mesh", CollectionType::Spatial, Some(grids));
 
-        self.finish_mesh(grid, data_items, prepared, mesh.num_points, mesh.num_cells)
+        self.finish_mesh(
+            grid,
+            data_items,
+            prepared,
+            mesh.num_points,
+            mesh.num_cells,
+            true,
+        )
     }
 
     /// Assemble the connectivity and decide the topology it is written as.
@@ -566,6 +578,10 @@ impl TimeSeriesWriter {
     }
 
     /// Build the data writer around the finished mesh and write the initial XDMF file.
+    ///
+    /// `write_light_data` is `false` only for a rank other than 0 of a parallel mesh: every rank
+    /// builds the same in-memory document, but only one may write it to disk, or every rank
+    /// racing to write the same file would corrupt it.
     fn finish_mesh(
         mut self,
         grid: Grid,
@@ -573,6 +589,7 @@ impl TimeSeriesWriter {
         submeshes: Vec<Submesh>,
         num_points: usize,
         num_cells: usize,
+        write_light_data: bool,
     ) -> Result<TimeSeriesDataWriter> {
         let mut selections = HashMap::new();
         let submesh_lists =
@@ -597,7 +614,12 @@ impl TimeSeriesWriter {
             num_cells,
         };
 
-        ts_writer.write_xdmf_file()?;
+        // flushed unconditionally: for a parallel mesh this is collective (every rank must call
+        // it), while only rank 0 goes on to actually write the light-data file itself
+        ts_writer.writer.flush()?;
+        if write_light_data {
+            ts_writer.write_light_data_file()?;
+        }
 
         Ok(ts_writer)
     }
@@ -922,7 +944,14 @@ impl TimeSeriesDataWriter {
 
     fn write_xdmf_file(&mut self) -> Result<()> {
         self.writer.flush()?;
+        self.write_light_data_file()
+    }
 
+    /// Just the light-data half of [`write_xdmf_file`](Self::write_xdmf_file), without the
+    /// backend flush -- split out for the parallel writer, where the flush is collective (every
+    /// rank must call it) but only rank 0 may write the file itself, or every rank racing to
+    /// write the same path would corrupt it.
+    fn write_light_data_file(&mut self) -> Result<()> {
         // written to a temporary file first, then renamed, to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
 

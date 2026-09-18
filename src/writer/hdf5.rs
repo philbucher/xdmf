@@ -57,6 +57,38 @@ impl SingleFileHdf5Writer {
         })
     }
 
+    /// The parallel counterpart of [`new`](Self::new): every rank calls this together, opening
+    /// the same file collectively over `comm` through HDF5's MPI-IO driver, instead of one rank
+    /// creating it alone.
+    #[cfg(feature = "mpi")]
+    pub(crate) fn new_parallel(
+        file_name: impl AsRef<Path>,
+        deflate_level: u8,
+        comm: &impl mpi::traits::Communicator,
+    ) -> Result<Self> {
+        let h5_file_name_full = file_name.as_ref().to_path_buf().with_extension("h5");
+
+        if let Some(parent) = h5_file_name_full.parent() {
+            crate::mpi_safe_create_dir_all(parent)?;
+        }
+
+        let h5_file_name = h5_file_name_full
+            .file_name()
+            .ok_or(Error::Internal("output path has no file name component"))?;
+
+        let h5_file = hdf5::FileBuilder::new()
+            .with_fapl(|fapl| fapl.mpio(comm.as_raw(), None))
+            .create(&h5_file_name_full)
+            .map_err(hdf5_ctx("creating HDF5 file collectively"))?;
+
+        Ok(Self {
+            h5_file,
+            h5_file_name: h5_file_name.into(),
+            write_time: None,
+            deflate_level,
+        })
+    }
+
     /// Write one of the mesh's arrays into the file's `mesh` group, which the first array written
     /// creates.
     fn write_mesh_array(
@@ -172,6 +204,70 @@ impl DataWriter for SingleFileHdf5Writer {
             &index.to_string(),
             data,
             self.deflate_level,
+        )?;
+
+        Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_path).into())
+    }
+
+    #[cfg(feature = "mpi")]
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    #[cfg(feature = "mpi")]
+    fn write_mesh_array_parallel(
+        &mut self,
+        array: &'static str,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+    ) -> Result<DataContent> {
+        if !self.h5_file.link_exists(MESH) {
+            self.h5_file
+                .create_group(MESH)
+                .map_err(hdf5_ctx("creating mesh group"))?;
+        }
+
+        let mesh_group = self
+            .h5_file
+            .group(MESH)
+            .map_err(hdf5_ctx("opening mesh group"))?;
+
+        let data_name = write_values_parallel(&mesh_group, array, local, offset, global_len)?;
+
+        Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_name).into())
+    }
+
+    #[cfg(feature = "mpi")]
+    fn write_data_parallel(
+        &mut self,
+        index: usize,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+    ) -> Result<DataContent> {
+        let time = self
+            .write_time
+            .as_ref()
+            .ok_or(Error::Internal("writing data was not initialized"))?;
+
+        let group_name = &time_group_name(time);
+
+        if !self.h5_file.link_exists(group_name) {
+            self.h5_file
+                .create_group(group_name)
+                .map_err(hdf5_ctx("creating data group"))?;
+        }
+
+        let data_path = write_values_parallel(
+            &self
+                .h5_file
+                .group(group_name)
+                .map_err(hdf5_ctx("opening data group"))?,
+            &index.to_string(),
+            local,
+            offset,
+            global_len,
         )?;
 
         Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_path).into())
@@ -464,6 +560,60 @@ fn create_and_write<T: H5Type>(
         .map_err(hdf5_ctx("creating dataset"))?;
 
     data_set.write(data).map_err(hdf5_ctx("writing dataset"))?;
+
+    Ok(data_set.name())
+}
+
+/// The parallel counterpart of [`write_values`]: every rank calls this together, creating the
+/// dataset at its final `global_len` collectively, then writing only this rank's own contiguous
+/// share into it at `offset`.
+///
+/// Left uncompressed and unchunked, unlike [`create_and_write`]: a filtered dataset written from
+/// more than one rank is either unsupported or expensive under parallel HDF5, so compression for
+/// a collectively-written dataset is left as future work (see `07_mpi.md`). Gated on `mpi` like
+/// its only callers ([`DataWriter::write_mesh_array_parallel`](crate::DataWriter)/
+/// [`write_data_parallel`](crate::DataWriter)), even though nothing here names an `mpi` type
+/// itself (only `hdf5-metno` ones) -- without a caller in a non-`mpi` build, it would be dead
+/// code there regardless.
+#[cfg(feature = "mpi")]
+fn write_values_parallel(
+    group: &H5Group,
+    dataset_name: &str,
+    local: &Values<'_>,
+    offset: usize,
+    global_len: usize,
+) -> Result<String> {
+    match local {
+        Values::F64(v) => create_and_write_parallel(group, dataset_name, v, offset, global_len),
+        Values::F32(v) => create_and_write_parallel(group, dataset_name, v, offset, global_len),
+        Values::I64(v) => create_and_write_parallel(group, dataset_name, v, offset, global_len),
+        Values::I32(v) => create_and_write_parallel(group, dataset_name, v, offset, global_len),
+        Values::U32(v) => create_and_write_parallel(group, dataset_name, v, offset, global_len),
+        Values::U64(v) => create_and_write_parallel(group, dataset_name, v, offset, global_len),
+    }
+}
+
+#[cfg(feature = "mpi")]
+fn create_and_write_parallel<T: H5Type>(
+    group: &H5Group,
+    dataset_name: &str,
+    local: &[T],
+    offset: usize,
+    global_len: usize,
+) -> Result<String> {
+    let data_set = group
+        .new_dataset::<T>()
+        .shape(global_len)
+        .create(dataset_name)
+        .map_err(hdf5_ctx("creating dataset collectively"))?;
+
+    // every rank calls `create` above, but a rank contributing nothing skips the write itself --
+    // the default (independent) transfer mode does not require every rank to call it in lockstep
+    if !local.is_empty() {
+        data_set
+            .write_slice(local, offset..offset + local.len())
+            .map_err(hdf5_ctx("writing dataset slice"))?;
+    }
 
     Ok(data_set.name())
 }
