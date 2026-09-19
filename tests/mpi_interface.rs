@@ -3,18 +3,18 @@
 //! Nothing behind the interface is implemented yet, so [`write_a_distributed_mesh`] cannot run to
 //! completion -- it exists to be *type-checked*: it is the usage this API is being designed for,
 //! written out in full, so a change to any signature breaks the build here rather than being
-//! noticed once a caller tries it. The test itself only asserts that the first entry point fails
-//! cleanly with [`xdmf::Error::Internal`] instead of panicking or hanging.
+//! noticed once a caller tries it. The test itself only asserts that the flow fails cleanly with
+//! [`xdmf::Error::Internal`] instead of panicking or hanging -- construction already works, so it
+//! is [`xdmf::mpi::TimeSeriesWriter::write_mesh`] that stops it.
 
 #![cfg(feature = "mpi")]
 
 use std::path::{Path, PathBuf};
 
-use mpi::traits::Communicator;
 use mpi_test::mpi_test;
 use xdmf::{
     CellType, DataAttribute, DataStorage, Error,
-    mpi::{SimpleCommunicator, TimeSeriesWriter},
+    mpi::{Communicator, TimeSeriesWriter},
 };
 
 /// One rank's share of a chain of `Edge` cells along the x axis, and one step of data on it.
@@ -24,7 +24,7 @@ use xdmf::{
 /// the previous rank's last point -- connectivity referencing a point *another* rank owns, which
 /// is the case `owned_points`/`owned_global_ids` exist for.
 fn write_a_distributed_mesh(
-    comm: SimpleCommunicator,
+    comm: &impl Communicator,
     rank: usize,
     file_name: &Path,
 ) -> Result<PathBuf, Error> {
@@ -83,7 +83,7 @@ fn the_interface_is_not_implemented_yet() {
     let world = universe.world();
     let rank = usize::try_from(world.rank()).unwrap();
 
-    let result = write_a_distributed_mesh(universe.world(), rank, &PathBuf::from("mpi_interface"));
+    let result = write_a_distributed_mesh(&world, rank, &PathBuf::from("mpi_interface"));
 
     std::assert_matches!(
         result.unwrap_err(),
