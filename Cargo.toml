@@ -116,6 +116,9 @@ hdf5 = ["dep:hdf5"]
 # Builds HDF5 (and the zlib it needs for deflate) from source and links it statically, instead of
 # looking for a system library. Needs a C compiler and CMake; this is what the Python wheels use.
 hdf5-static = ["hdf5", "hdf5/static", "hdf5/zlib"]
+# Writing one file from a mesh distributed over MPI ranks, see the `xdmf::mpi` module. Needs an MPI
+# implementation (mpicc/mpirun) and a parallel-enabled HDF5 to link against -- `hdf5-static`'s
+# vendored build does not support this, so `mpi` pulls in the system `hdf5` feature instead.
 mpi = ["dep:mpi", "hdf5", "hdf5/mpio"]
 
 [dependencies]

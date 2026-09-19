@@ -33,6 +33,8 @@ pub mod xdmf_elements;
 pub use error::{Error, ErrorKind, Result};
 pub use reader::{DataInfo, TimeSeriesReader, ValueType};
 pub use values::{ConnectivityIndex, Coordinate, Values};
+#[cfg(feature = "mpi")]
+pub use writer::mpi;
 pub use writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
 pub use xdmf_elements::CellType;
 

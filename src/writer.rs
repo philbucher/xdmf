@@ -38,6 +38,8 @@ pub(crate) mod ascii;
 pub(crate) mod binary;
 #[cfg(feature = "hdf5")]
 pub(crate) mod hdf5;
+#[cfg(feature = "mpi")]
+pub mod mpi;
 mod submesh;
 
 /// Writer for time series data in XDMF format.
