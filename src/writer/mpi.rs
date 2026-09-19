@@ -16,25 +16,26 @@
 //!
 //! # Interface only
 //!
-//! **Nothing here is implemented yet**: every entry point returns
-//! [`Error::Internal`]. This module exists so the shape of the API can be
-//! reviewed and written against before the collectives behind it are built. See `07_mpi.md` (on
-//! the plans share, outside this repository) for the design.
+//! **Almost nothing here is implemented yet**: [`TimeSeriesWriter::new`] duplicates the
+//! communicator and keeps it, and everything past that returns [`Error::Internal`]. No file is
+//! created, so a writer obtained from `new` cannot do anything with it yet. This module exists so
+//! the shape of the API can be reviewed and written against before the collectives behind it are
+//! built. See `07_mpi.md` (on the plans share, outside this repository) for the design.
 //!
 //! # Version coupling
 //!
-//! [`SimpleCommunicator`] is re-exported here so a caller can name the exact type this crate's
-//! `mpi` feature was built against. A caller that needs to *create* a communicator still depends
-//! on the `mpi` crate itself and must match this crate's version of it, since the two must agree
-//! on the type.
+//! [`Communicator`] -- the one `mpi` item that appears in this module's signatures -- is
+//! re-exported here so a caller can name the bound against the exact version this crate's `mpi`
+//! feature was built with. A caller still depends on the `mpi` crate itself to *create* a
+//! communicator, and must match this crate's version of it, since the two must agree on the type.
 
 use std::{
     fmt,
     path::{Path, PathBuf},
 };
 
-pub use ::mpi::topology::SimpleCommunicator;
-use ::mpi::traits::Communicator;
+use ::mpi::topology::SimpleCommunicator;
+pub use ::mpi::traits::Communicator;
 
 use crate::{
     CellType, ConnectivityIndex, Coordinate, DataAttribute, DataStorage, Error, Result, Values,
@@ -63,17 +64,29 @@ impl TimeSeriesWriter {
     /// Create a writer over `comm`. Every rank must call this together, with the same
     /// `file_name` and `data_storage`, since the underlying file is opened collectively.
     ///
-    /// The communicator is taken by value and kept, so later calls need not be handed one again.
+    /// `comm` is duplicated and the copy kept, so later calls need not be handed one again and,
+    /// more importantly, so this writer's collectives run in their own communication context.
+    /// Collectives match by the order they are called in rather than by a tag, so a writer
+    /// sharing the caller's communicator could match one of the caller's own collectives -- a
+    /// nonblocking one still in flight while a step is written, say. Duplicating removes that
+    /// class of bug, at the cost of one more collective call in a function that is already
+    /// collective. Any communicator can be passed: the copy this keeps is freed with the writer.
     ///
     /// Only [`DataStorage::Hdf5SingleFile`] is supported: the whole design rests on one file
     /// opened collectively, and the ascii/binary storages have no parallel story yet.
     pub fn new(
         file_name: impl AsRef<Path>,
         data_storage: DataStorage,
-        comm: SimpleCommunicator,
+        comm: &impl Communicator,
     ) -> Result<Self> {
-        let _unimplemented = (file_name.as_ref(), data_storage, comm);
-        Err(UNIMPLEMENTED)
+        // no file is opened yet, and the storage is not checked yet -- the backend behind both is
+        // what is still missing, so this only takes the communicator it was designed to take
+        let _unimplemented = data_storage;
+
+        Ok(Self {
+            xdmf_file_name: file_name.as_ref().to_path_buf().with_extension("xdmf2"),
+            comm: comm.duplicate(),
+        })
     }
 
     /// The XDMF file this writer writes, same as [`crate::TimeSeriesWriter::file_name`].
