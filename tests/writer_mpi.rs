@@ -1,7 +1,9 @@
 //! End-to-end coverage for [`xdmf::TimeSeriesWriter::write_mesh_parallel`]/
 //! [`xdmf::ParallelTimeSeriesDataWriter::write_time_step`]: every rank writes its own share of a
 //! small chain mesh, then rank 0 reads the result back through the ordinary (serial)
-//! [`xdmf::TimeSeriesReader`] and checks it against the seamless, single-rank-equivalent mesh.
+//! [`xdmf::TimeSeriesReader`] and checks it against the *same mesh written serially in one shot*
+//! -- a stronger oracle than hand-computed expected values, since it can't share a bug with the
+//! implementation the way a hand-derived expectation can.
 
 #![cfg(feature = "mpi")]
 
@@ -10,7 +12,10 @@ use std::path::PathBuf;
 use mpi::traits::{Communicator, CommunicatorCollectives, Root};
 use mpi_test::mpi_test;
 use temp_dir::TempDir;
-use xdmf::{CellType, DataAttribute, DataStorage, ParallelTimeSeriesWriter, TimeSeriesReader};
+use xdmf::{
+    CellType, DataAttribute, DataStorage, ParallelTimeSeriesWriter, TimeSeriesReader,
+    TimeSeriesWriter,
+};
 
 /// Every rank owns 4 points in its own contiguous block of global ids, chained by 3 local `Edge`
 /// cells within that block. Every rank but 0 also owns one bridging cell back to the previous
@@ -19,7 +24,7 @@ use xdmf::{CellType, DataAttribute, DataStorage, ParallelTimeSeriesWriter, TimeS
 const POINTS_PER_RANK: usize = 4;
 
 #[mpi_test(np = [1, 2, 3])]
-fn write_mesh_parallel_round_trips_through_a_serial_read() {
+fn write_mesh_parallel_matches_the_same_mesh_written_serially() {
     let universe = mpi::initialize().unwrap();
     let world = universe.world();
     let rank = usize::try_from(world.rank()).unwrap();
@@ -119,46 +124,96 @@ fn write_mesh_parallel_round_trips_through_a_serial_read() {
     let total_points = size * POINTS_PER_RANK;
     let total_cells = size * (POINTS_PER_RANK - 1) + size.saturating_sub(1);
 
-    let reader = TimeSeriesReader::new(&xdmf_path).unwrap();
-    assert_eq!(reader.num_points(), total_points);
-    assert_eq!(reader.num_cells(), total_cells);
-    assert_eq!(reader.times(), ["0.0"]);
-
-    let mut points = Vec::new();
-    reader.read_points::<f64>(&mut points).unwrap();
-    let expected_points: Vec<f64> = (0..total_points)
+    // The same global mesh and field data as above, but assembled as a single array in rank
+    // order -- exactly what every rank's own `owned_points`/`local_connectivity`/... concatenate
+    // to, since the parallel writer places each rank's share at its `Exscan`-computed offset
+    // without reordering it.
+    let global_points: Vec<f64> = (0..total_points)
         .flat_map(|id| [id as f64, 0.0, 0.0])
         .collect();
-    assert_eq!(points, expected_points);
+    let global_temperature: Vec<f64> = (0..total_points).map(|id| id as f64 * 10.0).collect();
 
-    let mut connectivity = Vec::new();
-    let mut cell_types = Vec::new();
-    reader
-        .read_topology::<u64>(&mut connectivity, &mut cell_types)
-        .unwrap();
-    assert_eq!(cell_types, vec![CellType::Edge; total_cells]);
-    // every index is a valid global point id -- the real assertion here is that this reads back
-    // at all rather than panicking/erroring on an out-of-range value from a wrong per-rank offset
-    assert!(
-        connectivity
-            .iter()
-            .all(|&index| index < total_points as u64)
-    );
+    let mut global_connectivity: Vec<u64> = Vec::new();
+    let mut global_owner_rank: Vec<f64> = Vec::new();
+    for r in 0..size {
+        let start = r * POINTS_PER_RANK;
+        if r > 0 {
+            global_connectivity.extend([start as u64 - 1, start as u64]);
+            global_owner_rank.push(r as f64);
+        }
+        for i in 0..POINTS_PER_RANK - 1 {
+            global_connectivity.extend([(start + i) as u64, (start + i + 1) as u64]);
+            global_owner_rank.push(r as f64);
+        }
+    }
+    let global_cell_types = vec![CellType::Edge; total_cells];
 
-    let mut temperature = Vec::new();
-    reader
-        .read_point_data::<f64>(0, "temperature", &mut temperature)
+    let serial_writer = TimeSeriesWriter::new(
+        tmp_dir.as_ref().unwrap().path().join("serial_mesh"),
+        DataStorage::Hdf5SingleFile {
+            deflate_level: None,
+        },
+    )
+    .unwrap();
+    let mut serial_ts_writer = serial_writer
+        .write_mesh(&global_points, &global_connectivity, &global_cell_types)
         .unwrap();
-    let expected_temperature: Vec<f64> = (0..total_points).map(|id| id as f64 * 10.0).collect();
-    assert_eq!(temperature, expected_temperature);
+    serial_ts_writer
+        .write_time_step("0.0", |step| {
+            step.point_data("temperature", DataAttribute::Scalar, &global_temperature)?;
+            step.cell_data("owner_rank", DataAttribute::Scalar, &global_owner_rank)
+        })
+        .unwrap();
+    let serial_path = serial_ts_writer.file_name().to_path_buf();
+    drop(serial_ts_writer);
 
-    let mut owner_rank = Vec::new();
-    reader
-        .read_cell_data::<f64>(0, "owner_rank", &mut owner_rank)
+    let parallel_reader = TimeSeriesReader::new(&xdmf_path).unwrap();
+    let serial_reader = TimeSeriesReader::new(&serial_path).unwrap();
+
+    assert_eq!(parallel_reader.num_points(), serial_reader.num_points());
+    assert_eq!(parallel_reader.num_cells(), serial_reader.num_cells());
+    assert_eq!(parallel_reader.times(), serial_reader.times());
+
+    let mut parallel_points = Vec::new();
+    let mut serial_points = Vec::new();
+    parallel_reader
+        .read_points::<f64>(&mut parallel_points)
         .unwrap();
-    assert_eq!(owner_rank.len(), total_cells);
-    // every cell's `owner_rank` value came from the rank that wrote it, so the sum recovers how
-    // many cells each rank actually contributed: rank 0 gets 3 (no bridge), every other rank 4
-    let expected_sum: f64 = (1..size).map(|r| r as f64 * 4.0).sum();
-    float_cmp::assert_approx_eq!(f64, owner_rank.iter().sum::<f64>(), expected_sum);
+    serial_reader
+        .read_points::<f64>(&mut serial_points)
+        .unwrap();
+    assert_eq!(parallel_points, serial_points);
+
+    let mut parallel_connectivity = Vec::new();
+    let mut parallel_cell_types = Vec::new();
+    parallel_reader
+        .read_topology::<u64>(&mut parallel_connectivity, &mut parallel_cell_types)
+        .unwrap();
+    let mut serial_connectivity = Vec::new();
+    let mut serial_cell_types = Vec::new();
+    serial_reader
+        .read_topology::<u64>(&mut serial_connectivity, &mut serial_cell_types)
+        .unwrap();
+    assert_eq!(parallel_connectivity, serial_connectivity);
+    assert_eq!(parallel_cell_types, serial_cell_types);
+
+    let mut parallel_temperature = Vec::new();
+    let mut serial_temperature = Vec::new();
+    parallel_reader
+        .read_point_data::<f64>(0, "temperature", &mut parallel_temperature)
+        .unwrap();
+    serial_reader
+        .read_point_data::<f64>(0, "temperature", &mut serial_temperature)
+        .unwrap();
+    assert_eq!(parallel_temperature, serial_temperature);
+
+    let mut parallel_owner_rank = Vec::new();
+    let mut serial_owner_rank = Vec::new();
+    parallel_reader
+        .read_cell_data::<f64>(0, "owner_rank", &mut parallel_owner_rank)
+        .unwrap();
+    serial_reader
+        .read_cell_data::<f64>(0, "owner_rank", &mut serial_owner_rank)
+        .unwrap();
+    assert_eq!(parallel_owner_rank, serial_owner_rank);
 }
