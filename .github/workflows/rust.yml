@@ -40,7 +40,7 @@ jobs:
       with:
         shared-key: "cross-platform-${{ matrix.os }}-${{ matrix.hdf5 }}"
 
-    - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11
+    - uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
       with:
         tool: nextest
 
@@ -243,4 +243,4 @@ jobs:
         persist-credentials: false
 
     - name: Check spelling
-      uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b # v1.50.1
+      uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
