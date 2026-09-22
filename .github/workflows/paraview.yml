@@ -80,3 +80,75 @@ jobs:
             fi
             "$pvpython" /scripts/verify_with_pvpython.py /fixture/expected.json
           '
+
+  # The reverse direction of the job above: that one writes with this crate and checks ParaView
+  # reads it; this one writes with ParaView's own `vtkXdmfWriter` and checks this crate's
+  # `TimeSeriesReader` reads it -- see `tests/paraview_smoke/write_with_paraview.py`'s doc comment
+  # for what that surfaced and why it isn't matrixed over `storage` like the job above: what's
+  # under test here is this crate's reader against a document it never wrote, which doesn't vary
+  # with the storage backend the *writer* half of the crate offers.
+  paraview-writer-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    name: "ParaView ${{ matrix.paraview-version }} writes, xdmf reads"
+    strategy:
+      fail-fast: false
+      matrix:
+        paraview-version: [ "v5.13.3", "v6.1.1" ]
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        shared-key: "paraview-writer"
+
+    - name: Install system HDF5 (apt)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get remove -y man-db || true # to speed up
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libhdf5-dev
+
+    - name: Build fixture-reader example
+      run: cargo build --locked --example read_paraview_fixture
+
+    - name: Pull ParaView CI image
+      run: docker pull "kitware/paraview-for-ci:${{ matrix.paraview-version }}"
+
+    # world-writable, since the container below runs as root and this crate's own reader (run on
+    # the host as the runner user, in the next step) has to read back what it wrote
+    - name: Prepare fixture directory
+      run: |
+        mkdir -p "$RUNNER_TEMP/paraview_writer_smoke"
+        chmod 777 "$RUNNER_TEMP/paraview_writer_smoke"
+
+    - name: Write fixture with ParaView's own writer
+      run: |
+        docker run --rm \
+          -v "$RUNNER_TEMP/paraview_writer_smoke:/fixture" \
+          -v "${{ github.workspace }}/tests/paraview_smoke:/scripts:ro" \
+          "kitware/paraview-for-ci:${{ matrix.paraview-version }}" \
+          bash -c '
+            set -euo pipefail
+            pvpython=/opt/paraview/install/bin/pvpython
+            if [ ! -x "$pvpython" ]; then
+              pvpython=$(find /opt -maxdepth 6 -name pvpython -type f 2>/dev/null | head -n1)
+            fi
+            if [ -z "$pvpython" ]; then
+              echo "pvpython not found in kitware/paraview-for-ci:${{ matrix.paraview-version }}" >&2
+              exit 1
+            fi
+            "$pvpython" /scripts/write_with_paraview.py /fixture
+          '
+
+    - name: Verify xdmf reads the ParaView-written fixture correctly
+      run: |
+        ./target/debug/examples/read_paraview_fixture \
+          "$RUNNER_TEMP/paraview_writer_smoke/paraview_written.xmf"

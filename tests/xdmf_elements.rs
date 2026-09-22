@@ -25,7 +25,8 @@ fn basic_grid() {
         Topology {
             topology_type: TopologyType::Triangle,
             nodes_per_element: None,
-            number_of_elements: "2".into(),
+            number_of_elements: Some("2".to_string()),
+            dimensions: None,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
                 number_type: Some(NumberType::Int),
@@ -86,7 +87,8 @@ fn hierarchical_tree_grid() {
                         Topology {
                             topology_type: TopologyType::Triangle,
                             nodes_per_element: None,
-                            number_of_elements: "2".into(),
+                            number_of_elements: Some("2".to_string()),
+                            dimensions: None,
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![6])),
                                 number_type: Some(NumberType::Int),
@@ -109,7 +111,8 @@ fn hierarchical_tree_grid() {
                         Topology {
                             topology_type: TopologyType::Quadrilateral,
                             nodes_per_element: None,
-                            number_of_elements: "2".into(),
+                            number_of_elements: Some("2".to_string()),
+                            dimensions: None,
                             data_item: DataItem {
                                 dimensions: Some(Dimensions(vec![8])),
                                 number_type: Some(NumberType::Int),
@@ -134,7 +137,8 @@ fn hierarchical_tree_grid() {
                 Topology {
                     topology_type: TopologyType::Mixed,
                     nodes_per_element: None,
-                    number_of_elements: "2".into(),
+                    number_of_elements: Some("2".to_string()),
+                    dimensions: None,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![9])),
                         number_type: Some(NumberType::Int),
@@ -214,7 +218,8 @@ fn mixed_grid() {
         Topology {
             topology_type: TopologyType::Mixed,
             nodes_per_element: None,
-            number_of_elements: "2".into(),
+            number_of_elements: Some("2".to_string()),
+            dimensions: None,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![9])),
                 number_type: Some(NumberType::Int),
@@ -273,7 +278,8 @@ fn spatial_collection_grid() {
                 Topology {
                     topology_type: TopologyType::Triangle,
                     nodes_per_element: None,
-                    number_of_elements: "2".into(),
+                    number_of_elements: Some("2".to_string()),
+                    dimensions: None,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![6])),
                         number_type: Some(NumberType::Int),
@@ -296,7 +302,8 @@ fn spatial_collection_grid() {
                 Topology {
                     topology_type: TopologyType::Quadrilateral,
                     nodes_per_element: None,
-                    number_of_elements: "2".into(),
+                    number_of_elements: Some("2".to_string()),
+                    dimensions: None,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![8])),
                         number_type: Some(NumberType::Int),
@@ -319,7 +326,8 @@ fn spatial_collection_grid() {
                 Topology {
                     topology_type: TopologyType::Mixed,
                     nodes_per_element: None,
-                    number_of_elements: "2".into(),
+                    number_of_elements: Some("2".to_string()),
+                    dimensions: None,
                     data_item: DataItem {
                         dimensions: Some(Dimensions(vec![9])),
                         number_type: Some(NumberType::Int),
@@ -417,7 +425,8 @@ fn temporal_collection_grid() {
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
                         nodes_per_element: None,
-                        number_of_elements: "2".into(),
+                        number_of_elements: Some("2".to_string()),
+                        dimensions: None,
                         data_item: DataItem::new_reference(&data_items[1], "/Xdmf/Domain/DataItem"),
                     }),
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
@@ -463,7 +472,8 @@ fn temporal_collection_grid() {
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
                         nodes_per_element: None,
-                        number_of_elements: "2".into(),
+                        number_of_elements: Some("2".to_string()),
+                        dimensions: None,
                         data_item: DataItem::new_reference(&data_items[1], "/Xdmf/Domain/DataItem"),
                     }),
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,
@@ -509,7 +519,8 @@ fn temporal_collection_grid() {
                     topology: Some(Topology {
                         topology_type: TopologyType::Mixed,
                         nodes_per_element: None,
-                        number_of_elements: "2".into(),
+                        number_of_elements: Some("2".to_string()),
+                        dimensions: None,
                         data_item: DataItem::new_reference(&data_items[1], "/Xdmf/Domain/DataItem"),
                     }),
                     grid_type: xdmf::xdmf_elements::grid::GridType::Uniform,

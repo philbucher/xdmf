@@ -32,7 +32,10 @@ pub struct Xdmf {
     #[doc(hidden)]
     pub domains: Vec<Domain>,
 
-    #[serde(rename = "Information", skip_serializing_if = "Vec::is_empty")]
+    // `default` (empty): a foreign document has no reason to carry this crate's own
+    // `data_storage`/`version` `Information` elements -- see [`Domain::data_items`]'s doc comment
+    // for why the same applies there.
+    #[serde(rename = "Information", skip_serializing_if = "Vec::is_empty", default)]
     #[doc(hidden)]
     pub information: Vec<Information>,
 }
@@ -105,7 +108,11 @@ pub struct Domain {
     #[doc(hidden)]
     pub grids: Vec<Grid>,
 
-    #[serde(rename = "DataItem", skip_serializing_if = "Vec::is_empty")]
+    // `default` (empty): a foreign document (ParaView's own `vtkXdmfWriter` among them) has no
+    // reason to carry top-level named `DataItem`s under `Domain` at all -- this crate's own writer
+    // is what puts the mesh's/attributes' actual data there for its `Reference="XML"` `DataItem`s
+    // to point at.
+    #[serde(rename = "DataItem", skip_serializing_if = "Vec::is_empty", default)]
     #[doc(hidden)]
     pub data_items: Vec<DataItem>,
 }
@@ -255,7 +262,8 @@ mod tests {
             topology::Topology {
                 topology_type: topology::TopologyType::Triangle,
                 nodes_per_element: None,
-                number_of_elements: "1".to_string(),
+                number_of_elements: Some("1".to_string()),
+                dimensions: None,
                 data_item: data_item::DataItem {
                     dimensions: Some(dimensions::Dimensions(vec![3])),
                     number_type: Some(data_item::NumberType::Int),

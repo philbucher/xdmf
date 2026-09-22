@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{CellType, data_item::DataItem};
+use super::{CellType, data_item::DataItem, dimensions::Dimensions};
 
 /// How the mesh's points are connected into elements.
 ///
@@ -19,13 +19,33 @@ pub struct Topology {
     #[doc(hidden)]
     pub nodes_per_element: Option<u8>,
 
-    #[serde(rename = "@NumberOfElements")]
+    #[serde(rename = "@NumberOfElements", skip_serializing_if = "Option::is_none")]
     #[doc(hidden)]
-    pub number_of_elements: String,
+    pub number_of_elements: Option<String>,
+
+    // Some writers -- ParaView's own `vtkXdmfWriter` among them -- put the element count here
+    // instead of `NumberOfElements`; both name the same thing for every `TopologyType` this crate
+    // reads, since none of them are the multi-dimensional structured kind where `Dimensions` would
+    // mean something else. See `Self::element_count`.
+    #[serde(rename = "@Dimensions", skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
+    pub dimensions: Option<Dimensions>,
 
     #[serde(rename = "DataItem")]
     #[doc(hidden)]
     pub data_item: DataItem,
+}
+
+impl Topology {
+    /// The element (cell) count this topology declares: `NumberOfElements` if present and a valid
+    /// number, else the last value of `Dimensions`. `None` if neither yields one.
+    #[doc(hidden)]
+    pub fn element_count(&self) -> Option<usize> {
+        match &self.number_of_elements {
+            Some(value) => value.parse().ok(),
+            None => self.dimensions.as_ref()?.0.last().copied(),
+        }
+    }
 }
 
 /// Type of topology: one type shared by every element, or `Mixed`.
@@ -121,7 +141,8 @@ mod tests {
         let topology = Topology {
             topology_type: TopologyType::Triangle,
             nodes_per_element: None,
-            number_of_elements: "3".to_string(),
+            number_of_elements: Some("3".to_string()),
+            dimensions: None,
             data_item: DataItem::default(),
         };
 
@@ -136,7 +157,8 @@ mod tests {
         let topology = Topology {
             topology_type: TopologyType::Polyline,
             nodes_per_element: Some(2),
-            number_of_elements: "3".to_string(),
+            number_of_elements: Some("3".to_string()),
+            dimensions: None,
             data_item: DataItem::default(),
         };
 
@@ -156,7 +178,8 @@ mod tests {
             let topology = Topology {
                 topology_type,
                 nodes_per_element: None,
-                number_of_elements: "1".to_string(),
+                number_of_elements: Some("1".to_string()),
+                dimensions: None,
                 data_item: DataItem::default(),
             };
             to_string(&topology).unwrap()

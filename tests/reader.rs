@@ -1184,6 +1184,148 @@ fn a_document_without_a_data_storage_information_is_opened() {
     );
 }
 
+/// A `Topology` naming its cell count on `Dimensions` rather than `NumberOfElements` -- what
+/// `ParaView`'s own `vtkXdmfWriter` does -- is accepted the same way: this crate's own writer never
+/// produces it, but a foreign document may.
+#[test]
+fn topology_accepts_dimensions_as_a_number_of_elements_fallback() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, STORAGES[0])
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    let patched = document.replace("NumberOfElements=\"3\"", "Dimensions=\"3\"");
+    assert_ne!(
+        patched, document,
+        "NumberOfElements=\"3\" not found to replace"
+    );
+    std::fs::write(&document_path, patched).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    assert_eq!(reader.num_cells(), 3);
+}
+
+/// `AttributeType="None"` -- the XDMF2 DTD's own "unspecified, infer from the data" value, which
+/// this crate's own writer never produces but `ParaView`'s own `vtkXdmfWriter` does -- is accepted:
+/// the shape it's reconstructed as is [`DataAttribute::Generic`], same as `Matrix`, since neither
+/// says more than the component count.
+#[test]
+fn attribute_type_none_is_accepted_as_unspecified() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    let mut writer = TimeSeriesWriter::new(&file_name, STORAGES[0])
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+    writer
+        .write_time_step("0.0", |step| {
+            step.cell_data("pressure", DataAttribute::Scalar, &[1.0, 2.0, 3.0][..])
+        })
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    let patched = document.replace(
+        "Name=\"pressure\" AttributeType=\"Scalar\"",
+        "Name=\"pressure\" AttributeType=\"None\"",
+    );
+    assert_ne!(patched, document, "pressure Attribute not found to patch");
+    std::fs::write(&document_path, patched).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    let info = reader
+        .cell_data_info(0)
+        .unwrap()
+        .into_iter()
+        .find(|info| info.name == "pressure")
+        .unwrap();
+    assert_eq!(info.attribute, DataAttribute::Generic(1));
+
+    let mut pressure: Vec<f64> = Vec::new();
+    reader.read_cell_data(0, "pressure", &mut pressure).unwrap();
+    assert_approx_eq!(&[f64], &pressure, &[1.0, 2.0, 3.0]);
+}
+
+/// A `Grid` with no `Name` at all -- legal per the XDMF2 DTD (`Name` is optional there), and what
+/// `ParaView`'s own `vtkXdmfWriter` writes for a per-step grid -- is accepted; this crate's own
+/// writer always sets one.
+#[test]
+fn a_grid_without_a_name_is_accepted() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(&file_name, STORAGES[0])
+        .unwrap()
+        .write_mesh(&coords, &connectivity, &cell_types)
+        .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    let patched = document.replace(
+        "<Grid Name=\"mesh\" GridType=\"Uniform\">",
+        "<Grid GridType=\"Uniform\">",
+    );
+    assert_ne!(
+        patched, document,
+        "the mesh Grid's Name was not found to strip"
+    );
+    std::fs::write(&document_path, patched).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    assert_eq!(reader.num_points(), 4);
+    assert_eq!(reader.num_cells(), 3);
+}
+
+/// A Geometry `DataItem` holding the point array directly, rather than this crate's own writer's
+/// `Reference="XML"` indirection to a named `DataItem` under `Domain` -- what `ParaView`'s own
+/// `vtkXdmfWriter` does -- is accepted for sizing the mesh at [`TimeSeriesReader::new`].
+#[test]
+fn a_direct_geometry_data_item_is_accepted_for_mesh_size() {
+    let (coords, connectivity, cell_types) = quad_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_name = tmp_dir.path().join("mesh");
+
+    TimeSeriesWriter::new(
+        &file_name,
+        DataStorage::Hdf5SingleFile {
+            deflate_level: None,
+        },
+    )
+    .unwrap()
+    .write_mesh(&coords, &connectivity, &cell_types)
+    .unwrap();
+
+    let document_path = file_name.with_extension("xdmf2");
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    // points straight at the same `mesh/points` dataset the `Reference="XML"` indirection this
+    // crate's own writer emits would otherwise resolve to -- see `src/writer/hdf5.rs`'s `MESH`
+    let patched = document.replace(
+        "<DataItem Reference=\"XML\">/Xdmf/Domain/DataItem[@Name=\"coords\"]</DataItem>",
+        "<DataItem Dimensions=\"4 3\" NumberType=\"Float\" Format=\"HDF\" Precision=\"8\">mesh.h5:mesh/points</DataItem>",
+    );
+    assert_ne!(
+        patched, document,
+        "the Geometry reference DataItem was not found to patch"
+    );
+    std::fs::write(&document_path, patched).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    assert_eq!(reader.num_points(), 4);
+}
+
 /// The element type a mesh is read back at is the caller's choice, independently of what it was
 /// written as: `f32` coordinates widen into a `Vec<f64>`, and a `u64` connectivity comes back as
 /// `u32` when every index fits one.

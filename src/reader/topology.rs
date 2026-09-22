@@ -212,7 +212,8 @@ mod tests {
         let topology = Topology {
             topology_type: TopologyType::Mixed,
             nodes_per_element: None,
-            number_of_elements: "1".to_string(),
+            number_of_elements: Some("1".to_string()),
+            dimensions: None,
             data_item: DataItem::default(),
         };
 

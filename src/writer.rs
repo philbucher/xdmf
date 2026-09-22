@@ -132,7 +132,8 @@ impl TimeSeriesWriter {
         let topology = Topology {
             topology_type: mesh.topology_type,
             nodes_per_element: mesh.nodes_per_element,
-            number_of_elements: mesh.num_cells.to_string(),
+            number_of_elements: Some(mesh.num_cells.to_string()),
+            dimensions: None,
             data_item: DataItem::new_reference(&connectivity_item, DOMAIN_DATA_ITEMS),
         };
 
@@ -317,7 +318,8 @@ impl TimeSeriesWriter {
             let topology = Topology {
                 topology_type,
                 nodes_per_element,
-                number_of_elements: submesh.cells.len().to_string(),
+                number_of_elements: Some(submesh.cells.len().to_string()),
+                dimensions: None,
                 data_item: DataItem::new_reference(&connectivity_item, DOMAIN_DATA_ITEMS),
             };
 
@@ -2208,7 +2210,8 @@ mod tests {
         Topology {
             topology_type: TopologyType::Triangle,
             nodes_per_element: None,
-            number_of_elements: "2".into(),
+            number_of_elements: Some("2".to_string()),
+            dimensions: None,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
                 number_type: Some(NumberType::Int),

@@ -38,6 +38,11 @@ pub enum AttributeType {
     Tensor6,
     #[doc(hidden)]
     Matrix,
+    // The XDMF2 DTD's own "unspecified, infer from the data" value -- some writers (ParaView's own
+    // `vtkXdmfWriter` among them) emit it rather than a specific type. This crate's own writer
+    // never produces it; a reader has to accept it to open a document written elsewhere.
+    #[doc(hidden)]
+    None,
 }
 
 /// Specifies where the attribute data is centered, e.g., on nodes or cells.

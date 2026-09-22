@@ -7,7 +7,10 @@ use super::{attribute::Attribute, geometry::Geometry, topology::Topology};
 /// Definition of a grid, can be a uniform grid, or a composition of grids.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid {
-    #[serde(rename = "@Name")]
+    // `default` (empty string) rather than mandatory: `Name` is optional per the XDMF2 DTD, and
+    // some writers (ParaView's own `vtkXdmfWriter` among them) omit it on a per-step grid. This
+    // crate's own writer always sets it.
+    #[serde(rename = "@Name", default)]
     #[doc(hidden)]
     pub name: String,
 
@@ -161,7 +164,8 @@ mod tests {
         Topology {
             topology_type: TopologyType::Triangle,
             nodes_per_element: None,
-            number_of_elements: "2".into(),
+            number_of_elements: Some("2".to_string()),
+            dimensions: None,
             data_item: DataItem {
                 dimensions: Some(Dimensions(vec![6])),
                 number_type: Some(NumberType::Int),

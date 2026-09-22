@@ -708,6 +708,8 @@ fn build_data_info(attribute: &attribute::Attribute, num_entities: usize) -> Res
 
 /// The inverse of `From<DataAttribute> for AttributeType`, lossy for `Matrix`, which `Tensor6`,
 /// `Matrix(n, m)` and `Generic` all collapse onto in the file -- see [`DataInfo::attribute`].
+/// `AttributeType::None` (never written by this crate, but legal XDMF2 for "unspecified, infer
+/// from the data") is reconstructed the same way, for the same reason: the file doesn't say.
 fn reconstruct_data_attribute(
     attribute_type: AttributeType,
     component_shape: &[usize],
@@ -717,7 +719,7 @@ fn reconstruct_data_attribute(
         AttributeType::Vector => DataAttribute::Vector,
         AttributeType::Tensor => DataAttribute::Tensor,
         AttributeType::Tensor6 => DataAttribute::Tensor6,
-        AttributeType::Matrix => {
+        AttributeType::Matrix | AttributeType::None => {
             DataAttribute::Generic(component_shape.first().copied().unwrap_or(1))
         }
     }
@@ -786,8 +788,8 @@ fn grid_topology(grid: &Grid) -> Result<&Topology> {
 }
 
 /// Total mesh size for a mesh with no submeshes: `num_points` from the Geometry's own resolved
-/// `DataItem`, `num_cells` from the `Topology`'s `NumberOfElements`. Both are XML metadata, so no
-/// heavy data is touched.
+/// `DataItem`, `num_cells` from the `Topology`'s element count (see [`Topology::element_count`]).
+/// Both are XML metadata, so no heavy data is touched.
 fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
     let geometry = grid
         .geometry
@@ -801,9 +803,14 @@ fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
         .ok_or_else(|| Error::InvalidDocument {
             reason: format!("Geometry of Grid '{}' has no DataItem", grid.name),
         })?;
-    // the geometry's own DataItem is a `Reference="XML"` to the actual, named coordinate array --
-    // resolve it to reach its Dimensions
-    let item = light_data::resolve_reference(item, domain)?;
+    // this crate's own writer always makes the geometry's DataItem a `Reference="XML"` to the
+    // actual, named coordinate array, so resolve it to reach its Dimensions -- a foreign document
+    // may instead carry the array (and its Dimensions) directly, same as `read_data_item_into`
+    // already allows for the heavy-data read this metadata-only call skips
+    let item = match &item.reference {
+        Some(_) => light_data::resolve_reference(item, domain)?,
+        None => item,
+    };
     let dims = item
         .dimensions
         .as_ref()
@@ -827,12 +834,11 @@ fn mesh_size_plain(grid: &Grid, domain: &Domain) -> Result<(usize, usize)> {
             reason: format!("Grid '{}' has no Topology", grid.name),
         })?;
     let num_cells = topology
-        .number_of_elements
-        .parse::<usize>()
-        .map_err(|_source| Error::InvalidDocument {
+        .element_count()
+        .ok_or_else(|| Error::InvalidDocument {
             reason: format!(
-                "Topology NumberOfElements '{}' of Grid '{}' is not a valid number",
-                topology.number_of_elements, grid.name
+                "Topology of Grid '{}' has neither a valid NumberOfElements nor Dimensions",
+                grid.name
             ),
         })?;
 
