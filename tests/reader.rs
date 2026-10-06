@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use float_cmp::assert_approx_eq;
+use approx::assert_relative_eq;
 use temp_dir::TempDir;
 use xdmf::{CellType, DataAttribute, DataStorage, TimeSeriesReader, TimeSeriesWriter};
 
@@ -51,7 +51,7 @@ fn round_trip_mesh_only() {
             .read_topology(&mut read_connectivity, &mut read_cell_types)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
 
-        assert_approx_eq!(&[f64], &points, &coords);
+        assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
     }
@@ -89,7 +89,7 @@ fn write_mesh_with_no_cells_reads_back_as_vertex_cells() {
             .read_topology(&mut connectivity, &mut cell_types)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
 
-        assert_approx_eq!(&[f64], &points, &coords);
+        assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(connectivity, [0_u64, 1, 2], "{storage:?}");
         assert_eq!(cell_types, [CellType::Vertex; 3], "{storage:?}");
     }
@@ -203,14 +203,14 @@ fn round_trip_point_and_cell_data_over_several_steps() {
             reader
                 .read_point_data::<f64>(step, "temperature", &mut temperature)
                 .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
-            assert_approx_eq!(&[f64], &temperature, &[t, t + 1.0, t + 2.0, t + 3.0]);
+            assert_relative_eq!(temperature.as_slice(), [t, t + 1.0, t + 2.0, t + 3.0].as_slice());
 
             let mut velocity = Vec::new();
             reader
                 .read_point_data::<f64>(step, "velocity", &mut velocity)
                 .unwrap();
             let expected: Vec<f64> = (0..12).map(|i| t + i as f64).collect();
-            assert_approx_eq!(&[f64], &velocity, &expected);
+            assert_relative_eq!(velocity.as_slice(), expected.as_slice());
 
             let cell_info = reader.cell_data_info(step).unwrap();
             assert_eq!(cell_info.len(), 1, "{storage:?}");
@@ -222,7 +222,7 @@ fn round_trip_point_and_cell_data_over_several_steps() {
             reader
                 .read_cell_data::<f64>(step, "pressure", &mut pressure)
                 .unwrap();
-            assert_approx_eq!(&[f64], &pressure, &[t, t + 1.0, t + 2.0]);
+            assert_relative_eq!(pressure.as_slice(), [t, t + 1.0, t + 2.0].as_slice());
         }
     }
 }
@@ -277,7 +277,7 @@ fn reading_a_field_repeatedly_allocates_nothing_of_its_size() {
             let allocated = counting_allocator::allocated_bytes() - before;
 
             let t: f64 = time.parse().unwrap();
-            assert_approx_eq!(f64, temperature[0], t);
+            assert_relative_eq!(temperature[0], t);
             assert_eq!(temperature.len(), NUM_POINTS, "{storage:?}");
             assert!(
                 allocated < field_bytes / 8,
@@ -406,7 +406,7 @@ fn re_reading_a_mesh_with_submeshes_holds_one_submesh_at_a_time() {
             .read_topology(&mut read_connectivity, &mut read_cell_types)
             .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
 
-        assert_approx_eq!(&[f64], &coords, &points);
+        assert_relative_eq!(coords.as_slice(), points.as_slice());
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
 
@@ -513,14 +513,14 @@ fn round_trip_f32_attributes() {
         reader
             .read_point_data::<f32>(0, "temperature", &mut exact)
             .unwrap_or_else(|error| panic!("{storage:?}: {error}"));
-        assert_approx_eq!(&[f32], &exact, &[1.0, 2.0, 3.0, 4.0]);
+        assert_relative_eq!(exact.as_slice(), [1.0, 2.0, 3.0, 4.0].as_slice());
 
         // widening is allowed
         let mut widened = Vec::new();
         reader
             .read_point_data::<f64>(0, "temperature", &mut widened)
             .unwrap();
-        assert_approx_eq!(&[f64], &widened, &[1.0, 2.0, 3.0, 4.0]);
+        assert_relative_eq!(widened.as_slice(), [1.0, 2.0, 3.0, 4.0].as_slice());
 
         // narrowing f64 file data into a f32 buffer must be rejected, not silently truncated
         let mut narrowed = Vec::new();
@@ -636,7 +636,7 @@ fn round_trip_data_attribute_shapes() {
             .read_point_data::<f64>(0, "tensor", &mut tensor)
             .unwrap();
         let expected: Vec<f64> = (0..36).map(|i| i as f64).collect();
-        assert_approx_eq!(&[f64], &tensor, &expected);
+        assert_relative_eq!(tensor.as_slice(), expected.as_slice());
     }
 }
 
@@ -685,7 +685,7 @@ fn round_trip_contiguous_submeshes() {
             .read_topology(&mut read_connectivity, &mut read_cell_types)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
 
-        assert_approx_eq!(&[f64], &points, &coords);
+        assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
 
@@ -705,11 +705,11 @@ fn round_trip_contiguous_submeshes() {
 
         let mut p = Vec::new();
         reader.read_point_data::<f64>(0, "p", &mut p).unwrap();
-        assert_approx_eq!(&[f64], &p, &[10.0, 11.0, 12.0, 13.0]);
+        assert_relative_eq!(p.as_slice(), [10.0, 11.0, 12.0, 13.0].as_slice());
 
         let mut c = Vec::new();
         reader.read_cell_data::<f64>(0, "c", &mut c).unwrap();
-        assert_approx_eq!(&[f64], &c, &[20.0, 21.0, 22.0]);
+        assert_relative_eq!(c.as_slice(), [20.0, 21.0, 22.0].as_slice());
     }
 }
 
@@ -769,7 +769,7 @@ fn round_trip_scattered_overlapping_submeshes_with_an_unused_point() {
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
 
         // the identity is preserved on the whole points array, unused points included
-        assert_approx_eq!(&[f64], &points, &coords);
+        assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
 
@@ -790,11 +790,11 @@ fn round_trip_scattered_overlapping_submeshes_with_an_unused_point() {
 
         let mut p = Vec::new();
         reader.read_point_data::<f64>(0, "p", &mut p).unwrap();
-        assert_approx_eq!(&[f64], &p, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_relative_eq!(p.as_slice(), [1.0, 2.0, 3.0, 4.0, 5.0].as_slice());
 
         let mut c = Vec::new();
         reader.read_cell_data::<f64>(0, "c", &mut c).unwrap();
-        assert_approx_eq!(&[f64], &c, &[10.0, 11.0, 12.0, 13.0]);
+        assert_relative_eq!(c.as_slice(), [10.0, 11.0, 12.0, 13.0].as_slice());
     }
 }
 
@@ -839,7 +839,7 @@ fn round_trip_a_submesh_with_deliberately_unordered_cells() {
         // cell data maps back by mesh cell id, not by the submesh's listed (unordered) position
         let mut c = Vec::new();
         reader.read_cell_data::<f64>(0, "c", &mut c).unwrap();
-        assert_approx_eq!(&[f64], &c, &[100.0, 101.0, 102.0]);
+        assert_relative_eq!(c.as_slice(), [100.0, 101.0, 102.0].as_slice());
     }
 }
 
@@ -879,7 +879,7 @@ fn write_mesh_with_no_cells_and_submeshes_reads_back_as_vertex_cells() {
             .read_topology(&mut connectivity, &mut cell_types)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
 
-        assert_approx_eq!(&[f64], &points, &coords);
+        assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(connectivity, [0_u64, 1, 2, 3], "{storage:?}");
         assert_eq!(cell_types, [CellType::Vertex; 4], "{storage:?}");
     }
@@ -1207,12 +1207,12 @@ fn points_and_connectivity_are_read_at_the_requested_width() {
         // written as f32, read back at both widths
         let mut narrow: Vec<f32> = Vec::new();
         reader.read_points(&mut narrow).unwrap();
-        assert_approx_eq!(&[f32], &narrow, &coords);
+        assert_relative_eq!(narrow.as_slice(), coords.as_slice());
 
         let mut wide: Vec<f64> = Vec::new();
         reader.read_points(&mut wide).unwrap();
         let expected: Vec<f64> = coords.iter().map(|&value| f64::from(value)).collect();
-        assert_approx_eq!(&[f64], &wide, &expected);
+        assert_relative_eq!(wide.as_slice(), expected.as_slice());
 
         // written as u64, read back as u32 -- an index check, not a type check
         let mut cell_types_read = Vec::new();
@@ -1287,7 +1287,7 @@ fn submeshes_given_as_ranges_round_trip() {
             .read_topology(&mut read_connectivity, &mut read_cell_types)
             .unwrap_or_else(|error| panic!("{storage:?}: failed to read topology: {error}"));
 
-        assert_approx_eq!(&[f64], &points, &coords);
+        assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
     }
