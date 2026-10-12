@@ -40,7 +40,7 @@ jobs:
       with:
         components: clippy
 
-    - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
+    - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
       with:
         tool: nextest
 
