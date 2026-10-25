@@ -419,10 +419,10 @@ mod tests {
         // 4 bytes per value on disk for both the mesh and the attribute, unlike the f64 case
         let points_file = writer.bin_files_dir.join("points.bin");
         assert_eq!(std::fs::metadata(&points_file).unwrap().len(), 3 * 4);
-        float_cmp::assert_approx_eq!(&[f32], &read_f32(&points_file), &points);
+        approx::assert_relative_eq!(read_f32(&points_file).as_slice(), points.as_slice());
 
         let data_file = writer.bin_files_dir.join("data_t_0.1_0.bin");
-        float_cmp::assert_approx_eq!(&[f32], &read_f32(&data_file), &[1.5, 2.5]);
+        approx::assert_relative_eq!(read_f32(&data_file).as_slice(), [1.5, 2.5].as_slice());
     }
 
     #[test]
