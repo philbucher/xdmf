@@ -97,6 +97,39 @@ jobs:
         name: wheel-${{ matrix.platform }}
         path: python/dist/*.whl
 
+  rhel: # the manylinux wheel on the oldest userspace its tag claims; UBI is RHEL's own, free to pull
+    needs: wheels
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: registry.access.redhat.com/${{ matrix.image }}
+
+    name: "Wheel on ${{ matrix.image }}, ${{ matrix.python }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ "ubi8/ubi:8.10", "ubi9/ubi" ]
+        # the distribution's own interpreters rather than setup-python's, which are built elsewhere
+        python: [ python3.11, python3.12 ]
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        name: wheel-linux-x86_64
+        path: dist
+
+    - name: Install the wheel and run the tests against it
+      run: |
+        dnf install -y ${{ matrix.python }} ${{ matrix.python }}-pip
+        ${{ matrix.python }} -m venv /tmp/venv
+        /tmp/venv/bin/pip install pytest h5py numpy
+        /tmp/venv/bin/pip install --no-index --find-links dist xdmf
+        /tmp/venv/bin/python -c "import xdmf; assert xdmf.is_hdf5_enabled(), 'the wheel was built without HDF5'"
+        cd python && /tmp/venv/bin/python -m pytest tests
+
   sdist: # the same build a pull request runs, see `sdist.yml`
     uses: ./.github/workflows/sdist.yml
 
@@ -127,7 +160,7 @@ jobs:
 
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ version-check, wheels, sdist, crate-dry-run ]
+    needs: [ version-check, wheels, rhel, sdist, crate-dry-run ]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -150,7 +183,7 @@ jobs:
 
   publish-crates-io:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ version-check, wheels, sdist, crate-dry-run ]
+    needs: [ version-check, wheels, rhel, sdist, crate-dry-run ]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
