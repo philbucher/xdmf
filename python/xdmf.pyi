@@ -106,8 +106,12 @@ class TimeSeriesDataWriter:
         time: str,
         point_data: NamedData | None = None,
         cell_data: NamedData | None = None,
+        grid_data: NamedData | None = None,
     ) -> None:
-        """Write the point and cell data of one time step.
+        """Write the point, cell and grid data of one time step.
+
+        `grid_data` holds one value per component for the whole step, which ParaView reads as
+        field data (e.g. the frequency of a mode shape).
 
         Raises `ValueError` for a time or an attribute the mesh cannot take (a duplicated time, a
         wrong array length, a step with no data at all), `OverflowError` for an integer the chosen

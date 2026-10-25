@@ -126,6 +126,8 @@ struct ExpectedTimestep {
     velocity_gradient: Vec<[f64; 9]>,
     integers: Vec<ExpectedIntegerField>,
     stress: Vec<[f64; 6]>,
+    /// The step's one grid-level value, which `ParaView` reads as field data.
+    frequency: f64,
 }
 
 /// One cell as `ParaView` must read it back: the VTK class it becomes, and the point ids it spans.
@@ -162,6 +164,8 @@ struct ExpectedBlock {
 #[derive(Serialize)]
 struct ExpectedSubmeshTimestep {
     time: f64,
+    /// Repeated on every block, since grid data is not cut per submesh.
+    frequency: f64,
     blocks: Vec<ExpectedBlock>,
 }
 
@@ -429,6 +433,7 @@ fn write_fixture(
             velocity_gradient: velocity_gradient.clone(),
             integers,
             stress: stress.clone(),
+            frequency: frequency_of(step),
         });
 
         xdmf_writer.write_time_step(step.to_string(), |time_step| {
@@ -468,6 +473,13 @@ fn write_fixture(
                 "stress",
                 DataAttribute::Tensor6,
                 precision.values(stress.as_flattened()),
+            )?;
+
+            // exactly representable in f32, so the f32 fixture needs no narrowing
+            time_step.grid_data(
+                "frequency",
+                DataAttribute::Scalar,
+                precision.values(&[frequency_of(step)]),
             )
         })?;
     }
@@ -577,6 +589,7 @@ fn write_submesh_fixture(
 
         timesteps.push(ExpectedSubmeshTimestep {
             time: step as f64,
+            frequency: frequency_of(step),
             blocks,
         });
 
@@ -590,7 +603,8 @@ fn write_submesh_fixture(
                 "cell_velocity",
                 DataAttribute::Vector,
                 cell_velocity.as_flattened(),
-            )
+            )?;
+            time_step.grid_data("frequency", DataAttribute::Scalar, &[frequency_of(step)])
         })?;
     }
 
@@ -605,6 +619,11 @@ fn write_submesh_fixture(
         xdmf_file,
         timesteps,
     })
+}
+
+/// The grid-level value of a step: a multiple of 0.5, so it is exact in both `f32` and `f64`.
+fn frequency_of(step: usize) -> f64 {
+    100.0 + step as f64 * 0.5
 }
 
 /// The mesh points one submesh's cells use, ascending -- exactly the points the writer gives that

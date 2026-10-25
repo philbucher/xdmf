@@ -186,6 +186,9 @@ def check_fixture(fixture: dict, directory: Path, num_integer_fields: int) -> No
         if SUPPORTS_MATRIX_ATTRIBUTE:
             check_array(data.GetCellData(), "stress", step["stress"], 6, name)
 
+        # grid-level data arrives as field data, one value per step
+        check_array(data.GetFieldData(), "frequency", [step["frequency"]], 1, name)
+
     skip_note = "" if SUPPORTS_MATRIX_ATTRIBUTE else " (stress field skipped on VTK < 9.6)"
     print(f"OK: {len(fixture['timesteps'])} timestep(s) verified against {xdmf_file}{skip_note}")
 
@@ -284,6 +287,8 @@ def check_submesh_fixture(fixture: dict, directory: Path) -> None:
             check_array(
                 block.GetCellData(), "cell_velocity", expected_block["cell_velocity"], 3, label
             )
+            # grid data is repeated on every block's grid rather than cut per submesh
+            check_array(block.GetFieldData(), "frequency", [step["frequency"]], 1, label)
 
     num_blocks = len(fixture["timesteps"][0]["blocks"])
     print(

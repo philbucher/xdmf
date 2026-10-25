@@ -419,6 +419,29 @@ def attribute_value(grid_xml, name, center):
     return match.group(1)
 
 
+def test_write_time_step_grid_data(tmp_path):
+    file_path = tmp_path / "grid_data"
+    writer = xdmf.TimeSeriesWriter(str(file_path), xdmf.DataStorage.AsciiInline)
+    data_writer = writer.write_mesh(SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+
+    data_writer.write_time_step(
+        "1", grid_data=[("frequency", xdmf.DataAttribute.SCALAR, np.array([33.05]))]
+    )
+
+    xml = file_path.with_suffix(".xdmf2").read_text()
+    assert 'Name="frequency" AttributeType="Scalar" Center="Grid"' in xml
+
+
+def test_write_time_step_grid_data_rejects_a_wrong_length(tmp_path):
+    writer = xdmf.TimeSeriesWriter(str(tmp_path / "grid_data"), xdmf.DataStorage.AsciiInline)
+    data_writer = writer.write_mesh(SQUARE_COORDS, SQUARE_CONNECTIVITY, SQUARE_CELL_TYPES)
+
+    with pytest.raises(ValueError, match="size of grid_data 'frequency' must be 1, but is 2"):
+        data_writer.write_time_step(
+            "1", grid_data=[("frequency", xdmf.DataAttribute.SCALAR, np.array([1.0, 2.0]))]
+        )
+
+
 @pytest.mark.parametrize(
     "dtype", [np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64]
 )

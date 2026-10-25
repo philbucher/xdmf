@@ -905,6 +905,7 @@ impl TimeSeriesDataWriter {
             attributes: Vec::new(),
             point_names: HashSet::new(),
             cell_names: HashSet::new(),
+            grid_names: HashSet::new(),
             initialized: false,
             next_array_index: 0,
         };
@@ -958,6 +959,7 @@ pub struct TimeStep<'a> {
     // tracked separately since the same name may be used for one of each
     point_names: HashSet<String>,
     cell_names: HashSet<String>,
+    grid_names: HashSet<String>,
     // whether `write_data_initialize` has run, deferred to the first attribute so a step that
     // writes nothing leaves no trace at all
     initialized: bool,
@@ -975,6 +977,7 @@ impl fmt::Debug for TimeStep<'_> {
             .field("time", &self.time)
             .field("point_data", &sorted_names(&self.point_names))
             .field("cell_data", &sorted_names(&self.cell_names))
+            .field("grid_data", &sorted_names(&self.grid_names))
             .finish_non_exhaustive()
     }
 }
@@ -1007,6 +1010,17 @@ impl TimeStep<'_> {
         self.write_attribute(name, attribute, data.into(), attribute::Center::Cell)
     }
 
+    /// Write one attribute holding a single value per component for the whole step, immediately,
+    /// which `ParaView` reads as field data (e.g. an eigenfrequency of a mode shape).
+    pub fn grid_data<'v>(
+        &mut self,
+        name: &str,
+        attribute: DataAttribute,
+        data: impl Into<Values<'v>>,
+    ) -> Result<()> {
+        self.write_attribute(name, attribute, data.into(), attribute::Center::Grid)
+    }
+
     fn write_attribute(
         &mut self,
         name: &str,
@@ -1014,11 +1028,10 @@ impl TimeStep<'_> {
         values: Values<'_>,
         center: attribute::Center,
     ) -> Result<()> {
-        let is_point_data = center == attribute::Center::Node;
-        let (label, num_entities) = if is_point_data {
-            (POINT_DATA, self.writer.num_points)
-        } else {
-            (CELL_DATA, self.writer.num_cells)
+        let (label, num_entities) = match center {
+            attribute::Center::Node => (POINT_DATA, self.writer.num_points),
+            attribute::Center::Grid => (GRID_DATA, 1),
+            _ => (CELL_DATA, self.writer.num_cells),
         };
 
         if !is_valid_data_name(name) {
@@ -1030,10 +1043,10 @@ impl TimeStep<'_> {
             });
         }
 
-        let seen_names = if is_point_data {
-            &self.point_names
-        } else {
-            &self.cell_names
+        let seen_names = match center {
+            attribute::Center::Node => &self.point_names,
+            attribute::Center::Grid => &self.grid_names,
+            _ => &self.cell_names,
         };
         if seen_names.contains(name) {
             return Err(Error::InvalidData {
@@ -1081,8 +1094,26 @@ impl TimeStep<'_> {
         }
 
         // without submeshes there is one grid carrying the attribute as-is; with them, every
-        // field is cut per submesh -- point data by its point list, cell data by its cell list
-        if self.writer.submeshes.is_empty() {
+        // field is cut per submesh -- point data by its point list, cell data by its cell list,
+        // and grid data is not cut at all but repeated on each submesh's grid
+        if center == attribute::Center::Grid {
+            let index = self.take_array_index();
+            let attribute = build_attribute(
+                self.writer.writer.as_mut(),
+                index,
+                name,
+                data_attribute,
+                &values,
+                center,
+            )?;
+            if self.writer.submeshes.is_empty() {
+                self.attributes.push(attribute);
+            } else {
+                for attributes in &mut self.per_submesh {
+                    attributes.push(attribute.clone());
+                }
+            }
+        } else if self.writer.submeshes.is_empty() {
             let index = self.take_array_index();
             let attribute = build_attribute(
                 self.writer.writer.as_mut(),
@@ -1099,11 +1130,11 @@ impl TimeStep<'_> {
 
         // recorded only once the attribute is actually written, so a rejected call can be
         // retried under the same name
-        if is_point_data {
-            self.point_names.insert(name.to_string());
-        } else {
-            self.cell_names.insert(name.to_string());
-        }
+        match center {
+            attribute::Center::Node => self.point_names.insert(name.to_string()),
+            attribute::Center::Grid => self.grid_names.insert(name.to_string()),
+            _ => self.cell_names.insert(name.to_string()),
+        };
 
         Ok(())
     }
@@ -1305,7 +1336,9 @@ impl TimeStep<'_> {
             let _discard_result = self.discard();
             return Err(Error::InvalidTimeStep {
                 time,
-                reason: format!("no data written, needs at least one {POINT_DATA} or {CELL_DATA}"),
+                reason: format!(
+                    "no data written, needs at least one {POINT_DATA}, {CELL_DATA} or {GRID_DATA}"
+                ),
             });
         }
 
@@ -1485,6 +1518,8 @@ fn build_data_item(
 const POINT_DATA: &str = "point_data";
 /// Label for cell data in user-facing error messages, named after [`TimeStep::cell_data`].
 const CELL_DATA: &str = "cell_data";
+/// Label for grid data in user-facing error messages, named after [`TimeStep::grid_data`].
+const GRID_DATA: &str = "grid_data";
 
 /// Whether a name a caller chose -- for a data field or for a submesh -- can be written.
 ///

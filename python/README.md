@@ -67,6 +67,9 @@ with writer.write_mesh_with_submeshes(
     )
 ~~~
 
+A value for the whole step (say the frequency of a mode shape) goes in `grid_data`, which
+ParaView reads as field data; it is repeated on every block.
+
 Give a block of consecutive cells as `range(start, stop)` to save storage space.
 
 Blocks may overlap, every cell has to belong to at least one, and no two may share a name.

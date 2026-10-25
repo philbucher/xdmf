@@ -2450,3 +2450,164 @@ fn write_xdmf_with_submeshes_names_the_heavy_data_by_array_and_submesh() {
         }
     }
 }
+
+#[test]
+fn write_xdmf_grid_data_is_a_single_grid_centered_attribute() {
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let mut ts_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(&[0.0; 6], &[0_u32, 1], &[xdmf::CellType::Edge])
+        .unwrap();
+
+    ts_writer
+        .write_time_step("1", |step| {
+            step.grid_data("frequency", xdmf::DataAttribute::Scalar, &[33.05])
+        })
+        .unwrap();
+
+    let read_xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+
+    assert!(read_xdmf.contains(r#"Name="frequency" AttributeType="Scalar" Center="Grid""#));
+    let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="time_series" GridType="Collection" CollectionType="Temporal">
+            <Grid Name="time_series-t1" GridType="Uniform">
+                <Geometry GeometryType="XYZ">
+                    <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords"]</DataItem>
+                </Geometry>
+                <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
+                    <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity"]</DataItem>
+                </Topology>
+                <Time Value="1"/>
+                <Attribute Name="frequency" AttributeType="Scalar" Center="Grid">
+                    <DataItem Dimensions="1" NumberType="Float" Format="XML" Precision="8">3.305e1</DataItem>
+                </Attribute>
+            </Grid>
+        </Grid>
+        <DataItem Name="coords" Dimensions="2 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 0e0 0e0 0e0</DataItem>
+        <DataItem Name="connectivity" Dimensions="2" NumberType="UInt" Format="XML" Precision="4">0 1</DataItem>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="$VERSION"/>
+</Xdmf>"#;
+
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
+}
+
+#[test]
+fn write_xdmf_grid_data_rejects_a_wrong_size_or_a_repeated_name() {
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let mut ts_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh(&[0.0; 6], &[0_u32, 1], &[xdmf::CellType::Edge])
+        .unwrap();
+
+    let err = ts_writer
+        .write_time_step("1", |step| {
+            step.grid_data("frequency", xdmf::DataAttribute::Scalar, &[1.0, 2.0])
+        })
+        .unwrap_err();
+    std::assert_matches!(
+        err,
+        xdmf::Error::InvalidData { reason }
+            if reason.contains("size of grid_data 'frequency' must be 1, but is 2")
+    );
+
+    let err = ts_writer
+        .write_time_step("1", |step| {
+            step.grid_data("frequency", xdmf::DataAttribute::Scalar, &[1.0])?;
+            step.grid_data("frequency", xdmf::DataAttribute::Scalar, &[2.0])
+        })
+        .unwrap_err();
+    std::assert_matches!(
+        err,
+        xdmf::Error::InvalidData { reason }
+            if reason.contains("name 'frequency' of grid_data is used more than once")
+    );
+
+    // point data of the same name is a different category, so it does not collide
+    ts_writer
+        .write_time_step("1", |step| {
+            step.grid_data("frequency", xdmf::DataAttribute::Scalar, &[1.0])?;
+            step.point_data("frequency", xdmf::DataAttribute::Scalar, &[0.0, 0.0])
+        })
+        .unwrap();
+}
+
+#[test]
+fn write_xdmf_with_submeshes_repeats_grid_data_on_every_submesh() {
+    let (node_coords, connectivity, cell_types) = submesh_test_mesh();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let xdmf_file_path = tmp_dir.path().join("test_output");
+
+    let mut ts_writer = TimeSeriesWriter::new(&xdmf_file_path, xdmf::DataStorage::AsciiInline)
+        .unwrap()
+        .write_mesh_with_submeshes(
+            &node_coords,
+            &connectivity,
+            &cell_types,
+            [("edge", &[0][..]), ("surface", &[1, 2][..])],
+        )
+        .unwrap();
+
+    ts_writer
+        .write_time_step("0.0", |step| {
+            step.grid_data("frequency", xdmf::DataAttribute::Scalar, &[7.5])
+        })
+        .unwrap();
+
+    let read_xdmf = std::fs::read_to_string(xdmf_file_path.with_extension("xdmf2")).unwrap();
+
+    // grid data is not cut per submesh: every submesh's grid carries the same value
+    let expected_xdmf = r#"
+<Xdmf Version="2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <Domain>
+        <Grid Name="mesh" GridType="Collection" CollectionType="Spatial">
+            <Grid Name="edge" GridType="Collection" CollectionType="Temporal">
+                <Grid Name="edge-t0.0" GridType="Uniform">
+                    <Geometry GeometryType="XYZ">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_0"]</DataItem>
+                    </Geometry>
+                    <Topology TopologyType="Polyline" NodesPerElement="2" NumberOfElements="1">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_0"]</DataItem>
+                    </Topology>
+                    <Time Value="0.0"/>
+                    <Attribute Name="frequency" AttributeType="Scalar" Center="Grid">
+                        <DataItem Dimensions="1" NumberType="Float" Format="XML" Precision="8">7.5e0</DataItem>
+                    </Attribute>
+                </Grid>
+            </Grid>
+            <Grid Name="surface" GridType="Collection" CollectionType="Temporal">
+                <Grid Name="surface-t0.0" GridType="Uniform">
+                    <Geometry GeometryType="XYZ">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="coords_1"]</DataItem>
+                    </Geometry>
+                    <Topology TopologyType="Triangle" NumberOfElements="2">
+                        <DataItem Reference="XML">/Xdmf/Domain/DataItem[@Name="connectivity_1"]</DataItem>
+                    </Topology>
+                    <Time Value="0.0"/>
+                    <Attribute Name="frequency" AttributeType="Scalar" Center="Grid">
+                        <DataItem Dimensions="1" NumberType="Float" Format="XML" Precision="8">7.5e0</DataItem>
+                    </Attribute>
+                </Grid>
+            </Grid>
+        </Grid>
+        <DataItem Name="coords_0" Dimensions="2 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0</DataItem>
+        <DataItem Name="connectivity_0" Dimensions="2" NumberType="UInt" Format="XML" Precision="4">0 1</DataItem>
+        <DataItem Name="coords_1" Dimensions="4 3" NumberType="Float" Format="XML" Precision="8">0e0 0e0 0e0 1e0 0e0 0e0 0e0 1e0 0e0 1e0 1e0 0e0</DataItem>
+        <DataItem Name="connectivity_1" Dimensions="6" NumberType="UInt" Format="XML" Precision="4">0 2 1 1 2 3</DataItem>
+    </Domain>
+    <Information Name="data_storage" Value="AsciiInline"/>
+    <Information Name="version" Value="$VERSION"/>
+    <Information Name="submesh_cells" Value="0:1 1:2"/>
+    <Information Name="submesh_points" Value="0:2 0:4"/>
+</Xdmf>"#;
+
+    pretty_assertions::assert_eq!(with_version(expected_xdmf), read_xdmf);
+}

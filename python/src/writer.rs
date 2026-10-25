@@ -215,10 +215,11 @@ impl PyTimeSeriesDataWriter {
         &self.file_name
     }
 
-    /// Write the point and cell data of one time step.
+    /// Write the point, cell and grid data of one time step.
     ///
-    /// `time` is the time as a string, leaving its formatting to the caller. `point_data` and
-    /// `cell_data` are sequences of `(name, DataAttribute, array)`, `array` being a C-contiguous
+    /// `time` is the time as a string, leaving its formatting to the caller. `point_data`,
+    /// `cell_data` and `grid_data` (one value per component for the whole step, which `ParaView`
+    /// reads as field data) are sequences of `(name, DataAttribute, array)`, `array` being a C-contiguous
     /// numpy array of dtype `float64`, `float32`, `uint64`, `uint32`, `int64` or `int32`, borrowed
     /// without a copy.
     ///
@@ -228,13 +229,14 @@ impl PyTimeSeriesDataWriter {
     /// The arrays are borrowed and the write releases the GIL, so another thread must not modify
     /// an array while a write of it is running. Single-threaded code cannot hit this: the method
     /// returns before the next statement runs.
-    #[pyo3(signature = (time, point_data=None, cell_data=None))]
+    #[pyo3(signature = (time, point_data=None, cell_data=None, grid_data=None))]
     fn write_time_step(
         &mut self,
         py: Python<'_>,
         time: &str,
         point_data: Option<Vec<NamedData<'_>>>,
         cell_data: Option<Vec<NamedData<'_>>>,
+        grid_data: Option<Vec<NamedData<'_>>>,
     ) -> PyResult<()> {
         let writer = self
             .inner
@@ -247,6 +249,8 @@ impl PyTimeSeriesDataWriter {
         let cell_arrays = borrow_arrays(cell_data.unwrap_or_default())?;
         let point_values = to_values(&point_arrays)?;
         let cell_values = to_values(&cell_arrays)?;
+        let grid_arrays = borrow_arrays(grid_data.unwrap_or_default())?;
+        let grid_values = to_values(&grid_arrays)?;
 
         py.detach(|| {
             writer.write_time_step(time, |step| {
@@ -255,6 +259,9 @@ impl PyTimeSeriesDataWriter {
                 }
                 for (name, attribute, values) in cell_values {
                     step.cell_data(name, attribute, values)?;
+                }
+                for (name, attribute, values) in grid_values {
+                    step.grid_data(name, attribute, values)?;
                 }
                 Ok(())
             })
