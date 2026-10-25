@@ -515,7 +515,7 @@ fn full_path(path: &str, data_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use float_cmp::assert_approx_eq;
+    use approx::assert_relative_eq;
 
     use super::*;
 
@@ -583,7 +583,7 @@ mod tests {
             .unwrap()
             .to_vec();
 
-        assert_approx_eq!(&[f64], &points, &points_read);
+        assert_relative_eq!(points.as_slice(), points_read.as_slice());
         assert_eq!(&cells, &cells_read);
     }
 
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(dataset.dtype().unwrap().size(), 4);
 
         let points_read: Vec<f32> = dataset.read().unwrap().to_vec();
-        assert_approx_eq!(&[f32], &points, &points_read);
+        assert_relative_eq!(points.as_slice(), points_read.as_slice());
     }
 
     #[test]
@@ -653,7 +653,7 @@ mod tests {
             .unwrap()
             .to_vec();
 
-        assert_approx_eq!(&[f64], &vec_f64, &data_f64);
+        assert_relative_eq!(vec_f64.as_slice(), data_f64.as_slice());
         assert_eq!(&vec_u64, &data_u64);
     }
 
@@ -680,7 +680,7 @@ mod tests {
         assert_eq!(dataset.dtype().unwrap().size(), 4);
 
         let data_f32: Vec<f32> = dataset.read().unwrap().to_vec();
-        assert_approx_eq!(&[f32], &vec_f32, &data_f32);
+        assert_relative_eq!(vec_f32.as_slice(), data_f32.as_slice());
     }
 
     #[test]
@@ -756,7 +756,7 @@ mod tests {
         assert_eq!(dataset.dtype().unwrap().size(), 4);
 
         let points_data: Vec<f32> = dataset.read().unwrap().to_vec();
-        assert_approx_eq!(&[f32], &data_points, &points_data);
+        assert_relative_eq!(data_points.as_slice(), points_data.as_slice());
     }
 
     #[test]
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(dataset.dtype().unwrap().size(), 4);
 
         let cells_data: Vec<f32> = dataset.read().unwrap().to_vec();
-        assert_approx_eq!(&[f32], &data_cells, &cells_data);
+        assert_relative_eq!(data_cells.as_slice(), cells_data.as_slice());
     }
 
     #[test]
@@ -1030,7 +1030,7 @@ mod tests {
             .unwrap()
             .to_vec();
 
-        assert_approx_eq!(&[f64], &points, &points_data);
+        assert_relative_eq!(points.as_slice(), points_data.as_slice());
         assert_eq!(&cells, &cells_data);
     }
 
@@ -1060,7 +1060,7 @@ mod tests {
         let points_data: Vec<f64> = h5_file.dataset("points").unwrap().read().unwrap().to_vec();
         let cells_data: Vec<u64> = h5_file.dataset("cells").unwrap().read().unwrap().to_vec();
 
-        assert_approx_eq!(&[f64], &points, &points_data);
+        assert_relative_eq!(points.as_slice(), points_data.as_slice());
         assert_eq!(&cells, &cells_data);
     }
 
@@ -1107,8 +1107,8 @@ mod tests {
             .unwrap()
             .to_vec();
 
-        assert_approx_eq!(&[f64], &data_points, &points_data);
-        assert_approx_eq!(&[f64], &data_cells, &cells_data);
+        assert_relative_eq!(data_points.as_slice(), points_data.as_slice());
+        assert_relative_eq!(data_cells.as_slice(), cells_data.as_slice());
     }
 
     #[test]
@@ -1146,7 +1146,7 @@ mod tests {
         let points_data: Vec<f64> = h5_file.dataset("0").unwrap().read().unwrap().to_vec();
         let cells_data: Vec<f64> = h5_file.dataset("1").unwrap().read().unwrap().to_vec();
 
-        assert_approx_eq!(&[f64], &data_points, &points_data);
-        assert_approx_eq!(&[f64], &data_cells, &cells_data);
+        assert_relative_eq!(data_points.as_slice(), points_data.as_slice());
+        assert_relative_eq!(data_cells.as_slice(), cells_data.as_slice());
     }
 }

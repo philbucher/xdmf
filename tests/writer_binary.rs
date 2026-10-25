@@ -248,11 +248,10 @@ fn write_and_verify_binary_f32() {
     // half the bytes of the equivalent f64 mesh, and the values survive the round trip exactly
     // (all of them are representable in f32)
     assert_eq!(std::fs::metadata(&points).unwrap().len(), 12 * 4);
-    float_cmp::assert_approx_eq!(&[f32], &read_f32_le(&points), &coords);
+    approx::assert_relative_eq!(read_f32_le(&points).as_slice(), coords.as_slice());
 
-    float_cmp::assert_approx_eq!(
-        &[f32],
-        &read_f32_le(&bin_dir.join("data_t_0_0.bin")),
-        &[10.5, 11.5, 12.5, 13.5]
+    approx::assert_relative_eq!(
+        read_f32_le(&bin_dir.join("data_t_0_0.bin")).as_slice(),
+        [10.5, 11.5, 12.5, 13.5].as_slice()
     );
 }
