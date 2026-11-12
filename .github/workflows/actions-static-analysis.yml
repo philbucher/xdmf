@@ -8,7 +8,7 @@ on:
 
 jobs:
   zizmor:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     permissions:
@@ -24,7 +24,7 @@ jobs:
     - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
 
   actionlint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     permissions:

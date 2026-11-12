@@ -8,7 +8,7 @@ on:
 
 jobs:
   sdist:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     name: "Building a wheel from the sdist"
@@ -20,7 +20,7 @@ jobs:
 
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: "3.x"
+        python-version: "3.14"
 
     # the build below runs on the host, not in a container
     - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1

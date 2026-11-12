@@ -22,7 +22,7 @@ env:
 
 jobs:
   latest-deps:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     name: "Testing against the newest compatible dependencies (hdf5: ${{ matrix.hdf5 }})"
