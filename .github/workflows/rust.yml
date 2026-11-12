@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-2025, macos-15]
         hdf5: [YES, NO]
 
     steps:
@@ -45,7 +45,7 @@ jobs:
         tool: nextest
 
     - name: Install HDF5 (apt)
-      if: ${{ matrix.os == 'ubuntu-latest' && matrix.hdf5 == 'YES' }}
+      if: ${{ runner.os == 'Linux' && matrix.hdf5 == 'YES' }}
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -54,7 +54,7 @@ jobs:
         sudo apt-get install -y --no-install-recommends libhdf5-dev
 
     - name: Install HDF5 (Homebrew)
-      if: ${{ matrix.os == 'macos-latest' && matrix.hdf5 == 'YES' }}
+      if: ${{ runner.os == 'macOS' && matrix.hdf5 == 'YES' }}
       run: |
         brew install hdf5
         echo "HDF5_DIR=$(brew --prefix hdf5)" >> "$GITHUB_ENV"
@@ -63,7 +63,7 @@ jobs:
     # Windows job -- so the tree it installs into is cached, keyed on the runner image's own vcpkg
     # commit, and `vcpkg install` only runs when that key misses.
     - name: Locate the vcpkg HDF5 installation
-      if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' }}
+      if: ${{ runner.os == 'Windows' && matrix.hdf5 == 'YES' }}
       shell: pwsh
       run: |
         $hdf5Dir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
@@ -75,14 +75,14 @@ jobs:
 
     - name: Cache the vcpkg HDF5 build
       id: hdf5-cache
-      if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' }}
+      if: ${{ runner.os == 'Windows' && matrix.hdf5 == 'YES' }}
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ env.HDF5_DIR }}
         key: vcpkg-hdf5-x64-windows-${{ env.VCPKG_REV }}
 
     - name: Install HDF5 (vcpkg)
-      if: ${{ matrix.os == 'windows-latest' && matrix.hdf5 == 'YES' && steps.hdf5-cache.outputs.cache-hit != 'true' }}
+      if: ${{ runner.os == 'Windows' && matrix.hdf5 == 'YES' && steps.hdf5-cache.outputs.cache-hit != 'true' }}
       shell: pwsh
       run: vcpkg install hdf5:x64-windows
 
@@ -128,7 +128,7 @@ jobs:
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --locked --no-deps --document-private-items
 
   python-bindings:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     name: "Building and testing the python bindings (hdf5: ${{ matrix.hdf5 }})"
@@ -152,7 +152,7 @@ jobs:
 
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: "3.x"
+        python-version: "3.14"
 
     - name: Install HDF5 (apt) # the wheel links against it, the bindings enable the feature
       if: ${{ matrix.hdf5 == 'YES' }}
@@ -180,7 +180,7 @@ jobs:
       run: pytest python/tests
 
   wheel:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     name: "Building and testing a wheel (static HDF5)"
@@ -198,7 +198,7 @@ jobs:
 
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: "3.x"
+        python-version: "3.14"
 
     - name: Install maturin
       run: pip install maturin pytest h5py numpy
@@ -217,7 +217,7 @@ jobs:
     uses: ./.github/workflows/sdist.yml
 
   formatting:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -234,7 +234,7 @@ jobs:
       run: cargo +nightly fmt --all --check
 
   spelling:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
