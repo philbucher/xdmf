@@ -15,7 +15,7 @@ concurrency:
 jobs:
   version-check: # a tag may not claim a version the crate does not have
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -52,7 +52,7 @@ jobs:
           # `auto` is its own default and means nothing outside the Linux jobs.
           - { platform: "macos-x86_64",   runner: macos-15-intel,   target: x86_64,  manylinux: auto }
           - { platform: "macos-aarch64",  runner: macos-15,         target: aarch64, manylinux: auto }
-          - { platform: "windows-x86_64", runner: windows-latest,   target: x64,     manylinux: auto }
+          - { platform: "windows-x86_64", runner: windows-2025,     target: x64,     manylinux: auto }
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -63,7 +63,7 @@ jobs:
       with:
         # Any version >= 3.9 exercises the same wheel: what makes the >= 3.9 claim true is abi3,
         # which is a build-time property of the extension module and not of the interpreter here.
-        python-version: "3.x"
+        python-version: "3.14"
 
     - name: Build the wheel
       uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
@@ -101,7 +101,7 @@ jobs:
     uses: ./.github/workflows/sdist.yml
 
   crate-dry-run: # everything `cargo publish` would do, except the irreversible part
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     name: "Packaging the crate"
@@ -128,7 +128,7 @@ jobs:
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [ version-check, wheels, sdist, crate-dry-run ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     environment: pypi # holds the trusted-publisher configuration
@@ -151,7 +151,7 @@ jobs:
   publish-crates-io:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [ version-check, wheels, sdist, crate-dry-run ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     environment: crates-io # holds the trusted-publisher configuration
