@@ -201,17 +201,14 @@ jobs:
         python-version: "3.14"
 
     - name: Install maturin
-      run: pip install maturin pytest h5py numpy
+      run: pip install maturin
 
     - name: Build the wheel the way the release does # minus the manylinux container and --release
       working-directory: python
       run: maturin build --out dist --features pyo3/extension-module,hdf5-static
 
     - name: Install it and run the tests against it
-      run: |
-        pip install --no-index --find-links python/dist xdmf
-        python -c "import xdmf; assert xdmf.is_hdf5_enabled(), 'no HDF5 in the wheel'"
-        pytest python/tests
+      run: bash .github/test-wheel.sh python python/dist
 
   sdist: # a wheel built from the source distribution, as `release.yml` does it
     uses: ./.github/workflows/sdist.yml
