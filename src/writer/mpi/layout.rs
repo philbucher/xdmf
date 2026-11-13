@@ -255,7 +255,7 @@ pub(super) fn value_shares(
         return Err(Error::InvalidData {
             reason: format!(
                 "one rank's share is more than the {} values a single MPI message carries, which \
-                 gathering it to rank 0 needs; the Hdf5SingleFile storage writes every rank's \
+                 gathering it to rank 0 needs; the HDF5 storages write every rank's \
                  share in place instead",
                 i32::MAX
             ),

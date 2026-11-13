@@ -181,7 +181,7 @@ pub(crate) trait DataWriter: Send + Sync {
     ///
     /// The collective counterpart of [`write_points`](Self::write_points)/
     /// [`write_connectivity`](Self::write_connectivity), for a mesh written through
-    /// [`crate::mpi`]. Only the single-file HDF5 backend implements it, being the only one opened
+    /// [`crate::mpi`]. Only the HDF5 backends implement it, being the only ones opened
     /// collectively; the others are never asked.
     #[cfg(feature = "mpi")]
     fn write_mesh_array_collective(

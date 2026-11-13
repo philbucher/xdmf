@@ -15,14 +15,14 @@
 //!
 //! # Storages
 //!
-//! [`DataStorage::Hdf5SingleFile`] is written *in place*: the file is opened collectively through
-//! HDF5's MPI-IO driver, and every rank writes its own share of every array straight into it, so
-//! no rank ever holds more than its own share. Compression works as it does serially.
+//! The two HDF5 storages are written *in place*: every file is opened collectively through HDF5's
+//! MPI-IO driver, and every rank writes its own share of every array straight into it, so no
+//! rank ever holds more than its own share. Compression works as it does serially.
 //!
-//! Every other storage is written by rank 0 alone: each array is *gathered* to rank 0, which
-//! writes it through the serial writer. The file is the same, but rank 0 briefly holds the whole
-//! of each array it writes -- the mesh once, then one field at a time. Without MPI-IO there is no
-//! other way to write one shared ascii or binary file.
+//! The ascii and binary storages are written by rank 0 alone: each array is *gathered* to rank
+//! 0, which writes it through the serial writer. The file is the same, but rank 0 briefly holds
+//! the whole of each array it writes -- the mesh once, then one field at a time. Without MPI-IO
+//! there is no other way to write one shared ascii or binary file.
 //!
 //! # Errors
 //!
@@ -57,14 +57,14 @@ use sync::{agree, converge, phase};
 
 use super::{
     CELL_DATA, DOMAIN_DATA_ITEMS, POINT_DATA, geometry,
-    hdf5::SingleFileHdf5Writer,
+    hdf5::{MultipleFilesHdf5Writer, SingleFileHdf5Writer},
     sorted_names,
     submesh::{encode_mixed, poly_cell_points},
     validate_attribute, validate_file_name, validate_time,
 };
 use crate::{
-    CELLS, CellType, ConnectivityIndex, Coordinate, DataAttribute, DataStorage, Error, POINTS,
-    Result, Values, paraview,
+    CELLS, CellType, ConnectivityIndex, Coordinate, DataAttribute, DataStorage, DataWriter, Error,
+    POINTS, Result, Values, paraview,
     values::dimensions_of_len,
     xdmf_elements::{
         attribute::{Attribute, Center},
@@ -90,7 +90,7 @@ pub struct TimeSeriesWriter {
 
 /// How the heavy data reaches the file, wrapping the serial writer type `W` doing the writing.
 enum Backend<W> {
-    /// Every rank writes its own share into one collectively opened file.
+    /// Every rank writes its own share into collectively opened files.
     Collective(W),
     /// Rank 0 writes everything, gathered from every rank; `None` on every other rank.
     Gathered(Option<W>),
@@ -132,30 +132,38 @@ impl TimeSeriesWriter {
 
         let begin = phase(("new", file_name, data_storage));
 
-        let backend = if let DataStorage::Hdf5SingleFile { deflate_level } = data_storage {
-            let checked = validate_file_name(&xdmf_file_name)
-                .and_then(|()| crate::validate_deflate_level(deflate_level));
-            agree(&comm, begin, checked)?;
+        let backend = match data_storage {
+            DataStorage::Hdf5SingleFile { deflate_level }
+            | DataStorage::Hdf5MultipleFiles { deflate_level } => {
+                let checked = validate_file_name(&xdmf_file_name)
+                    .and_then(|()| crate::validate_deflate_level(deflate_level));
+                agree(&comm, begin, checked)?;
 
-            let writer = SingleFileHdf5Writer::new_collective(
-                file_name,
-                deflate_level.unwrap_or(super::hdf5::DEFAULT_DEFLATE_LEVEL),
-                &comm,
-            );
-            let writer = agree(&comm, phase(("new: opened", begin)), writer)?;
+                let deflate_level = deflate_level.unwrap_or(super::hdf5::DEFAULT_DEFLATE_LEVEL);
+                let writer: Result<Box<dyn DataWriter>> =
+                    if matches!(data_storage, DataStorage::Hdf5SingleFile { .. }) {
+                        SingleFileHdf5Writer::new_collective(file_name, deflate_level, &comm)
+                            .map(|writer| Box::new(writer) as Box<dyn DataWriter>)
+                    } else {
+                        MultipleFilesHdf5Writer::new_collective(file_name, deflate_level, &comm)
+                            .map(|writer| Box::new(writer) as Box<dyn DataWriter>)
+                    };
+                let writer = agree(&comm, phase(("new: opened", begin)), writer)?;
 
-            Backend::Collective(super::TimeSeriesWriter {
-                xdmf_file_name: xdmf_file_name.clone(),
-                writer: Box::new(writer),
-            })
-        } else {
-            let writer = if comm.rank() == 0 {
-                super::TimeSeriesWriter::new(file_name, data_storage).map(Some)
-            } else {
-                validate_file_name(&xdmf_file_name).map(|()| None)
-            };
+                Backend::Collective(super::TimeSeriesWriter {
+                    xdmf_file_name: xdmf_file_name.clone(),
+                    writer,
+                })
+            }
+            DataStorage::Ascii | DataStorage::AsciiInline | DataStorage::Binary => {
+                let writer = if comm.rank() == 0 {
+                    super::TimeSeriesWriter::new(file_name, data_storage).map(Some)
+                } else {
+                    validate_file_name(&xdmf_file_name).map(|()| None)
+                };
 
-            Backend::Gathered(agree(&comm, begin, writer)?)
+                Backend::Gathered(agree(&comm, begin, writer)?)
+            }
         };
 
         Ok(Self {
@@ -348,7 +356,7 @@ fn check_indices<I: ConnectivityIndex>(
     paraview::validate(&I::as_values(connectivity), format)
 }
 
-/// Write the mesh into a collectively opened file, every rank its own share in place.
+/// Write the mesh into collectively opened files, every rank its own share in place.
 fn write_mesh_collective<C: Coordinate, I: ConnectivityIndex>(
     comm: &SimpleCommunicator,
     mut writer: super::TimeSeriesWriter,
@@ -655,7 +663,7 @@ impl<'c> StepContext<'c> {
     }
 }
 
-/// One step on a collectively opened file: every rank writes its share of each field in place,
+/// One step on collectively opened files: every rank writes its share of each field in place,
 /// and rank 0 adds the step's `<Grid>` to the light data.
 fn collective_step<F, E>(
     context: &StepContext<'_>,
@@ -826,7 +834,7 @@ impl GatheredStep for super::TimeStep<'_> {
 
 /// Where a [`TimeStep`] sends each field.
 enum Target<'a> {
-    /// Into a collectively opened file, this rank's share in place.
+    /// Into collectively opened files, this rank's share in place.
     Collective {
         writer: &'a mut super::TimeSeriesDataWriter,
         attributes: Vec<Attribute>,

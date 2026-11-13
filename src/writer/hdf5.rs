@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hdf5::{File as H5File, Group as H5Group, H5Type};
+use hdf5::{File as H5File, FileBuilder, Group as H5Group, H5Type, file::FileAccess};
 
 use crate::{
     CELLS, DataStorage, DataWriter, Error, POINTS, Result, SELECTIONS, SUBMESH_CELLS,
@@ -314,6 +314,12 @@ pub(crate) struct MultipleFilesHdf5Writer {
     h5_files_dir: PathBuf,
     h5_data_file: Option<H5File>,
     deflate_level: u8,
+    // the file access every file is opened with: the MPI-IO driver over a communicator when the
+    // files are written collectively (see `new_collective`), HDF5's default otherwise
+    access: Option<FileAccess>,
+    // whether a discarded step's file is removed by this writer -- by every serial one, but by
+    // only one of the ranks writing collectively
+    removes_discarded: bool,
 }
 
 impl MultipleFilesHdf5Writer {
@@ -330,11 +336,59 @@ impl MultipleFilesHdf5Writer {
             h5_files_dir,
             h5_data_file: None,
             deflate_level,
+            access: None,
+            removes_discarded: true,
         })
+    }
+
+    /// The collective counterpart of [`new`](Self::new): every rank of `comm` calls this
+    /// together, and every file it creates or opens after is opened by all of them together,
+    /// through HDF5's MPI-IO driver.
+    #[cfg(feature = "mpi")]
+    pub(crate) fn new_collective(
+        file_name: impl AsRef<Path>,
+        deflate_level: u8,
+        comm: &impl mpi::traits::Communicator,
+    ) -> Result<Self> {
+        let access = FileAccess::build()
+            .mpio(comm.as_raw(), None)
+            .finish()
+            .map_err(hdf5_ctx("creating an MPI-IO file access"))?;
+
+        Ok(Self {
+            access: Some(access),
+            removes_discarded: comm.rank() == 0,
+            ..Self::new(file_name, deflate_level)?
+        })
+    }
+
+    /// How every file is opened, see `access`.
+    fn file_builder(&self) -> Result<FileBuilder> {
+        let mut builder = FileBuilder::new();
+        if let Some(access) = &self.access {
+            builder
+                .set_access_plist(access)
+                .map_err(hdf5_ctx("setting a file access"))?;
+        }
+        Ok(builder)
     }
 
     fn mesh_file_name(&self) -> PathBuf {
         self.h5_files_dir.join(format!("{MESH}.h5"))
+    }
+
+    /// Create `mesh.h5`, which the mesh's first array does.
+    fn create_mesh_file(&self) -> Result<H5File> {
+        self.file_builder()?
+            .create(self.mesh_file_name())
+            .map_err(hdf5_ctx("creating mesh file"))
+    }
+
+    /// Open `mesh.h5` to add another array.
+    fn open_mesh_file(&self) -> Result<H5File> {
+        self.file_builder()?
+            .append(self.mesh_file_name())
+            .map_err(hdf5_ctx("opening mesh file"))
     }
 
     /// Write one of the mesh's arrays into `mesh.h5`, which the points create.
@@ -345,12 +399,18 @@ impl MultipleFilesHdf5Writer {
         values: &Values<'_>,
     ) -> Result<DataContent> {
         let file_name = self.mesh_file_name();
-        let h5_file = H5File::append(&file_name).map_err(hdf5_ctx("opening mesh file"))?;
+        let h5_file = self.open_mesh_file()?;
 
         let data_name = write_array(&h5_file, array, submesh, values, self.deflate_level)?;
 
         Ok(full_path(&mesh_file_rel_name(&file_name)?, &data_name).into())
     }
+}
+
+fn data_file_rel_name(data_file: &H5File) -> Result<String> {
+    parent_and_filename(data_file.filename()).ok_or(Error::Internal(
+        "could not resolve parent directory and file name for an HDF5 path",
+    ))
 }
 
 fn mesh_file_rel_name(file_name: &Path) -> Result<String> {
@@ -373,9 +433,8 @@ impl DataWriter for MultipleFilesHdf5Writer {
     fn write_points(&mut self, submesh: Option<usize>, points: &Values<'_>) -> Result<DataContent> {
         // the mesh file is created by the first array written into it -- the mesh's own points, or
         // the first submesh's -- and appended to by every one after it
-        let file_name = self.mesh_file_name();
         if submesh.unwrap_or(0) == 0 {
-            H5File::create(&file_name).map_err(hdf5_ctx("creating mesh file"))?;
+            self.create_mesh_file()?;
         }
 
         self.write_mesh_array(POINTS, submesh, points)
@@ -387,7 +446,7 @@ impl DataWriter for MultipleFilesHdf5Writer {
         coordinates: &Values<'_>,
     ) -> Result<DataContent> {
         if component == 0 {
-            H5File::create(self.mesh_file_name()).map_err(hdf5_ctx("creating mesh file"))?;
+            self.create_mesh_file()?;
         }
 
         self.write_mesh_array(POINTS, Some(component), coordinates)
@@ -430,11 +489,59 @@ impl DataWriter for MultipleFilesHdf5Writer {
 
         let data_path = write_values(data_file, &index.to_string(), data, self.deflate_level)?;
 
-        let rel_file_name = parent_and_filename(data_file.filename()).ok_or(Error::Internal(
-            "could not resolve parent directory and file name for an HDF5 path",
-        ))?;
+        Ok(full_path(&data_file_rel_name(data_file)?, &data_path).into())
+    }
 
-        Ok(full_path(&rel_file_name, &data_path).into())
+    #[cfg(feature = "mpi")]
+    fn write_mesh_array_collective(
+        &mut self,
+        array: &'static str,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+    ) -> Result<DataContent> {
+        // the points are the mesh's first array, as in `write_points`
+        let h5_file = if array == POINTS {
+            self.create_mesh_file()?
+        } else {
+            self.open_mesh_file()?
+        };
+
+        let data_name = collective::write_values(
+            &h5_file,
+            array,
+            local,
+            offset,
+            global_len,
+            self.deflate_level,
+        )?;
+
+        Ok(full_path(&mesh_file_rel_name(&self.mesh_file_name())?, &data_name).into())
+    }
+
+    #[cfg(feature = "mpi")]
+    fn write_data_collective(
+        &mut self,
+        index: usize,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+    ) -> Result<DataContent> {
+        let data_file = self
+            .h5_data_file
+            .as_ref()
+            .ok_or(Error::Internal("writing data was not initialized"))?;
+
+        let data_path = collective::write_values(
+            data_file,
+            &index.to_string(),
+            local,
+            offset,
+            global_len,
+            self.deflate_level,
+        )?;
+
+        Ok(full_path(&data_file_rel_name(data_file)?, &data_path).into())
     }
 
     fn write_data_initialize(&mut self, time: &str) -> Result<()> {
@@ -443,8 +550,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
         }
 
         let file_name = self.h5_files_dir.join(format!("data_t_{time}.h5"));
-        self.h5_data_file =
-            Some(H5File::create(&file_name).map_err(hdf5_ctx("creating data file"))?);
+        self.h5_data_file = Some(
+            self.file_builder()?
+                .create(&file_name)
+                .map_err(hdf5_ctx("creating data file"))?,
+        );
 
         Ok(())
     }
@@ -470,6 +580,11 @@ impl DataWriter for MultipleFilesHdf5Writer {
         // handle blocks the removal.
         let file_name = PathBuf::from(data_file.filename());
         drop(data_file);
+
+        // closed by every rank of a collective writer, but removed by one only
+        if !self.removes_discarded {
+            return Ok(());
+        }
 
         // The whole step lives in this one file, so discarding it is just removing the file --
         // no other step's data can be in there.

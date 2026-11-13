@@ -517,9 +517,12 @@ mod mpi_tests {
         world.barrier();
     }
 
-    /// One of each backend: in place, and gathered to rank 0.
-    const ERROR_STORAGES: [DataStorage; 2] = [
+    /// Each backend: in place, into one file or one per step, and gathered to rank 0.
+    const ERROR_STORAGES: [DataStorage; 3] = [
         DataStorage::Hdf5SingleFile {
+            deflate_level: None,
+        },
+        DataStorage::Hdf5MultipleFiles {
             deflate_level: None,
         },
         DataStorage::Ascii,
@@ -553,7 +556,10 @@ mod mpi_tests {
     /// discarded one. Only the HDF5 storages can be read back; for the others, the light data's
     /// `<Time>` elements are counted instead.
     fn written_times(file_name: &Path, storage: DataStorage) -> Vec<String> {
-        if matches!(storage, DataStorage::Hdf5SingleFile { .. }) {
+        if matches!(
+            storage,
+            DataStorage::Hdf5SingleFile { .. } | DataStorage::Hdf5MultipleFiles { .. }
+        ) {
             return TimeSeriesReader::new(file_name).unwrap().times().to_vec();
         }
 
