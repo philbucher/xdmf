@@ -780,6 +780,19 @@ pub(super) fn prepare_cells<'c, I: ConnectivityIndex>(
         return Ok((TopologyType::from(*first), Cow::Borrowed(connectivity)));
     }
 
+    Ok((
+        TopologyType::Mixed,
+        Cow::Owned(encode_mixed(connectivity, cell_types)),
+    ))
+}
+
+/// The connectivity as a `Mixed` topology stores it: every cell's type code in front of its
+/// points, and for a poly cell its point count after that. `connectivity` must already hold
+/// exactly the points `cell_types` add up to.
+pub(super) fn encode_mixed<I: ConnectivityIndex>(
+    connectivity: &[I],
+    cell_types: &[CellType],
+) -> Vec<I> {
     let mut cells_with_types = Vec::with_capacity(connectivity.len() + cell_types.len());
     let mut index = 0_usize;
 
@@ -796,7 +809,7 @@ pub(super) fn prepare_cells<'c, I: ConnectivityIndex>(
         index += num_points;
     }
 
-    Ok((TopologyType::Mixed, Cow::Owned(cells_with_types)))
+    cells_with_types
 }
 
 #[cfg(test)]

@@ -569,6 +569,23 @@ impl TimeSeriesWriter {
 
     /// Build the data writer around the finished mesh and write the initial XDMF file.
     fn finish_mesh(
+        self,
+        grid: Grid,
+        data_items: Vec<DataItem>,
+        submeshes: Vec<Submesh>,
+        num_points: usize,
+        num_cells: usize,
+    ) -> Result<TimeSeriesDataWriter> {
+        let mut ts_writer =
+            self.build_data_writer(grid, data_items, submeshes, num_points, num_cells)?;
+
+        ts_writer.write_xdmf_file()?;
+
+        Ok(ts_writer)
+    }
+
+    /// Build the data writer around the finished mesh, without writing anything to disk yet.
+    fn build_data_writer(
         mut self,
         grid: Grid,
         mut data_items: Vec<DataItem>,
@@ -583,7 +600,7 @@ impl TimeSeriesWriter {
         let mut xdmf = new_document(grid.clone(), data_items, self.writer.data_storage());
         xdmf.information.extend(submesh_lists);
 
-        let mut ts_writer = TimeSeriesDataWriter {
+        Ok(TimeSeriesDataWriter {
             xdmf_file_name: self.xdmf_file_name,
             writer: self.writer,
             xdmf,
@@ -597,11 +614,7 @@ impl TimeSeriesWriter {
             last_xml_len: 0,
             num_points,
             num_cells,
-        };
-
-        ts_writer.write_xdmf_file()?;
-
-        Ok(ts_writer)
+        })
     }
 }
 
@@ -865,39 +878,7 @@ impl TimeSeriesDataWriter {
         F: FnOnce(&mut TimeStep<'_>) -> Result<(), E>,
         E: From<Error>,
     {
-        let time = time.into();
-        let Ok(parsed_time) = time.parse::<f64>() else {
-            return Err(Error::InvalidTimeStep {
-                time,
-                reason: "must be a valid float".to_string(),
-            }
-            .into());
-        };
-
-        // `f64::from_str` accepts "NaN"/"inf"/"infinity" and overflows large literals to infinity,
-        // none of which name an instant a reader can place on a time line
-        if !parsed_time.is_finite() {
-            return Err(Error::InvalidTimeStep {
-                time,
-                reason: "must be a finite float".to_string(),
-            }
-            .into());
-        }
-
-        // zero is normalized, since -0.0 and 0.0 are the same instant with different bit patterns
-        let time_bits = if parsed_time == 0.0 { 0.0 } else { parsed_time }.to_bits();
-
-        // keyed on the parsed value rather than the string, so different spellings of the same
-        // instant are caught too (e.g. "0.1" == "0.10")
-        if let Some(existing) = self.written_times.get(&time_bits) {
-            // naming the earlier spelling is only informative if it differs from this one
-            let reason = if existing == &time {
-                "already written".to_string()
-            } else {
-                format!("already written (as '{existing}')")
-            };
-            return Err(Error::InvalidTimeStep { time, reason }.into());
-        }
+        let (time, time_bits) = validate_time(time.into(), &self.written_times).map_err(E::from)?;
 
         let mut step = TimeStep {
             per_submesh: vec![Vec::new(); self.submeshes.len()],
@@ -924,7 +905,12 @@ impl TimeSeriesDataWriter {
 
     fn write_xdmf_file(&mut self) -> Result<()> {
         self.writer.flush()?;
+        self.write_light_data_file()
+    }
 
+    /// Write the XDMF file itself, without flushing the heavy data first -- separate for
+    /// [`mpi`], where the flush is collective but only one rank may write this file.
+    fn write_light_data_file(&mut self) -> Result<()> {
         // written to a temporary file first, then renamed, to avoid access races
         let temp_xdmf_file_name = self.xdmf_file_name.with_extension("xdmf.tmp");
 
@@ -942,6 +928,43 @@ impl TimeSeriesDataWriter {
         std::fs::rename(&temp_xdmf_file_name, &self.xdmf_file_name)
             .map_err(io_ctx("renaming XDMF file", &temp_xdmf_file_name))
     }
+}
+
+/// Check a step's time before anything of the step is written: it must parse as a finite `f64`
+/// and must not name an instant already written. Returns it with the bits it is keyed on.
+fn validate_time(time: String, written_times: &HashMap<u64, String>) -> Result<(String, u64)> {
+    let Ok(parsed_time) = time.parse::<f64>() else {
+        return Err(Error::InvalidTimeStep {
+            time,
+            reason: "must be a valid float".to_string(),
+        });
+    };
+
+    // `f64::from_str` accepts "NaN"/"inf"/"infinity" and overflows large literals to infinity,
+    // none of which name an instant a reader can place on a time line
+    if !parsed_time.is_finite() {
+        return Err(Error::InvalidTimeStep {
+            time,
+            reason: "must be a finite float".to_string(),
+        });
+    }
+
+    // zero is normalized, since -0.0 and 0.0 are the same instant with different bit patterns
+    let time_bits = if parsed_time == 0.0 { 0.0 } else { parsed_time }.to_bits();
+
+    // keyed on the parsed value rather than the string, so different spellings of the same
+    // instant are caught too (e.g. "0.1" == "0.10")
+    if let Some(existing) = written_times.get(&time_bits) {
+        // naming the earlier spelling is only informative if it differs from this one
+        let reason = if existing == &time {
+            "already written".to_string()
+        } else {
+            format!("already written (as '{existing}')")
+        };
+        return Err(Error::InvalidTimeStep { time, reason });
+    }
+
+    Ok((time, time_bits))
 }
 
 /// A single time step being written, handed to the closure passed to
@@ -1023,55 +1046,19 @@ impl TimeStep<'_> {
             (CELL_DATA, self.writer.num_cells)
         };
 
-        if !is_valid_data_name(name) {
-            return Err(Error::InvalidData {
-                reason: format!(
-                    "data name '{name}' of {label} is not valid, must contain a \
-                     non-whitespace character and must not contain control characters"
-                ),
-            });
-        }
-
         let seen_names = if is_point_data {
             &self.point_names
         } else {
             &self.cell_names
         };
-        if seen_names.contains(name) {
-            return Err(Error::InvalidData {
-                reason: format!("name '{name}' of {label} is used more than once"),
-            });
-        }
-
-        // the component count and the total are both products of caller-supplied numbers, so
-        // neither is multiplied out unchecked: a wrapping total that lands back on the real array
-        // length would be accepted and written as a mesh-sized lie about the data's shape
-        let stride = data_attribute
-            .size()
-            .filter(|size| *size != 0)
-            .ok_or_else(|| Error::InvalidData {
-                reason: format!(
-                    "attribute type {data_attribute:?} of {label} '{name}' has no usable size: \
-                     its number of components must be non-zero and must itself fit a usize"
-                ),
-            })?;
-        let exp_size = num_entities
-            .checked_mul(stride)
-            .ok_or_else(|| Error::InvalidData {
-                reason: format!(
-                    "attribute type {data_attribute:?} of {label} '{name}' describes \
-                     {num_entities} entities of {stride} components each, whose total does not \
-                     fit a usize"
-                ),
-            })?;
-        if values.len() != exp_size {
-            return Err(Error::InvalidData {
-                reason: format!(
-                    "size of {label} '{name}' must be {exp_size}, but is {}",
-                    values.len()
-                ),
-            });
-        }
+        let stride = validate_attribute(
+            name,
+            data_attribute,
+            values.len(),
+            num_entities,
+            label,
+            seen_names,
+        )?;
 
         // reject values ParaView would read back as different numbers before anything is written,
         // so a caller mistake leaves no partial output behind
@@ -1346,6 +1333,62 @@ impl TimeStep<'_> {
 
         self.writer.writer.write_data_discard()
     }
+}
+
+/// Check one field before anything of it is written: its name, that it is not a repeat within
+/// the step, and that `len` values make `num_entities` entities of its shape. Returns the number
+/// of components per entity.
+fn validate_attribute(
+    name: &str,
+    data_attribute: DataAttribute,
+    len: usize,
+    num_entities: usize,
+    label: &str,
+    seen_names: &HashSet<String>,
+) -> Result<usize> {
+    if !is_valid_data_name(name) {
+        return Err(Error::InvalidData {
+            reason: format!(
+                "data name '{name}' of {label} is not valid, must contain a \
+                 non-whitespace character and must not contain control characters"
+            ),
+        });
+    }
+
+    if seen_names.contains(name) {
+        return Err(Error::InvalidData {
+            reason: format!("name '{name}' of {label} is used more than once"),
+        });
+    }
+
+    // the component count and the total are both products of caller-supplied numbers, so
+    // neither is multiplied out unchecked: a wrapping total that lands back on the real array
+    // length would be accepted and written as a mesh-sized lie about the data's shape
+    let stride = data_attribute
+        .size()
+        .filter(|size| *size != 0)
+        .ok_or_else(|| Error::InvalidData {
+            reason: format!(
+                "attribute type {data_attribute:?} of {label} '{name}' has no usable size: \
+                 its number of components must be non-zero and must itself fit a usize"
+            ),
+        })?;
+    let exp_size = num_entities
+        .checked_mul(stride)
+        .ok_or_else(|| Error::InvalidData {
+            reason: format!(
+                "attribute type {data_attribute:?} of {label} '{name}' describes \
+                 {num_entities} entities of {stride} components each, whose total does not \
+                 fit a usize"
+            ),
+        })?;
+    if len != exp_size {
+        return Err(Error::InvalidData {
+            reason: format!("size of {label} '{name}' must be {exp_size}, but is {len}"),
+        });
+    }
+
+    Ok(stride)
 }
 
 /// Write one attribute's values and describe them as an XDMF `Attribute`. The backend names the
