@@ -945,4 +945,52 @@ mod mpi_tests {
             );
         }
     }
+
+    #[mpi_test(np = [1, 2, 3])]
+    fn a_step_whose_light_data_fails_to_write_stays_written_on_every_rank() {
+        let (_universe, world) = initialize();
+        let rank = world.rank();
+        let (_tmp_dir, dir) = shared_dir(&world);
+
+        for storage in ERROR_STORAGES {
+            let (mut writer, share) = small_writer(
+                &world,
+                &dir.join(format!("light_{}", storage_tag(storage))),
+                storage,
+            );
+
+            // a directory where the file goes makes renaming the new file into place fail, after
+            // the step was added to the document -- as serially, it stays added
+            let file_name = writer.file_name().to_path_buf();
+            if rank == 0 {
+                fs::remove_file(&file_name).unwrap();
+                fs::create_dir(&file_name).unwrap();
+            }
+            world.barrier();
+
+            let write = |writer: &mut xdmf::mpi::TimeSeriesDataWriter| {
+                writer.write_time_step("0.0", |data| {
+                    data.point_data(
+                        "temperature",
+                        DataAttribute::Scalar,
+                        temperature(&share.points, 0),
+                    )
+                })
+            };
+
+            if rank == 0 {
+                std::assert_matches!(write(&mut writer).unwrap_err(), Error::Io { .. });
+            } else {
+                std::assert_matches!(
+                    write(&mut writer).unwrap_err(),
+                    Error::Io { source, .. } if source.to_string().starts_with("on rank 0")
+                );
+            }
+
+            std::assert_matches!(
+                write(&mut writer).unwrap_err(),
+                Error::InvalidTimeStep { reason, .. } if reason == "already written"
+            );
+        }
+    }
 }

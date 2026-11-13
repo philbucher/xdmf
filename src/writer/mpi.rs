@@ -601,12 +601,24 @@ impl TimeSeriesDataWriter {
             time: &time,
         };
 
-        match &mut self.backend {
-            Backend::Collective(writer) => collective_step(&context, writer, write_step)?,
-            Backend::Gathered(writer) => gathered_step(&context, writer.as_mut(), write_step)?,
+        // set once the step is part of the document, even if writing the file failed after that:
+        // as serially, such a step stays written, and its time cannot be written again
+        let mut committed = false;
+
+        let written = match &mut self.backend {
+            Backend::Collective(writer) => {
+                collective_step(&context, writer, write_step, &mut committed)
+            }
+            Backend::Gathered(writer) => {
+                gathered_step(&context, writer.as_mut(), write_step, &mut committed)
+            }
+        };
+
+        if committed {
+            self.written_times.insert(time_bits, time);
         }
 
-        self.written_times.insert(time_bits, time);
+        written?;
         Ok(())
     }
 }
@@ -649,6 +661,7 @@ fn collective_step<F, E>(
     context: &StepContext<'_>,
     writer: &mut super::TimeSeriesDataWriter,
     write_step: F,
+    committed: &mut bool,
 ) -> Result<(), E>
 where
     F: FnOnce(&mut TimeStep<'_>) -> Result<(), E>,
@@ -700,6 +713,7 @@ where
     agree(context.comm, phase(("finalized", context.end())), finalized)?;
 
     writer.step_times.push(context.time.to_string());
+    *committed = true;
 
     write_light_data(context.comm, writer, context.time)?;
     Ok(())
@@ -711,6 +725,7 @@ fn gathered_step<F, E>(
     context: &StepContext<'_>,
     writer: Option<&mut super::TimeSeriesDataWriter>,
     write_step: F,
+    committed: &mut bool,
 ) -> Result<(), E>
 where
     F: FnOnce(&mut TimeStep<'_>) -> Result<(), E>,
@@ -729,6 +744,7 @@ where
         }
 
         // rank 0 writes the step after every closure succeeded, which can still fail there
+        *committed = sync::shared_flag(context.comm, false);
         return agree(context.comm, commit, Ok(())).map_err(E::from);
     };
 
@@ -760,7 +776,12 @@ where
     match converged {
         // every rank's closure succeeded, and the serial writer has finished the step since --
         // or failed to, which every other rank needs to hear about
-        Some(None) => agree(context.comm, commit, as_crate_error(written)).map_err(E::from),
+        Some(None) => {
+            // the serial writer records a step before writing the file, which may still fail
+            let recorded = writer.step_times.last().map(String::as_str) == Some(context.time);
+            *committed = sync::shared_flag(context.comm, recorded);
+            agree(context.comm, commit, as_crate_error(written)).map_err(E::from)
+        }
         // every rank already knows the step failed
         Some(Some(_)) => written.map_err(|error| match error {
             StepError::Caller(error) => error,

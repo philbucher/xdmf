@@ -106,6 +106,13 @@ pub(super) fn converge(comm: &SimpleCommunicator, phase: u64, failed: bool) -> O
     }
 }
 
+/// Rank 0's `flag`, on every rank; every rank calls this together.
+pub(super) fn shared_flag(comm: &SimpleCommunicator, flag: bool) -> bool {
+    let mut shared = u8::from(flag);
+    comm.process_at_rank(0).broadcast_into(&mut shared);
+    shared != 0
+}
+
 /// The error every rank reports when the ranks are not making the same calls.
 fn out_of_step() -> Error {
     Error::InvalidData {
