@@ -57,6 +57,70 @@ impl SingleFileHdf5Writer {
         })
     }
 
+    /// The collective counterpart of [`new`](Self::new): every rank of `comm` calls this
+    /// together, opening the same file through HDF5's MPI-IO driver.
+    #[cfg(feature = "mpi")]
+    pub(crate) fn new_collective(
+        file_name: impl AsRef<Path>,
+        deflate_level: u8,
+        comm: &impl mpi::traits::Communicator,
+    ) -> Result<Self> {
+        let h5_file_name_full = file_name.as_ref().to_path_buf().with_extension("h5");
+
+        if let Some(parent) = h5_file_name_full.parent() {
+            crate::mpi_safe_create_dir_all(parent)?;
+        }
+
+        let h5_file_name = h5_file_name_full
+            .file_name()
+            .ok_or(Error::Internal("output path has no file name component"))?;
+
+        let h5_file = hdf5::FileBuilder::new()
+            .with_fapl(|fapl| fapl.mpio(comm.as_raw(), None))
+            .create(&h5_file_name_full)
+            .map_err(hdf5_ctx("creating HDF5 file collectively"))?;
+
+        Ok(Self {
+            h5_file,
+            h5_file_name: h5_file_name.into(),
+            write_time: None,
+            deflate_level,
+        })
+    }
+
+    /// The group the current time step's arrays go into, created by the first one.
+    fn time_group(&self) -> Result<H5Group> {
+        let time = self
+            .write_time
+            .as_ref()
+            .ok_or(Error::Internal("writing data was not initialized"))?;
+
+        let group_name = &time_group_name(time);
+
+        if !self.h5_file.link_exists(group_name) {
+            self.h5_file
+                .create_group(group_name)
+                .map_err(hdf5_ctx("creating data group"))?;
+        }
+
+        self.h5_file
+            .group(group_name)
+            .map_err(hdf5_ctx("opening data group"))
+    }
+
+    /// The `mesh` group, created by the first array written into it.
+    fn mesh_group(&self) -> Result<H5Group> {
+        if !self.h5_file.link_exists(MESH) {
+            self.h5_file
+                .create_group(MESH)
+                .map_err(hdf5_ctx("creating mesh group"))?;
+        }
+
+        self.h5_file
+            .group(MESH)
+            .map_err(hdf5_ctx("opening mesh group"))
+    }
+
     /// Write one of the mesh's arrays into the file's `mesh` group, which the first array written
     /// creates.
     fn write_mesh_array(
@@ -65,18 +129,13 @@ impl SingleFileHdf5Writer {
         submesh: Option<usize>,
         values: &Values<'_>,
     ) -> Result<DataContent> {
-        if !self.h5_file.link_exists(MESH) {
-            self.h5_file
-                .create_group(MESH)
-                .map_err(hdf5_ctx("creating mesh group"))?;
-        }
-
-        let mesh_group = self
-            .h5_file
-            .group(MESH)
-            .map_err(hdf5_ctx("opening mesh group"))?;
-
-        let data_name = write_array(&mesh_group, array, submesh, values, self.deflate_level)?;
+        let data_name = write_array(
+            &self.mesh_group()?,
+            array,
+            submesh,
+            values,
+            self.deflate_level,
+        )?;
 
         Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_name).into())
     }
@@ -150,27 +209,57 @@ impl DataWriter for SingleFileHdf5Writer {
     }
 
     fn write_data(&mut self, index: usize, data: &Values<'_>) -> Result<DataContent> {
-        let time = self
-            .write_time
-            .as_ref()
-            .ok_or(Error::Internal("writing data was not initialized"))?;
-
-        let group_name = &time_group_name(time);
-
-        // Create the group if it does not exist
-        if !self.h5_file.link_exists(group_name) {
-            self.h5_file
-                .create_group(group_name)
-                .map_err(hdf5_ctx("creating data group"))?;
-        }
-
         let data_path = write_values(
-            &self
-                .h5_file
-                .group(group_name)
-                .map_err(hdf5_ctx("opening data group"))?,
+            &self.time_group()?,
             &index.to_string(),
             data,
+            self.deflate_level,
+        )?;
+
+        Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_path).into())
+    }
+
+    #[cfg(feature = "mpi")]
+    fn write_mesh_array_collective(
+        &mut self,
+        array: &'static str,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+    ) -> Result<DataContent> {
+        // the points are the first array of any mesh, as in `write_points`
+        if array == POINTS && self.h5_file.link_exists(&mesh_path(POINTS, None)) {
+            return Err(Error::InvalidMesh {
+                reason: "mesh was already written".to_string(),
+            });
+        }
+
+        let data_name = collective::write_values(
+            &self.mesh_group()?,
+            array,
+            local,
+            offset,
+            global_len,
+            self.deflate_level,
+        )?;
+
+        Ok(full_path(&self.h5_file_name.to_string_lossy(), &data_name).into())
+    }
+
+    #[cfg(feature = "mpi")]
+    fn write_data_collective(
+        &mut self,
+        index: usize,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+    ) -> Result<DataContent> {
+        let data_path = collective::write_values(
+            &self.time_group()?,
+            &index.to_string(),
+            local,
+            offset,
+            global_len,
             self.deflate_level,
         )?;
 
@@ -466,6 +555,161 @@ fn create_and_write<T: H5Type>(
     data_set.write(data).map_err(hdf5_ctx("writing dataset"))?;
 
     Ok(data_set.name())
+}
+
+/// Writing one dataset from every rank of a communicator at once, for [`crate::mpi`].
+///
+/// Gated on `mpi` like its only callers, the two `*_collective` [`DataWriter`] methods.
+#[cfg(feature = "mpi")]
+mod collective {
+    use hdf5::{Dataset, Dataspace, Datatype, Group as H5Group, H5Type};
+    use hdf5_sys::{
+        h5d::H5Dwrite,
+        h5p::{H5FD_mpio_xfer_t, H5P_CLS_DATASET_XFER, H5Pclose, H5Pcreate, H5Pset_dxpl_mpio},
+        h5s::H5Sselect_none,
+    };
+
+    use super::{chunk_shape, hdf5_ctx};
+    use crate::{Error, Result, Values};
+
+    /// The collective counterpart of [`super::write_values`]: every rank calls this together,
+    /// creating the dataset at its whole `global_len`, then writing its own `local` share at
+    /// `offset`.
+    pub(super) fn write_values(
+        group: &H5Group,
+        dataset_name: &str,
+        local: &Values<'_>,
+        offset: usize,
+        global_len: usize,
+        deflate_level: u8,
+    ) -> Result<String> {
+        match local {
+            Values::F64(v) => {
+                create_and_write(group, dataset_name, v, offset, global_len, deflate_level)
+            }
+            Values::F32(v) => {
+                create_and_write(group, dataset_name, v, offset, global_len, deflate_level)
+            }
+            Values::I64(v) => {
+                create_and_write(group, dataset_name, v, offset, global_len, deflate_level)
+            }
+            Values::I32(v) => {
+                create_and_write(group, dataset_name, v, offset, global_len, deflate_level)
+            }
+            Values::U32(v) => {
+                create_and_write(group, dataset_name, v, offset, global_len, deflate_level)
+            }
+            Values::U64(v) => {
+                create_and_write(group, dataset_name, v, offset, global_len, deflate_level)
+            }
+        }
+    }
+
+    /// Compressed and chunked exactly as [`super::create_and_write`] does for a serial write, so a
+    /// file written in parallel is the same file. Parallel HDF5 (1.10.2 and later) supports
+    /// writing a filtered dataset only with a collective transfer, which is why the write itself
+    /// goes through [`write_collective`].
+    fn create_and_write<T: H5Type>(
+        group: &H5Group,
+        dataset_name: &str,
+        local: &[T],
+        offset: usize,
+        global_len: usize,
+        deflate_level: u8,
+    ) -> Result<String> {
+        let mut builder = group.new_dataset::<T>().shuffle().deflate(deflate_level);
+
+        if let Some(chunk) = chunk_shape::<T>(&[global_len]) {
+            builder = builder.chunk(chunk);
+        }
+
+        let data_set = builder
+            .shape(global_len)
+            .create(dataset_name)
+            .map_err(hdf5_ctx("creating dataset collectively"))?;
+
+        write_collective(&data_set, local, offset)?;
+
+        Ok(data_set.name())
+    }
+
+    /// Write `local` into `data_set` at `offset` with a collective transfer: every rank calls
+    /// this, one contributing nothing with an empty selection rather than not at all.
+    ///
+    /// `hdf5-metno` writes with the default (independent) transfer property list only, so the
+    /// write itself is the one raw HDF5 call here; the dataspaces and the datatype are still
+    /// built through `hdf5-metno`, which owns and closes them.
+    fn write_collective<T: H5Type>(data_set: &Dataset, local: &[T], offset: usize) -> Result<()> {
+        let file_space = data_set
+            .space()
+            .map_err(hdf5_ctx("getting a dataset's dataspace"))?;
+        let memory_space =
+            Dataspace::try_new(local.len()).map_err(hdf5_ctx("creating a memory dataspace"))?;
+
+        let file_space = if local.is_empty() {
+            file_space
+        } else {
+            file_space
+                .select(offset..offset + local.len())
+                .map_err(hdf5_ctx("selecting this rank's share of a dataset"))?
+        };
+
+        let memory_type =
+            Datatype::from_type::<T>().map_err(hdf5_ctx("creating a memory datatype"))?;
+
+        // hdf5-metno serializes every call into the library through this lock, so a raw call
+        // must take it too
+        let _guard = hdf5_sys::LOCK.lock();
+
+        // SAFETY: every id passed is a live handle owned by a value that outlives this block, and
+        // `local` is a valid buffer of `local.len()` elements of the type `memory_type` describes,
+        // matching the size of the memory dataspace. The transfer property list is created and
+        // closed here, and closed on every path once created.
+        let status = unsafe {
+            if local.is_empty() {
+                // an empty rank still takes part in the collective write, with nothing selected
+                if H5Sselect_none(file_space.id()) < 0 || H5Sselect_none(memory_space.id()) < 0 {
+                    return Err(collective_error("selecting nothing for an empty rank"));
+                }
+            }
+
+            let transfer = H5Pcreate(*H5P_CLS_DATASET_XFER);
+            if transfer < 0 {
+                return Err(collective_error("creating a transfer property list"));
+            }
+
+            let status = if H5Pset_dxpl_mpio(transfer, H5FD_mpio_xfer_t::H5FD_MPIO_COLLECTIVE) < 0 {
+                -1
+            } else {
+                H5Dwrite(
+                    data_set.id(),
+                    memory_type.id(),
+                    memory_space.id(),
+                    file_space.id(),
+                    transfer,
+                    local.as_ptr().cast(),
+                )
+            };
+
+            H5Pclose(transfer);
+            status
+        };
+
+        if status < 0 {
+            return Err(collective_error("writing a dataset collectively"));
+        }
+
+        Ok(())
+    }
+
+    /// A failed raw HDF5 call as this crate's error. The library's own error stack is silenced by
+    /// `hdf5-metno`, so all there is to say is which step failed.
+    fn collective_error(operation: &'static str) -> Error {
+        Error::Hdf5 {
+            operation,
+            source: hdf5::Error::from("HDF5 returned a failure status"),
+        }
+    }
 }
 
 /// How many raw bytes one chunk of a dataset holds, give or take its last one.

@@ -175,6 +175,42 @@ pub(crate) trait DataWriter: Send + Sync {
         ))
     }
 
+    /// Create one of the mesh's own arrays (the points or the connectivity) at its whole-mesh
+    /// `global_len`, collectively across every rank, then write this rank's `local` share of it
+    /// at `offset` -- every rank calls this together, one with nothing to contribute included.
+    ///
+    /// The collective counterpart of [`write_points`](Self::write_points)/
+    /// [`write_connectivity`](Self::write_connectivity), for a mesh written through
+    /// [`crate::mpi`]. Only the single-file HDF5 backend implements it, being the only one opened
+    /// collectively; the others are never asked.
+    #[cfg(feature = "mpi")]
+    fn write_mesh_array_collective(
+        &mut self,
+        _array: &'static str,
+        _local: &Values<'_>,
+        _offset: usize,
+        _global_len: usize,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage is not opened collectively, so it never writes collectively",
+        ))
+    }
+
+    /// The collective counterpart of [`write_data`](Self::write_data), as
+    /// [`write_mesh_array_collective`](Self::write_mesh_array_collective) is of the mesh arrays.
+    #[cfg(feature = "mpi")]
+    fn write_data_collective(
+        &mut self,
+        _index: usize,
+        _local: &Values<'_>,
+        _offset: usize,
+        _global_len: usize,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage is not opened collectively, so it never writes collectively",
+        ))
+    }
+
     fn write_data_initialize(&mut self, _time: &str) -> Result<()> {
         Ok(())
     }
