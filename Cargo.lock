@@ -1014,6 +1014,7 @@ dependencies = [
  "approx",
  "fs_extra",
  "hdf5-metno",
+ "hdf5-metno-sys",
  "humansize",
  "mpi",
  "mpi_test",

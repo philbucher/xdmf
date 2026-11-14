@@ -33,7 +33,9 @@ pub mod xdmf_elements;
 pub use error::{Error, ErrorKind, Result};
 pub use reader::{DataInfo, TimeSeriesReader, ValueType};
 pub use values::{ConnectivityIndex, Coordinate, Values};
-pub use writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep};
+#[cfg(feature = "mpi")]
+pub use writer::mpi;
+pub use writer::{SubmeshCells, TimeSeriesDataWriter, TimeSeriesWriter, TimeStep, WriteData};
 pub use xdmf_elements::CellType;
 
 /// Type of storage used for the heavy data (e.g. ASCII or HDF5)
@@ -170,6 +172,42 @@ pub(crate) trait DataWriter: Send + Sync {
     fn write_selection(&mut self, _index: usize, _indices: &Values<'_>) -> Result<DataContent> {
         Err(Error::Internal(
             "this storage cannot be selected out of, so it is never asked to write a selection",
+        ))
+    }
+
+    /// Create one of the mesh's own arrays (the points or the connectivity) at its whole-mesh
+    /// `global_len`, collectively across every rank, then write this rank's `local` share of it
+    /// at `offset` -- every rank calls this together, one with nothing to contribute included.
+    ///
+    /// The collective counterpart of [`write_points`](Self::write_points)/
+    /// [`write_connectivity`](Self::write_connectivity), for a mesh written through
+    /// [`crate::mpi`]. Only the HDF5 backends implement it, being the only ones opened
+    /// collectively; the others are never asked.
+    #[cfg(feature = "mpi")]
+    fn write_mesh_array_collective(
+        &mut self,
+        _array: &'static str,
+        _local: &Values<'_>,
+        _offset: usize,
+        _global_len: usize,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage is not opened collectively, so it never writes collectively",
+        ))
+    }
+
+    /// The collective counterpart of [`write_data`](Self::write_data), as
+    /// [`write_mesh_array_collective`](Self::write_mesh_array_collective) is of the mesh arrays.
+    #[cfg(feature = "mpi")]
+    fn write_data_collective(
+        &mut self,
+        _index: usize,
+        _local: &Values<'_>,
+        _offset: usize,
+        _global_len: usize,
+    ) -> Result<DataContent> {
+        Err(Error::Internal(
+            "this storage is not opened collectively, so it never writes collectively",
         ))
     }
 

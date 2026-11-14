@@ -127,6 +127,52 @@ jobs:
       shell: bash
       run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --locked --no-deps --document-private-items
 
+  mpi: # the `mpi` feature, which needs an MPI and a parallel HDF5 the other jobs do not install
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      HDF5_DIR: /usr/lib/x86_64-linux-gnu/hdf5/openmpi
+      # the runner has fewer cores than the largest `np` in tests/writer_mpi.rs
+      OMPI_MCA_rmaps_base_oversubscribe: 1
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      with:
+        components: clippy
+
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        shared-key: "mpi"
+
+    - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+      with:
+        tool: nextest
+
+    - name: Install MPI and a parallel HDF5 (apt)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get remove -y man-db || true # to speed up
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libopenmpi-dev openmpi-bin libhdf5-openmpi-dev libclang-dev
+
+    - name: Run clippy
+      run: cargo clippy --locked --all-targets --features mpi -- -D warnings
+
+    - name: Run tests
+      run: cargo nextest run --locked --features mpi
+
+    - name: Run doc tests
+      run: cargo test --locked --features mpi --doc
+
+    - name: Check Docs
+      run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --locked --no-deps --document-private-items --features mpi
+
   python-bindings:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
