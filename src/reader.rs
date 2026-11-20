@@ -278,7 +278,20 @@ impl TimeSeriesReader {
     /// A document written with a storage this reader cannot read is rejected here, not at the first
     /// call that reaches heavy data.
     pub fn new(file_name: impl AsRef<Path>) -> Result<Self> {
-        let document = Document::open(file_name.as_ref())?;
+        Self::open(file_name.as_ref(), None)
+    }
+
+    /// Like [`new`](Self::new), but every heavy-data file the document names must resolve, after
+    /// following `..` and symlinks, to a path inside `root`. A read naming any other file fails
+    /// with [`Error::InvalidDocument`], or with an I/O error if the file does not exist. Use it for
+    /// a document from an untrusted source, whose paths could otherwise name any file the process
+    /// can read.
+    pub fn new_confined(file_name: impl AsRef<Path>, root: impl AsRef<Path>) -> Result<Self> {
+        Self::open(file_name.as_ref(), Some(root.as_ref()))
+    }
+
+    fn open(file_name: &Path, root: Option<&Path>) -> Result<Self> {
+        let document = Document::open(file_name, root)?;
         check_readable(&document)?;
 
         let domain = document.domain()?;

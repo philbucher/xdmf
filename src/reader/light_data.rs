@@ -18,13 +18,22 @@ use crate::{
 pub(super) struct Document {
     pub xdmf: Xdmf,
     pub base_dir: PathBuf,
+    /// The directory every heavy-data file must lie in, canonicalized; `None` allows any path.
+    pub root: Option<PathBuf>,
     /// The heavy-data file a read last opened, held open for the next one -- see [`FileCache`].
     /// It lives here because it is exactly as long-lived as the paths it caches.
     pub files: FileCache,
 }
 
 impl Document {
-    pub(super) fn open(file_name: &Path) -> Result<Self> {
+    pub(super) fn open(file_name: &Path, root: Option<&Path>) -> Result<Self> {
+        let root = root
+            .map(|root| {
+                root.canonicalize()
+                    .map_err(crate::error::io_ctx("resolving heavy-data root", root))
+            })
+            .transpose()?;
+
         let xml = std::fs::read_to_string(file_name)
             .map_err(crate::error::io_ctx("reading XDMF file", file_name))?;
 
@@ -40,6 +49,7 @@ impl Document {
         Ok(Self {
             xdmf,
             base_dir,
+            root,
             files: FileCache::default(),
         })
     }
