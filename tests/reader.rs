@@ -1,7 +1,10 @@
 //! Round-trip tests for `TimeSeriesReader`, which reads `Format="HDF"` documents only.
 #![cfg(feature = "hdf5")]
 
-use std::ops::Range;
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use approx::assert_relative_eq;
 use temp_dir::TempDir;
@@ -1293,5 +1296,106 @@ fn submeshes_given_as_ranges_round_trip() {
         assert_relative_eq!(points.as_slice(), coords.as_slice());
         assert_eq!(read_connectivity, connectivity, "{storage:?}");
         assert_eq!(read_cell_types, cell_types, "{storage:?}");
+    }
+}
+
+/// Writes a mesh with a `temperature` point field of `[1, 2, 3, 4]` into `dir`, returning the
+/// document's path.
+fn write_temperature(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let file_name = dir.join("mesh");
+    let (coords, connectivity, cell_types) = quad_mesh();
+    TimeSeriesWriter::new(
+        &file_name,
+        DataStorage::Hdf5MultipleFiles {
+            deflate_level: None,
+        },
+    )
+    .unwrap()
+    .write_mesh(&coords, &connectivity, &cell_types)
+    .unwrap()
+    .write_time_step("0.0", |step| {
+        step.point_data(
+            "temperature",
+            DataAttribute::Scalar,
+            vec![1.0, 2.0, 3.0, 4.0],
+        )
+    })
+    .unwrap();
+
+    file_name.with_extension("xdmf2")
+}
+
+/// The `<data file>:<dataset path>` text of the `DataItem` holding `temperature`.
+fn temperature_heavy_data(document: &str) -> (&str, &str) {
+    document
+        .lines()
+        .skip_while(|line| !line.contains(r#"Name="temperature""#))
+        .find_map(|line| line.split_once('>')?.1.split_once('<')?.0.split_once(':'))
+        .unwrap()
+}
+
+/// A confined reader reads a document whose heavy data lies inside its root, and rejects one
+/// whose `temperature` names a file outside it, however that file is named.
+#[test]
+fn a_confined_reader_rejects_heavy_data_outside_its_root() {
+    let root = TempDir::new().unwrap();
+    let inside = write_temperature(&root.path().join("case"));
+    let outside_dir = TempDir::new().unwrap();
+    let outside = write_temperature(outside_dir.path());
+
+    let document = std::fs::read_to_string(&inside).unwrap();
+    let (data_file, _) = temperature_heavy_data(&document);
+    let outside_document = std::fs::read_to_string(&outside).unwrap();
+    let outside_file = outside_dir
+        .path()
+        .join(temperature_heavy_data(&outside_document).0);
+
+    let mut temperature: Vec<f64> = Vec::new();
+    TimeSeriesReader::new_confined(&inside, root.path())
+        .unwrap()
+        .read_point_data(0, "temperature", &mut temperature)
+        .unwrap();
+    assert_relative_eq!(temperature.as_slice(), [1.0, 2.0, 3.0, 4.0].as_slice());
+
+    // both temporary directories share a parent, so `../..` from `root/case` reaches it
+    let relative = format!(
+        "../../{}/{}",
+        outside_dir.path().file_name().unwrap().to_str().unwrap(),
+        outside_file
+            .strip_prefix(outside_dir.path())
+            .unwrap()
+            .display()
+    );
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "only unix adds names"))]
+    let mut names = vec![relative];
+    // a Windows absolute path cannot be named: `file:dataset` splits at its drive letter's `:`
+    #[cfg(unix)]
+    {
+        names.push(outside_file.display().to_string());
+        std::os::unix::fs::symlink(&outside_file, root.path().join("case/link.h5")).unwrap();
+        names.push("link.h5".to_string());
+    }
+
+    let resolved = outside_file.canonicalize().unwrap();
+    for name in names {
+        let replaced = document.replacen(&format!("{data_file}:"), &format!("{name}:"), 1);
+        std::fs::write(&inside, replaced).unwrap();
+
+        // the unconfined reader follows the same name to the outside file
+        TimeSeriesReader::new(&inside)
+            .unwrap()
+            .read_point_data(0, "temperature", &mut temperature)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+
+        std::assert_matches!(
+            TimeSeriesReader::new_confined(&inside, root.path())
+                .unwrap()
+                .read_point_data(0, "temperature", &mut temperature)
+                .unwrap_err(),
+            xdmf::Error::InvalidDocument { reason }
+                if reason.contains(&format!("resolves to '{}', outside", resolved.display())),
+            "{name}"
+        );
     }
 }

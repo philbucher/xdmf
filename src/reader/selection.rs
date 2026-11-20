@@ -180,7 +180,26 @@ fn heavy_data_path<'i>(item: &'i DataItem, document: &Document) -> Result<(PathB
         reason: format!("'{raw}' is not a valid HDF5 heavy-data path, expected 'file:path'"),
     })?;
 
-    Ok((document.base_dir.join(file_part), dataset_path))
+    let path = document.base_dir.join(file_part);
+    let Some(root) = &document.root else {
+        return Ok((path, dataset_path));
+    };
+
+    // canonical, so neither `..` nor a symlink can step outside `root`
+    let resolved = path
+        .canonicalize()
+        .map_err(crate::error::io_ctx("resolving heavy-data file", &path))?;
+    if !resolved.starts_with(root) {
+        return Err(Error::InvalidDocument {
+            reason: format!(
+                "heavy-data file '{file_part}' resolves to '{}', outside '{}'",
+                resolved.display(),
+                root.display()
+            ),
+        });
+    }
+
+    Ok((resolved, dataset_path))
 }
 
 /// The `<selector, source>` pair a `HyperSlab`/`Coordinates` `DataItem` carries as its nested
