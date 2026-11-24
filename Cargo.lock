@@ -214,9 +214,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hdf5-metno"
-version = "0.15.0"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da648c8200335c8a8fdf270fc91807c949ddbef595dd2572a8a572a31977c3d5"
+checksum = "3b2085638be1d5ee3a189995d8cccfec2f79b93b480e541dacc74f7e8e5a628a"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -243,9 +243,9 @@ dependencies = [
 
 [[package]]
 name = "hdf5-metno-src"
-version = "0.10.4"
+version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69c883c565498492954e344c482f8622525e58c7a71100dd9498c4940da82885"
+checksum = "d9736db9e811b0040eb2913748aee43f88da32944ff323f2f537758b369db38d"
 dependencies = [
  "cmake",
  "libz-sys",
@@ -253,9 +253,9 @@ dependencies = [
 
 [[package]]
 name = "hdf5-metno-sys"
-version = "0.12.4"
+version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567a57ee34c38263f551f2cf02b95675def6b91d0e321c5e70f8c6d5ef9cee87"
+checksum = "a451b31c0db010dc0f78d5d9b19dc541afc159e1b87d540c35c95e258e655a96"
 dependencies = [
  "hdf5-metno-src",
  "libc",
