@@ -10,7 +10,7 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
-use hdf5::{Dataset, File as H5File, H5Type};
+use hdf5::{Dataset, File as H5File, H5Type, IndexType, IterationOrder, LinkType, dataset::Layout};
 
 use crate::{Error, Result, Values, reader::sealed::SealedValueType};
 
@@ -93,13 +93,98 @@ pub(super) fn read_exact_into<T: SealedValueType>(
 }
 
 fn open_dataset(file_path: &Path, dataset_path: &str, files: &FileCache) -> Result<Dataset> {
-    files
-        .open(file_path)?
-        .dataset(dataset_path)
-        .map_err(|source| Error::Hdf5 {
-            operation: "opening HDF5 dataset",
-            source,
-        })
+    let file = files.open(file_path)?;
+    reject_indirect_links(&file, dataset_path)?;
+
+    let dataset = file.dataset(dataset_path).map_err(|source| Error::Hdf5 {
+        operation: "opening HDF5 dataset",
+        source,
+    })?;
+    reject_storage_in_other_files(&dataset, dataset_path)?;
+
+    Ok(dataset)
+}
+
+/// Rejects a dataset path passing through anything but hard links, before HDF5 follows it: an
+/// external link opens the file it names, and a soft link can point at an external one. That file
+/// is named by a path the file's author chose, so following it could open any file.
+fn reject_indirect_links(file: &H5File, dataset_path: &str) -> Result<()> {
+    let link_error = |source| Error::Hdf5 {
+        operation: "reading HDF5 links",
+        source,
+    };
+
+    let mut group = file.group("/").map_err(link_error)?;
+    // HDF5 skips `.` as it does an empty name, so a link named `.` cannot exist to look up
+    let mut names = dataset_path
+        .split('/')
+        .filter(|name| !name.is_empty() && *name != ".")
+        .peekable();
+    while let Some(name) = names.next() {
+        let link_type = group
+            .find_link(IndexType::Name, IterationOrder::Native, |link, info| {
+                Ok((link == name).then_some(info.link_type))
+            })
+            .map_err(link_error)?;
+
+        match link_type {
+            Some(LinkType::Hard) => {}
+            Some(LinkType::Soft | LinkType::External) => {
+                return Err(unsupported(
+                    dataset_path,
+                    "is reached through a soft or external link",
+                ));
+            }
+            // opening the dataset reports the missing name
+            None => return Ok(()),
+        }
+
+        if names.peek().is_some() {
+            group = group.group(name).map_err(link_error)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Rejects a dataset whose values HDF5 would fetch from another file: external raw storage or a
+/// virtual dataset. Each names that file by a path the file's author chose, so reading it could
+/// expose any file the process can read.
+fn reject_storage_in_other_files(dataset: &Dataset, dataset_path: &str) -> Result<()> {
+    let dcpl = dataset.dcpl().map_err(|source| Error::Hdf5 {
+        operation: "reading HDF5 dataset creation properties",
+        source,
+    })?;
+    let plist_error = |source| Error::Hdf5 {
+        operation: "reading HDF5 dataset storage layout",
+        source,
+    };
+
+    // the `get_` variants, because `layout()` and `external()` turn an error into a default that
+    // would let the dataset through
+    if !matches!(
+        dcpl.get_layout().map_err(plist_error)?,
+        Layout::Compact | Layout::Contiguous | Layout::Chunked
+    ) {
+        return Err(unsupported(
+            dataset_path,
+            "is a virtual dataset drawing on other files",
+        ));
+    }
+    if !dcpl.get_external().map_err(plist_error)?.is_empty() {
+        return Err(unsupported(
+            dataset_path,
+            "stores its values in external raw files",
+        ));
+    }
+
+    Ok(())
+}
+
+fn unsupported(dataset_path: &str, what: &str) -> Error {
+    Error::Unsupported {
+        reason: format!("HDF5 dataset '{dataset_path}' {what}, which this reader does not follow"),
+    }
 }
 
 fn dtype_of(dataset: &Dataset) -> Result<hdf5::Datatype> {

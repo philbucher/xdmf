@@ -1299,6 +1299,104 @@ fn submeshes_given_as_ranges_round_trip() {
     }
 }
 
+/// A dataset whose values HDF5 would fetch from a file named inside the HDF5 file itself is
+/// rejected: that path is the file author's choice, so following it could read any file.
+#[test]
+fn a_dataset_drawing_on_another_file_is_rejected() {
+    let outside = TempDir::new().unwrap();
+    let raw_file = outside.path().join("secret.bin");
+    std::fs::write(&raw_file, [7_u8; 32]).unwrap();
+    let h5_file = outside.path().join("other.h5");
+    hdf5::File::create(&h5_file)
+        .unwrap()
+        .new_dataset_builder()
+        .with_data(&[9.0_f64; 4])
+        .create("values")
+        .unwrap();
+    let raw_file = raw_file.to_str().unwrap();
+    let h5_file = h5_file.to_str().unwrap();
+
+    std::assert_matches!(
+        read_replaced_temperature(|file, path| {
+            file.new_dataset::<f64>()
+                .shape(4)
+                .external(raw_file, 0, 32)
+                .create(path)
+                .unwrap();
+        }),
+        xdmf::Error::Unsupported { reason }
+            if reason.contains("stores its values in external raw files")
+    );
+    std::assert_matches!(
+        read_replaced_temperature(|file, path| {
+            file.link_external(h5_file, "values", path).unwrap();
+        }),
+        xdmf::Error::Unsupported { reason }
+            if reason.contains("is reached through a soft or external link")
+    );
+    std::assert_matches!(
+        read_replaced_temperature(|file, path| {
+            file.link_external(h5_file, "values", "elsewhere").unwrap();
+            file.link_soft("/elsewhere", path).unwrap();
+        }),
+        xdmf::Error::Unsupported { reason }
+            if reason.contains("is reached through a soft or external link")
+    );
+    std::assert_matches!(
+        read_replaced_temperature(|file, path| {
+            file.new_dataset::<f64>()
+                .shape(4)
+                .layout(hdf5::dataset::Layout::Virtual)
+                .virtual_map(h5_file, "values", 4, .., 4, ..)
+                .create(path)
+                .unwrap();
+        }),
+        xdmf::Error::Unsupported { reason }
+            if reason.contains("is a virtual dataset drawing on other files")
+    );
+    std::assert_matches!(
+        read_replaced_temperature_as(
+            |path| format!("./{}", path.trim_start_matches('/')),
+            |file, path| file.link_external(h5_file, "values", path).unwrap(),
+        ),
+        xdmf::Error::Unsupported { reason }
+            if reason.contains("is reached through a soft or external link")
+    );
+}
+
+/// Writes a `temperature` point field, lets `replace` put another dataset at its HDF5 path, and
+/// returns the error reading the field back fails with.
+fn read_replaced_temperature(replace: impl FnOnce(&hdf5::File, &str)) -> xdmf::Error {
+    read_replaced_temperature_as(str::to_owned, replace)
+}
+
+/// The same, with the document naming the dataset by the path `referenced_as` makes of it.
+fn read_replaced_temperature_as(
+    referenced_as: impl FnOnce(&str) -> String,
+    replace: impl FnOnce(&hdf5::File, &str),
+) -> xdmf::Error {
+    let tmp_dir = TempDir::new().unwrap();
+    let document_path = write_temperature(tmp_dir.path());
+    let document = std::fs::read_to_string(&document_path).unwrap();
+    let (data_file, dataset_path) = temperature_heavy_data(&document);
+
+    let file = hdf5::File::open_rw(tmp_dir.path().join(data_file)).unwrap();
+    file.unlink(dataset_path).unwrap();
+    replace(&file, dataset_path);
+    drop(file);
+    let document = document.replace(
+        &format!("{data_file}:{dataset_path}"),
+        &format!("{data_file}:{}", referenced_as(dataset_path)),
+    );
+    std::fs::write(&document_path, document).unwrap();
+
+    let reader = TimeSeriesReader::new(&document_path).unwrap();
+    let mut temperature: Vec<f64> = Vec::new();
+    reader
+        .read_point_data(0, "temperature", &mut temperature)
+        .unwrap_err()
+}
+
 /// Writes a mesh with a `temperature` point field of `[1, 2, 3, 4]` into `dir`, returning the
 /// document's path.
 fn write_temperature(dir: &Path) -> PathBuf {
